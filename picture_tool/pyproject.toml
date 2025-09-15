@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "picture-tool"
+version = "0.1.0"
+description = "Image pipeline toolkit: conversion, augmentation, anomaly, split, GUI"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{ name = "VisionSuite Team" }]
+dependencies = [
+  "opencv-python>=4.5",
+  "albumentations>=1.3",
+  "numpy>=1.21",
+  "PyQt5>=5.15",
+  "tqdm>=4.60",
+  "PyYAML>=6.0",
+  "scikit-learn>=1.0",
+  "matplotlib>=3.5",
+]
+
+[project.scripts]
+picture-tool-pipeline = "main_pipeline:main"
+picture-tool-gui = "gui:main"
+
+[tool.setuptools.package-data]
+picture_tool = ["**/*.py"]
+

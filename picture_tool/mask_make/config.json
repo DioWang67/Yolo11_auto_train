@@ -1,0 +1,6 @@
+{
+    "reference_folder": "./pass_image",
+    "test_folder": "./target",
+    "output_folder": "./output",
+    "threshold": 50
+}

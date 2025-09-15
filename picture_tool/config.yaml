@@ -1,0 +1,154 @@
+anomaly_detection:
+  input_formats:
+  - .png
+  - .jpg
+  - .jpeg
+  output_folder: ./datasets/for_anomalib/ground_truth/Reversed_Connection
+  reference_folder: ./datasets/for_anomalib/train/good
+  test_folder: ./datasets/for_anomalib/test/Reversed_Connection
+  threshold: 50
+format_conversion:
+  input_dir: ./target
+  input_formats:
+  - .bmp
+  output_dir: ./datasets/converter_output
+  output_format: .png
+  quality: 95
+image_augmentation:
+  augmentation:
+    num_images: 50
+    num_operations:
+    - 2
+    - 4
+    operations:
+      blur:
+        kernel:
+        - 1
+        - 3
+      contrast:
+        range:
+        - 0.95
+        - 1.05
+      flip:
+        probability: 0
+      hue:
+        range:
+        - -5
+        - 5
+      multiply:
+        range:
+        - 0.95
+        - 1.05
+      noise:
+        scale:
+        - 1
+        - 3
+      perspective:
+        scale:
+        - 0.01
+        - 0.02
+      rotate:
+        angle:
+        - 0
+        - 1
+      scale:
+        range:
+        - 0.95
+        - 1.05
+  input:
+    image_dir: ./target
+  output:
+    image_dir: D:/Git/robotlearning/picture_tool/datasets/for_anomalib/train/good
+  processing:
+    num_workers: 2
+pipeline:
+  log_file: pipeline.log
+  task_groups:
+    augmentation:
+    - yolo_augmentation
+    - image_augmentation
+    preprocess:
+    - format_conversion
+    - anomaly_detection
+    split:
+    - dataset_splitter
+  tasks:
+  - dependencies: []
+    enabled: true
+    name: format_conversion
+  - dependencies: []
+    enabled: true
+    name: image_augmentation
+  - dependencies: []
+    enabled: true
+    name: anomaly_detection
+  - dependencies: []
+    enabled: true
+    name: yolo_augmentation
+  - dependencies: []
+    enabled: true
+    name: dataset_splitter
+train_test_split:
+  input:
+    image_dir: ./datasets/yolo_augmentation_output/images
+    label_dir: ./datasets/yolo_augmentation_output/labels
+  input_formats:
+  - .png
+  - .jpg
+  - .jpeg
+  label_format: .txt
+  output:
+    output_dir: ./datasets/split_dataset
+  split_ratios:
+    test: 0.15
+    train: 0.7
+    val: 0.15
+yolo_augmentation:
+  augmentation:
+    num_images: 10
+    num_operations:
+    - 1
+    - 3
+    operations:
+      blur:
+        kernel:
+        - 0
+        - 0
+      contrast:
+        range:
+        - 1.0
+        - 1.0
+      flip:
+        probability: 0.0
+      hue:
+        range:
+        - 0
+        - 0
+      multiply:
+        range:
+        - 1.0
+        - 1.0
+      noise:
+        scale:
+        - 0
+        - 0
+      perspective:
+        scale:
+        - 0.0
+        - 0.0
+      rotate:
+        angle:
+        - 0
+        - 0
+      scale:
+        range:
+        - 1.0
+        - 1.0
+  input:
+    image_dir: D:/Git/robotlearning/picture_tool/target/LED_color_mixing/images
+    label_dir: D:/Git/robotlearning/picture_tool/target/LED_color_mixing/labels
+  output:
+    image_dir: ./datasets/yolo_augmentation_output/images
+    label_dir: ./datasets/yolo_augmentation_output/labels
+  processing:
+    num_workers: 2
