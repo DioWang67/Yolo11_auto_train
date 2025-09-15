@@ -1,0 +1,5 @@
+path: /Git/robotlearning/yolov11_train/datasets/LED_color_mixing
+train: train/images
+val: val/images
+
+names: ['Blue', 'Green', 'Red', 'White']
