@@ -1,0 +1,37 @@
+input:
+  image_dir: ./target/pcba          # 輸入圖像目錄
+  label_dir: ./target/pcba       # 輸入標籤目錄
+  
+output:
+  image_dir: "outputF/images"  # 增強後圖像的輸出目錄
+  label_dir: "outputF/labels"  # 增強後標籤文件的輸出目錄
+  
+augmentation:
+  num_images: 50            # 每張圖像生成張數
+  num_operations: [3, 5]      # 每次增強時隨機應用 3 到 5 個操作，增加增強的多樣性，同時避免過度增強
+
+  operations:
+    flip:
+      probability: 0          # 水平翻轉概率  0%
+    rotate:
+      angle: [-0, 0]      # 隨機旋轉角度範圍為 -180 到 180 度
+    multiply:
+      range: [0.9, 1.1]       # 亮度增強的範圍
+    scale:
+      range: [1, 1]       # 縮放範圍
+    contrast:
+      range: [1, 1]       # 對比度調整範圍
+    hue:
+      range: [-0, 0]          # 色調調整範圍為
+    noise:
+      scale: [0, 0]        # 高斯噪聲範圍，用於增強抗噪聲能力，模擬輕微的圖像干擾
+    perspective:
+      scale: [0, 0]     # 透視變換的範圍，增加輕微的視角變化，模擬不同拍攝角度
+    blur:
+      kernel: [1, 1]          # 模糊核大小範圍為 3 到 5，用於模擬不同清晰度的圖像，提升模型的魯棒性
+  
+processing:
+  num_workers: 2              # 設置多線程數量，用於加速處理
+                              # 建議範圍：1 到 CPU 核心數量的 2 倍之間
+                              # 若有多核 CPU，設置為核心數的一半至核心數的兩倍（如 4 核可設置為 2 到 8），以平衡速度和資源使用
+                              # 注意：過高的 num_workers 可能導致內存佔用過大，使系統不穩定
