@@ -6,6 +6,10 @@ from picture_tool.format import convert_format
 from picture_tool.anomaly import process_anomaly_detection
 from picture_tool.augment import YoloDataAugmentor, ImageAugmentor
 from picture_tool.split import split_dataset
+from picture_tool.train.yolo_trainer import train_yolo
+from picture_tool.eval.yolo_evaluator import evaluate_yolo
+from picture_tool.report.report_generator import generate_report
+from picture_tool.quality.dataset_linter import lint_dataset, preview_dataset
 
 def setup_logging(log_file):
     """設置日誌系統"""
@@ -134,12 +138,32 @@ def run_image_augmentation(config, args):
 def run_dataset_splitter(config, args):
     split_dataset(config)
 
+def run_yolo_train(config, args):
+    train_yolo(config)
+
+def run_yolo_evaluation(config, args):
+    evaluate_yolo(config)
+
+def run_generate_report(config, args):
+    generate_report(config)
+
+def run_dataset_lint(config, args):
+    lint_dataset(config)
+
+def run_aug_preview(config, args):
+    preview_dataset(config)
+
 TASK_HANDLERS = {
     "format_conversion": run_format_conversion,
     "anomaly_detection": run_anomaly_detection,
     "yolo_augmentation": run_yolo_augmentation,
     "image_augmentation": run_image_augmentation,
     "dataset_splitter": run_dataset_splitter,
+    "yolo_train": run_yolo_train,
+    "yolo_evaluation": run_yolo_evaluation,
+    "generate_report": run_generate_report,
+    "dataset_lint": run_dataset_lint,
+    "aug_preview": run_aug_preview,
 }
 
 def run_pipeline(tasks, config, logger, args, stop_event=None):

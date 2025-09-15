@@ -19,8 +19,8 @@ class DataAugmentor:
     def __init__(self, config_path: str = None):
         self._setup_logging()
         self.config = self._load_config(config_path) if config_path else self._default_config()
-        self._setup_output_dirs()
-        self.augmentations = self._create_augmentations()
+        # 延後初始化，避免在 main_pipeline 覆蓋 config 前就建立多餘輸出資料夾
+        self.augmentations = None
 
     def _setup_logging(self):
         self.logger = setup_module_logger(__name__, 'augmentation_fixed.log')
@@ -153,7 +153,8 @@ class DataAugmentor:
                 limit = max(abs(angle[0]), abs(angle[1]))
             else:
                 limit = abs(angle)
-            aug_list.append(A.Rotate(limit=limit, p=0.3, border_mode=cv2.BORDER_CONSTANT, value=128))
+            # 使用 border_value 以相容不同版本 Albumentations
+            aug_list.append(A.Rotate(limit=limit, p=0.3, border_mode=cv2.BORDER_CONSTANT, border_value=(128, 128, 128)))
         if ops_config.get('multiply'):
             multiply_range = ops_config['multiply']['range']
             brightness_limit = (multiply_range[0] - 1, multiply_range[1] - 1)
@@ -174,7 +175,11 @@ class DataAugmentor:
                 hue_shift_limit=hue_limit, sat_shift_limit=(-10, 10), val_shift_limit=(-10, 10), p=0.3))
         if ops_config.get('noise') and ops_config['noise']['scale'][1] > 0:
             noise_scale = ops_config['noise']['scale']
-            aug_list.append(A.GaussNoise(var_limit=(0, noise_scale[1] * 255), p=0.2))
+            # 兼容不同版本 Albumentations，若 var_limit 參數不可用則降級使用預設
+            try:
+                aug_list.append(A.GaussNoise(var_limit=(0, noise_scale[1] * 255), p=0.2))
+            except TypeError:
+                aug_list.append(A.GaussNoise(p=0.2))
         self.logger.info(f"增強管線包含 {len(aug_list)} 個操作 {[type(aug).__name__ for aug in aug_list]}")
         return A.Compose(
             aug_list,
@@ -282,8 +287,10 @@ class DataAugmentor:
                         self.logger.warning(f"增強後沒有剩餘標註，跳過: {img_file}_aug_{i+1}")
                         continue
                     final_image, transform_params = self.resize_with_padding(augmented_image, target_size)
+                    # 使用增強後影像尺寸作為座標基準
+                    aug_h, aug_w = augmented_image.shape[:2]
                     final_bboxes = self.transform_bboxes_after_resize(
-                        augmented_bboxes, original_width, original_height, transform_params)
+                        augmented_bboxes, aug_w, aug_h, transform_params)
                     valid_bboxes = []
                     valid_labels = []
                     for bbox, label in zip(final_bboxes, augmented_labels):
@@ -316,6 +323,10 @@ class DataAugmentor:
             self.logger.error(f"處理單張影像出錯 {img_file}: {e}")
 
     def process_dataset(self):
+        # 確保已建立輸出資料夾與增強流程
+        if self.augmentations is None:
+            self._setup_output_dirs()
+            self.augmentations = self._create_augmentations()
         start_time = time.time()
         input_img_dir = Path(self.config['input']['image_dir'])
         if not input_img_dir.exists():
