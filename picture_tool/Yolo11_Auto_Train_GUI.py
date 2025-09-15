@@ -3,6 +3,7 @@ import os
 import yaml
 import threading
 import time
+import copy
 from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QTextEdit, QProgressBar,
@@ -10,8 +11,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
                              QSplitter, QTabWidget, QScrollArea, QFrame, QGridLayout,
                              QMessageBox, QListWidget, QListWidgetItem, QSpacerItem,
                              QSizePolicy)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap, QLinearGradient
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap
 
 # 假設這些是您原始代碼中的模組
 try:
@@ -51,11 +52,13 @@ class WorkerThread(QThread):
     finished_signal = pyqtSignal()
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, tasks, config):
+    def __init__(self, tasks, config, config_path=None):
         super().__init__()
         self.tasks = tasks
         self.config = config
         self.is_cancelled = False
+        self.config_path = config_path
+        self._last_mtime_ns = 0
 
         # 任務處理器字典
         self.task_handlers = {
@@ -74,13 +77,36 @@ class WorkerThread(QThread):
     def cancel(self):
         self.is_cancelled = True
 
+    def _reload_config_if_changed(self):
+        try:
+            if not self.config_path:
+                return
+            p = Path(self.config_path)
+            if not p.exists():
+                return
+            mtime_ns = p.stat().st_mtime_ns
+            if self._last_mtime_ns == 0:
+                self._last_mtime_ns = mtime_ns
+                return
+            if mtime_ns > self._last_mtime_ns:
+                with open(p, 'r', encoding='utf-8') as f:
+                    new_cfg = yaml.safe_load(f)
+                if isinstance(new_cfg, dict):
+                    self.config = new_cfg
+                    self._last_mtime_ns = mtime_ns
+                    self.log_message.emit(f"偵測到設定檔更新，已重新載入: {p}")
+        except Exception as e:
+            self.log_message.emit(f"重新載入設定檔失敗: {e}")
+
     def run(self):
         try:
             total_tasks = len(self.tasks)
             for i, task in enumerate(self.tasks):
                 if self.is_cancelled:
                     break
-                
+                # auto-reload config if file changed
+                self._reload_config_if_changed()
+
                 self.task_started.emit(task)
                 self.log_message.emit(f"開始執行任務: {task}")
                 
@@ -112,41 +138,41 @@ class WorkerThread(QThread):
     # 任務處理方法
     def run_format_conversion(self):
         if 'format_conversion' in self.config:
-            convert_format(self.config['format_conversion'])
+            convert_format(copy.deepcopy(self.config['format_conversion']))
 
     def run_anomaly_detection(self):
         if 'anomaly_detection' in self.config:
-            process_anomaly_detection(self.config)
+            process_anomaly_detection(copy.deepcopy(self.config))
 
     def run_yolo_augmentation(self):
         augmentor = YoloDataAugmentor()
         if hasattr(augmentor, 'config'):
-            augmentor.config = self.config.get('yolo_augmentation', {})
+            augmentor.config = copy.deepcopy(self.config.get('yolo_augmentation', {}))
         augmentor.process_dataset()
 
     def run_image_augmentation(self):
         augmentor = ImageAugmentor()
         if hasattr(augmentor, 'config'):
-            augmentor.config = self.config.get('image_augmentation', {})
+            augmentor.config = copy.deepcopy(self.config.get('image_augmentation', {}))
         augmentor.process_dataset()
 
     def run_dataset_splitter(self):
-        split_dataset(self.config)
+        split_dataset(copy.deepcopy(self.config))
 
     def run_yolo_train(self):
-        train_yolo(self.config)
+        train_yolo(copy.deepcopy(self.config))
 
     def run_yolo_evaluation(self):
-        evaluate_yolo(self.config)
+        evaluate_yolo(copy.deepcopy(self.config))
 
     def run_generate_report(self):
-        generate_report(self.config)
+        generate_report(copy.deepcopy(self.config))
 
     def run_dataset_lint(self):
-        lint_dataset(self.config)
+        lint_dataset(copy.deepcopy(self.config))
 
     def run_aug_preview(self):
-        preview_dataset(self.config)
+        preview_dataset(copy.deepcopy(self.config))
 
 class ModernCheckBox(QCheckBox):
     """現代化的複選框樣式"""
@@ -154,27 +180,28 @@ class ModernCheckBox(QCheckBox):
         super().__init__(text, parent)
         self.setStyleSheet("""
             QCheckBox {
-                font-size: 14px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 color: #2c3e50;
                 spacing: 8px;
                 padding: 5px;
             }
             QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 9px;
-                border: 2px solid #3498db;
+                width: 16px;
+                height: 16px;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
                 background-color: white;
             }
             QCheckBox::indicator:checked {
-                background-color: #3498db;
-                border: 2px solid #2980b9;
+                background-color: #007bff;
+                border: 1px solid #0056b3;
             }
             QCheckBox::indicator:checked:hover {
-                background-color: #2980b9;
+                background-color: #0056b3;
             }
             QCheckBox::indicator:hover {
-                border: 2px solid #2980b9;
+                border: 1px solid #80bdff;
             }
         """)
 
@@ -189,71 +216,73 @@ class ModernButton(QPushButton):
         if self.color_theme == "primary":
             style = """
                 QPushButton {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #3498db, stop: 1 #2980b9);
+                    background-color: #007bff;
                     color: white;
                     border: none;
-                    padding: 12px 24px;
-                    border-radius: 25px;
-                    font-size: 14px;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-family: 'Microsoft JhengHei';
+                    font-size: 9pt;
                     font-weight: bold;
-                    min-width: 120px;
+                    min-width: 100px;
                 }
                 QPushButton:hover {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #2980b9, stop: 1 #2471a3);
+                    background-color: #0056b3;
                 }
                 QPushButton:pressed {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #2471a3, stop: 1 #1f5582);
+                    background-color: #004085;
                 }
                 QPushButton:disabled {
-                    background: #bdc3c7;
-                    color: #7f8c8d;
+                    background-color: #6c757d;
+                    color: #dee2e6;
                 }
             """
         elif self.color_theme == "success":
             style = """
                 QPushButton {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #27ae60, stop: 1 #229954);
+                    background-color: #28a745;
                     color: white;
                     border: none;
-                    padding: 12px 24px;
-                    border-radius: 25px;
-                    font-size: 14px;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-family: 'Microsoft JhengHei';
+                    font-size: 9pt;
                     font-weight: bold;
-                    min-width: 120px;
+                    min-width: 100px;
                 }
                 QPushButton:hover {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #229954, stop: 1 #1e8449);
+                    background-color: #218838;
                 }
                 QPushButton:pressed {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #1e8449, stop: 1 #196f3d);
+                    background-color: #1e7e34;
+                }
+                QPushButton:disabled {
+                    background-color: #6c757d;
+                    color: #dee2e6;
                 }
             """
         elif self.color_theme == "danger":
             style = """
                 QPushButton {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #e74c3c, stop: 1 #c0392b);
+                    background-color: #dc3545;
                     color: white;
                     border: none;
-                    padding: 12px 24px;
-                    border-radius: 25px;
-                    font-size: 14px;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-family: 'Microsoft JhengHei';
+                    font-size: 9pt;
                     font-weight: bold;
-                    min-width: 120px;
+                    min-width: 100px;
                 }
                 QPushButton:hover {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #c0392b, stop: 1 #a93226);
+                    background-color: #c82333;
                 }
                 QPushButton:pressed {
-                    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
-                                              stop: 0 #a93226, stop: 1 #922b21);
+                    background-color: #bd2130;
+                }
+                QPushButton:disabled {
+                    background-color: #6c757d;
+                    color: #dee2e6;
                 }
             """
         self.setStyleSheet(style)
@@ -264,7 +293,8 @@ class PictureToolGUI(QMainWindow):
         self.config = {}
         self.worker_thread = None
         self.init_ui()
-        self.load_default_config()
+        # 啟動後自動載入與本檔案同層的 config.yaml（若不存在則退回預設）
+        self.load_config()
 
     def init_ui(self):
         self.setWindowTitle('圖像處理工具 - 現代化GUI')
@@ -274,54 +304,60 @@ class PictureToolGUI(QMainWindow):
         # 設置現代化樣式
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f8f9fa;
+                background-color: #ffffff;
             }
             QGroupBox {
-                font-size: 16px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 font-weight: bold;
                 color: #2c3e50;
-                border: 2px solid #e9ecef;
-                border-radius: 10px;
+                border: 2px solid #dee2e6;
+                border-radius: 8px;
                 margin-top: 1ex;
-                padding-top: 15px;
-                background-color: white;
+                padding-top: 10px;
+                background-color: #f8f9fa;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px;
-                padding: 0 8px 0 8px;
-                background-color: white;
+                padding: 0 5px 0 5px;
             }
             QTextEdit {
                 border: 1px solid #dee2e6;
-                border-radius: 8px;
+                border-radius: 4px;
                 background-color: #ffffff;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 12px;
+                font-family: 'Consolas';
+                font-size: 9pt;
                 padding: 8px;
             }
             QProgressBar {
-                border: 2px solid #dee2e6;
-                border-radius: 15px;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
                 background-color: #f8f9fa;
                 text-align: center;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 font-weight: bold;
                 color: #2c3e50;
+                height: 20px;
             }
             QProgressBar::chunk {
-                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                          stop: 0 #3498db, stop: 1 #2980b9);
-                border-radius: 13px;
+                background-color: #28a745;
+                border-radius: 3px;
             }
             QComboBox, QLineEdit {
-                padding: 8px;
-                border: 2px solid #dee2e6;
-                border-radius: 8px;
+                padding: 6px 12px;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
                 background-color: white;
-                font-size: 14px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
+            }
+            QComboBox:hover, QLineEdit:hover {
+                border-color: #80bdff;
             }
             QComboBox:focus, QLineEdit:focus {
-                border-color: #3498db;
+                border-color: #007bff;
             }
         """)
 
@@ -331,8 +367,8 @@ class PictureToolGUI(QMainWindow):
         
         # 主佈局
         main_layout = QHBoxLayout(central_widget)
-        main_layout.setSpacing(20)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
+        main_layout.setContentsMargins(15, 15, 15, 15)
 
         # 左側控制面板
         left_panel = self.create_left_panel()
@@ -347,16 +383,21 @@ class PictureToolGUI(QMainWindow):
     def create_left_panel(self):
         """創建左側控制面板"""
         left_widget = QWidget()
-        left_widget.setMaximumWidth(400)
+        left_widget.setMaximumWidth(300)
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setSpacing(20)
+        left_layout.setSpacing(15)
 
         # 配置文件選擇
         config_group = QGroupBox("配置設定")
         config_layout = QVBoxLayout(config_group)
-        
+        # 預設以本檔案所在資料夾為基準尋找 config.yaml
+        try:
+            default_cfg_path = str((Path(__file__).parent / "config.yaml").resolve())
+        except Exception:
+            default_cfg_path = os.path.join("picture_tool", "config.yaml")
+        path = default_cfg_path
         config_file_layout = QHBoxLayout()
-        self.config_path_edit = QLineEdit("config.yaml")
+        self.config_path_edit = QLineEdit(path)
         config_browse_btn = ModernButton("瀏覽", "primary")
         config_browse_btn.clicked.connect(self.browse_config_file)
         config_file_layout.addWidget(QLabel("配置文件："))
@@ -413,22 +454,6 @@ class PictureToolGUI(QMainWindow):
         # 進度顯示
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 2px solid #dee2e6;
-                border-radius: 15px;
-                background-color: #f8f9fa;
-                text-align: center;
-                font-weight: bold;
-                color: #2c3e50;
-                height: 30px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                          stop: 0 #27ae60, stop: 1 #229954);
-                border-radius: 13px;
-            }
-        """)
         control_layout.addWidget(self.progress_bar)
 
         # 狀態標籤
@@ -436,12 +461,14 @@ class PictureToolGUI(QMainWindow):
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #e8f5e8;
-                color: #27ae60;
-                padding: 10px;
-                border-radius: 8px;
+                background-color: #f8f9fa;
+                color: #28a745;
+                padding: 8px;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 font-weight: bold;
-                font-size: 14px;
             }
         """)
         control_layout.addWidget(self.status_label)
@@ -464,15 +491,15 @@ class PictureToolGUI(QMainWindow):
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("""
             QLabel {
-                font-size: 28px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 12pt;
                 font-weight: bold;
                 color: #2c3e50;
-                padding: 20px;
-                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                          stop: 0 #3498db, stop: 1 #2980b9);
-                color: white;
-                border-radius: 15px;
-                margin-bottom: 20px;
+                padding: 10px;
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+                margin-bottom: 10px;
             }
         """)
 
@@ -482,21 +509,25 @@ class PictureToolGUI(QMainWindow):
             QTabWidget::pane {
                 border: 2px solid #dee2e6;
                 border-radius: 8px;
-                background-color: white;
+                background-color: #f8f9fa;
                 padding: 10px;
             }
             QTabBar::tab {
                 background-color: #f8f9fa;
                 color: #495057;
-                padding: 12px 20px;
+                padding: 8px 16px;
                 margin-right: 2px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
+                border: 1px solid #dee2e6;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 font-weight: bold;
             }
             QTabBar::tab:selected {
-                background-color: #3498db;
+                background-color: #007bff;
                 color: white;
+                border-bottom: none;
             }
             QTabBar::tab:hover:!selected {
                 background-color: #e9ecef;
@@ -511,12 +542,14 @@ class PictureToolGUI(QMainWindow):
         self.log_text.setPlainText("歡迎使用圖像處理工具！\n請選擇任務並點擊開始執行。\n")
         self.log_text.setStyleSheet("""
             QTextEdit {
-                background-color: #2c3e50;
-                color: #ecf0f1;
-                border: none;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 13px;
+                background-color: #f8f9fa;
+                color: #2c3e50;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Consolas';
+                font-size: 9pt;
                 line-height: 1.4;
+                padding: 8px;
             }
         """)
         
@@ -532,6 +565,16 @@ class PictureToolGUI(QMainWindow):
         
         self.config_text = QTextEdit()
         self.config_text.setPlainText("請載入配置文件...")
+        self.config_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Consolas';
+                font-size: 9pt;
+                padding: 8px;
+            }
+        """)
         
         config_layout.addWidget(self.config_text)
         
@@ -638,15 +681,17 @@ class PictureToolGUI(QMainWindow):
             QLabel {
                 background-color: #fff3cd;
                 color: #856404;
-                padding: 10px;
-                border-radius: 8px;
+                padding: 8px;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 font-weight: bold;
-                font-size: 14px;
             }
         """)
 
         # 創建並啟動工作線程
-        self.worker_thread = WorkerThread(selected_tasks, self.config)
+        self.worker_thread = WorkerThread(selected_tasks, self.config, self.config_path_edit.text())
         self.worker_thread.progress_updated.connect(self.update_progress)
         self.worker_thread.task_started.connect(self.on_task_started)
         self.worker_thread.task_completed.connect(self.on_task_completed)
@@ -682,12 +727,14 @@ class PictureToolGUI(QMainWindow):
         self.status_label.setText("完成")
         self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #e8f5e8;
-                color: #27ae60;
-                padding: 10px;
-                border-radius: 8px;
+                background-color: #f8f9fa;
+                color: #28a745;
+                padding: 8px;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Microsoft JhengHei';
+                font-size: 9pt;
                 font-weight: bold;
-                font-size: 14px;
             }
         """)
         self.log_message("🎉 所有任務執行完成！")
@@ -728,7 +775,6 @@ class PictureToolGUI(QMainWindow):
         else:
             event.accept()
 
-
 def main():
     """主函數"""
     app = QApplication(sys.argv)
@@ -739,7 +785,7 @@ def main():
     app.setOrganizationName("ImageTool Corp")
     
     # 設置全局字體
-    font = QFont("Microsoft YaHei UI", 10)
+    font = QFont("Microsoft JhengHei", 9)
     app.setFont(font)
     
     # 創建主窗口
@@ -748,7 +794,6 @@ def main():
     
     # 運行應用程式
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()

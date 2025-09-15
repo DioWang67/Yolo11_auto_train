@@ -18,5 +18,5 @@ where python
 python -c "import torch; print(torch.__version__)"
 
 REM 執行主控腳本並保持視窗開啟
-python picture_tool\GUI.py %*
+python picture_tool\Yolo11_Auto_Train_GUI.py %*
 cmd /k
