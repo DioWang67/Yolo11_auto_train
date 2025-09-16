@@ -79,6 +79,8 @@ pipeline:
     - yolo_train
     - yolo_evaluation
     - generate_report
+    inference:
+    - batch_inference
     full:
     - format_conversion
     - yolo_augmentation
@@ -121,6 +123,9 @@ pipeline:
     - yolo_evaluation
     enabled: true
     name: generate_report
+  - dependencies: []
+    enabled: true
+    name: batch_inference
 train_test_split:
   input:
     image_dir: ./data/augmented/images
@@ -210,6 +215,15 @@ yolo_evaluation:
   weights: null
   imgsz: 640
   device: cpu
+
+# Batch inference settings
+batch_inference:
+  input_dir: ./data/augmented/images
+  output_dir: ./reports/infer
+  weights: null
+  imgsz: 640
+  device: cpu
+  conf: 0.25
 
 # Report generation
 report:

@@ -1,0 +1,1011 @@
+import sys
+import os
+import yaml
+import threading
+import time
+import copy
+from pathlib import Path
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
+                             QWidget, QPushButton, QLabel, QTextEdit, QProgressBar,
+                             QGroupBox, QCheckBox, QComboBox, QLineEdit, QFileDialog,
+                             QSplitter, QTabWidget, QScrollArea, QFrame, QGridLayout,
+                             QMessageBox, QListWidget, QListWidgetItem, QSpacerItem,
+                             QSizePolicy, QFormLayout, QToolButton)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap
+
+# ?áË®≠?ô‰??ØÊÇ®?üÂ?‰ª?¢º‰∏≠Á?Ê®°Á?
+try:
+    from picture_tool.format import convert_format
+    from picture_tool.anomaly import process_anomaly_detection
+    from picture_tool.augment import YoloDataAugmentor, ImageAugmentor
+    from picture_tool.split import split_dataset
+    from picture_tool.train.yolo_trainer import train_yolo
+    from picture_tool.eval.yolo_evaluator import evaluate_yolo
+    from picture_tool.report.report_generator import generate_report
+    from picture_tool.quality.dataset_linter import lint_dataset, preview_dataset
+    from picture_tool.infer.batch_infer import run_batch_inference
+except ImportError:
+    # Â¶ÇÊ??°Ê?Â∞éÂÖ•ÔºåÂâµÂª∫Ê®°?¨ÂáΩ??
+    def convert_format(config): print("?∑Ë??ºÂ?ËΩâÊ?")
+    def process_anomaly_detection(config): print("?∑Ë??∞Â∏∏Ê™¢Ê∏¨")
+    def split_dataset(config): print("?∑Ë??∏Ê??ÜÂ???)
+    def train_yolo(config): print("?∑Ë?YOLOË®ìÁ∑¥")
+    def evaluate_yolo(config): print("?∑Ë?YOLOË©ï‰º∞")
+    def generate_report(config): print("?üÊ??±Â?")
+    def lint_dataset(config): print("?∑Ë??∏Ê??ÜÊ™¢??)
+    def preview_dataset(config): print("?êË¶Ω?∏Ê???)
+    
+    class YoloDataAugmentor:
+        def __init__(self): pass
+        def process_dataset(self): print("YOLO?∏Ê?Â¢ûÂº∑")
+    
+    class ImageAugmentor:
+        def __init__(self): pass
+        def process_dataset(self): print("?ñÂ??∏Ê?Â¢ûÂº∑")
+
+class WorkerThread(QThread):
+    """Â∑•‰?Á∑öÁ??®Êñº?∑Ë?‰ªªÂ?"""
+    progress_updated = pyqtSignal(int)
+    task_started = pyqtSignal(str)
+    task_completed = pyqtSignal(str)
+    log_message = pyqtSignal(str)
+    finished_signal = pyqtSignal()
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, tasks, config, config_path=None):
+        super().__init__()
+        self.tasks = tasks
+        self.config = config
+        self.is_cancelled = False
+        self.config_path = config_path
+        self._last_mtime_ns = 0
+
+        # ‰ªªÂ??ïÁ??®Â???
+        self.task_handlers = {
+            "?ºÂ?ËΩâÊ?": self.run_format_conversion,
+            "?∞Â∏∏Ê™¢Ê∏¨": self.run_anomaly_detection,
+            "YOLO?∏Ê?Â¢ûÂº∑": self.run_yolo_augmentation,
+            "?ñÂ??∏Ê?Â¢ûÂº∑": self.run_image_augmentation,
+            "?∏Ê??ÜÂ???: self.run_dataset_splitter,
+            "YOLOË®ìÁ∑¥": self.run_yolo_train,
+            "YOLOË©ï‰º∞": self.run_yolo_evaluation,
+            "?üÊ??±Â?": self.run_generate_report,
+            "?∏Ê??ÜÊ™¢??: self.run_dataset_lint,
+            "Â¢ûÂº∑?êË¶Ω": self.run_aug_preview,
+            "?πÊ¨°?®Ë?": self.run_batch_inference,
+            # -- readable Chinese labels --
+            "YOLO?∏Ê?Â¢ûÂº∑": self.run_yolo_augmentation,
+            "?∏Ê??ÜÂâ≤": self.run_dataset_splitter,
+            "YOLOË®ìÁ∑¥": self.run_yolo_train,
+            "YOLOË©ï‰º∞": self.run_yolo_evaluation,
+            "?üÊ??±Â?": self.run_generate_report,
+            "?∏Ê?Ê™¢Êü•": self.run_dataset_lint,
+            "Â¢ûÂº∑?êË¶Ω": self.run_aug_preview,
+            "?πÊ¨°?®Ë?": self.run_batch_inference,
+        }
+
+    def cancel(self):
+        self.is_cancelled = True
+
+    def _reload_config_if_changed(self):
+        try:
+            if not self.config_path:
+                return
+            p = Path(self.config_path)
+            if not p.exists():
+                return
+            mtime_ns = p.stat().st_mtime_ns
+            if self._last_mtime_ns == 0:
+                self._last_mtime_ns = mtime_ns
+                return
+            if mtime_ns > self._last_mtime_ns:
+                with open(p, 'r', encoding='utf-8') as f:
+                    new_cfg = yaml.safe_load(f)
+                if isinstance(new_cfg, dict):
+                    self.config = new_cfg
+                    self._last_mtime_ns = mtime_ns
+                    self.log_message.emit(f"?µÊ∏¨?∞Ë®≠ÂÆöÊ??¥Êñ∞ÔºåÂ∑≤?çÊñ∞ËºâÂÖ•: {p}")
+        except Exception as e:
+            self.log_message.emit(f"?çÊñ∞ËºâÂÖ•Ë®≠Â?Ê™îÂ§±?? {e}")
+
+    def run(self):
+        try:
+            total_tasks = len(self.tasks)
+            for i, task in enumerate(self.tasks):
+                if self.is_cancelled:
+                    break
+                # auto-reload config if file changed
+                self._reload_config_if_changed()
+
+                self.task_started.emit(task)
+                self.log_message.emit(f"?ãÂ??∑Ë?‰ªªÂ?: {task}")
+                
+                # ?∑Ë?‰ªªÂ?
+                handler = self.task_handlers.get(task)
+                if handler:
+                    handler()
+                    self.log_message.emit(f"‰ªªÂ? {task} ÂÆåÊ?")
+                    self.task_completed.emit(task)
+                else:
+                    self.log_message.emit(f"?™Áü•‰ªªÂ?: {task}")
+                
+                # ?¥Êñ∞?≤Â∫¶
+                progress = int((i + 1) / total_tasks * 100)
+                self.progress_updated.emit(progress)
+                
+                # Ê®°Êì¨‰ªªÂ??∑Ë??ÇÈ?
+                time.sleep(1)
+            
+            if not self.is_cancelled:
+                self.log_message.emit("?Ä?â‰ªª?ôÂü∑Ë°åÂ??êÔ?")
+            else:
+                self.log_message.emit("‰ªªÂ??∑Ë?Â∑≤Â?Ê∂?)
+            
+            self.finished_signal.emit()
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+    # ‰ªªÂ??ïÁ??πÊ?
+    def run_format_conversion(self):
+        if 'format_conversion' in self.config:
+            convert_format(copy.deepcopy(self.config['format_conversion']))
+
+    def run_anomaly_detection(self):
+        if 'anomaly_detection' in self.config:
+            process_anomaly_detection(copy.deepcopy(self.config))
+
+    def run_yolo_augmentation(self):
+        augmentor = YoloDataAugmentor()
+        if hasattr(augmentor, 'config'):
+            augmentor.config = copy.deepcopy(self.config.get('yolo_augmentation', {}))
+        augmentor.process_dataset()
+
+    def run_image_augmentation(self):
+        augmentor = ImageAugmentor()
+        if hasattr(augmentor, 'config'):
+            augmentor.config = copy.deepcopy(self.config.get('image_augmentation', {}))
+        augmentor.process_dataset()
+
+    def run_dataset_splitter(self):
+        split_dataset(copy.deepcopy(self.config))
+
+    def run_yolo_train(self):
+        train_yolo(copy.deepcopy(self.config))
+
+    def run_yolo_evaluation(self):
+        evaluate_yolo(copy.deepcopy(self.config))
+
+    def run_generate_report(self):
+        generate_report(copy.deepcopy(self.config))
+
+    def run_dataset_lint(self):
+        lint_dataset(copy.deepcopy(self.config))
+
+    def run_aug_preview(self):
+        preview_dataset(copy.deepcopy(self.config))
+
+    def run_batch_inference(self):
+        run_batch_inference(copy.deepcopy(self.config))
+
+class CompactCheckBox(QCheckBox):
+    """Á∑äÊ??ãË??∏Ê?"""
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet("""
+            QCheckBox {
+                font-size: 9pt;
+                color: #2c3e50;
+                spacing: 5px;
+                padding: 2px;
+                margin: 1px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border: 1px solid #ced4da;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #007bff;
+                border-color: #0056b3;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #80bdff;
+            }
+        """)
+
+class CompactButton(QPushButton):
+    """Á∑äÊ??ãÊ???""
+    def __init__(self, text, color_theme="primary", parent=None):
+        super().__init__(text, parent)
+        self.color_theme = color_theme
+        self._setup_style()
+
+    def _setup_style(self):
+        base_style = """
+            QPushButton {
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-size: 9pt;
+                font-weight: bold;
+                min-height: 24px;
+                text-align: center;
+            }
+            QPushButton:disabled {
+                background-color: #6c757d;
+                color: #dee2e6;
+            }
+        """
+        
+        if self.color_theme == "primary":
+            color_style = """
+                QPushButton {
+                    background-color: #007bff;
+                    color: white;
+                }
+                QPushButton:hover {
+                    background-color: #0056b3;
+                }
+                QPushButton:pressed {
+                    background-color: #004085;
+                }
+            """
+        elif self.color_theme == "success":
+            color_style = """
+                QPushButton {
+                    background-color: #28a745;
+                    color: white;
+                }
+                QPushButton:hover {
+                    background-color: #218838;
+                }
+                QPushButton:pressed {
+                    background-color: #1e7e34;
+                }
+            """
+        elif self.color_theme == "danger":
+            color_style = """
+                QPushButton {
+                    background-color: #dc3545;
+                    color: white;
+                }
+                QPushButton:hover {
+                    background-color: #c82333;
+                }
+                QPushButton:pressed {
+                    background-color: #bd2130;
+                }
+            """
+        else:
+            color_style = base_style
+            
+        self.setStyleSheet(base_style + color_style)
+
+class PictureToolGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.config = {}
+        self.worker_thread = None
+        self.init_ui()
+        self.load_config()
+
+    def init_ui(self):
+        self.setWindowTitle('?ñÂ??ïÁ?Â∑•ÂÖ∑ - ?øÊ?ÂºèGUI')
+        self.setGeometry(100, 100, 1200, 800)
+        self.setMinimumSize(800, 600)
+        
+        # Ë®≠ÁΩÆ?®Â?Ê®??
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f8f9fa;
+            }
+            QGroupBox {
+                font-size: 10pt;
+                font-weight: bold;
+                color: #2c3e50;
+                border: 2px solid #dee2e6;
+                border-radius: 6px;
+                margin: 8px 2px 2px 2px;
+                padding-top: 8px;
+                background-color: white;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 5px 0 5px;
+            }
+            QTextEdit {
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                background-color: #ffffff;
+                font-family: 'Consolas', monospace;
+                font-size: 9pt;
+                padding: 8px;
+            }
+            QProgressBar {
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                background-color: #f8f9fa;
+                text-align: center;
+                font-size: 9pt;
+                font-weight: bold;
+                color: #2c3e50;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: #28a745;
+                border-radius: 3px;
+            }
+            QComboBox, QLineEdit {
+                padding: 4px 8px;
+                border: 1px solid #ced4da;
+                border-radius: 4px;
+                background-color: white;
+                font-size: 9pt;
+                min-height: 16px;
+            }
+            QComboBox:hover, QLineEdit:hover {
+                border-color: #80bdff;
+            }
+            QComboBox:focus, QLineEdit:focus {
+                border-color: #007bff;
+            }
+            QLabel {
+                font-size: 9pt;
+                color: #495057;
+            }
+        """)
+
+        # ‰∏≠Â§Æ?®‰ª∂
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # ‰ΩøÁî® QSplitter ‰æÜÂâµÂª∫ÂèØË™øÊï¥?Ñ‰?Â±Ä
+        main_splitter = QSplitter(Qt.Horizontal)
+        central_layout = QVBoxLayout(central_widget)
+        central_layout.setContentsMargins(5, 5, 5, 5)
+        central_layout.addWidget(main_splitter)
+
+        # Â∑¶ÂÅ¥?¢ÊùøÔºà‰Ωø?®Êªæ?ïÂ??üÔ?
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        left_scroll.setMinimumWidth(280)
+        left_scroll.setMaximumWidth(400)
+        
+        left_panel = self.create_left_panel()
+        left_scroll.setWidget(left_panel)
+
+        # ?≥ÂÅ¥?¢Êùø
+        right_panel = self.create_right_panel()
+
+        # Ê∑ªÂ??∞Â??≤Âô®
+        main_splitter.addWidget(left_scroll)
+        main_splitter.addWidget(right_panel)
+        
+        # Ë®≠ÁΩÆ?ùÂ?ÊØî‰?
+        main_splitter.setSizes([300, 700])
+
+    def create_left_panel(self):
+        """?µÂª∫Â∑¶ÂÅ¥?ßÂà∂?¢Êùø"""
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(5, 5, 5, 5)
+
+        # ?çÁΩÆ?á‰ª∂?∏Ê? - Á∑äÊ???
+        config_group = QGroupBox("?çÁΩÆË®≠Â?")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(6)
+        
+        # ?çÁΩÆ?á‰ª∂Ë∑ØÂ?
+        try:
+            default_cfg_path = str((Path(__file__).parent / "config.yaml").resolve())
+        except Exception:
+            default_cfg_path = os.path.join("picture_tool", "config.yaml")
+        
+        self.config_path_edit = QLineEdit(default_cfg_path)
+        self.config_path_edit.setToolTip("?çÁΩÆ?á‰ª∂Ë∑ØÂ?")
+        
+        config_btn_layout = QHBoxLayout()
+        config_btn_layout.setSpacing(4)
+        config_browse_btn = CompactButton("?èË¶Ω", "primary")
+        config_browse_btn.clicked.connect(self.browse_config_file)
+        reload_config_btn = CompactButton("?çË?", "primary")
+        reload_config_btn.clicked.connect(self.load_config)
+        
+        config_btn_layout.addWidget(config_browse_btn)
+        config_btn_layout.addWidget(reload_config_btn)
+        
+        config_layout.addWidget(QLabel("?çÁΩÆ?á‰ª∂:"))
+        config_layout.addWidget(self.config_path_edit)
+        config_layout.addLayout(config_btn_layout)
+
+        # ‰ªªÂ??∏Ê? - Á∑äÊ???
+        task_group = QGroupBox("‰ªªÂ??∏Ê?")
+        task_layout = QVBoxLayout(task_group)
+        task_layout.setSpacing(2)
+        # ?∂Â??áÊ??óÔ?‰ªªÂ??∏Ê?Ôº?        all_toggle_bar = QHBoxLayout()
+        all_toggle_bar.addStretch()
+        all_toggle_btn = QToolButton()
+        all_toggle_btn.setCheckable(True)
+        all_toggle_btn.setChecked(True)
+        all_toggle_btn.setArrowType(Qt.DownArrow)
+        all_toggle_btn.setToolTip("Â±ïÈ?/?∂Ëµ∑")
+        all_toggle_bar.addWidget(all_toggle_btn)
+        task_layout.addLayout(all_toggle_bar)
+
+        # ?ØÊî∂?àÂÆπ??        all_tasks_content = QWidget()
+        all_tasks_content_layout = QVBoxLayout(all_tasks_content)
+        all_tasks_content_layout.setSpacing(2)
+        
+        # ‰ªªÂ?Ë§áÈÅ∏Ê°?- ‰ΩøÁî®Á∂≤Ê†º‰ΩàÂ?ÁØÄ?ÅÁ©∫??
+        task_grid = QGridLayout()
+        task_grid.setSpacing(2)
+        task_grid.setContentsMargins(2, 2, 2, 2)
+        
+        self.task_checkboxes = {}
+        tasks = [
+            "?ºÂ?ËΩâÊ?", "?∞Â∏∏Ê™¢Ê∏¨", "YOLO?∏Ê?Â¢ûÂº∑", 
+            "?ñÂ??∏Ê?Â¢ûÂº∑", "?∏Ê??ÜÂ???, "YOLOË®ìÁ∑¥",
+            "YOLOË©ï‰º∞", "?üÊ??±Â?", "?∏Ê??ÜÊ™¢??, 
+            "Â¢ûÂº∑?êË¶Ω", "?πÊ¨°?®Ë?"
+        ]
+        
+        # 2?ó‰?Â±Ä
+        for i, task in enumerate(tasks):
+            checkbox = CompactCheckBox(task)
+            self.task_checkboxes[task] = checkbox
+            row = i // 2
+            col = i % 2
+            task_grid.addWidget(checkbox, row, col)
+        
+        all_tasks_content_layout.addLayout(task_grid)
+
+        # ?®ÈÅ∏/?ñÊ??®ÈÅ∏?âÈ?
+        select_layout = QHBoxLayout()
+        select_layout.setSpacing(4)
+        select_all_btn = CompactButton("?®ÈÅ∏", "success")
+        deselect_all_btn = CompactButton("?ñÊ?", "danger")
+        select_all_btn.clicked.connect(self.select_all_tasks)
+        deselect_all_btn.clicked.connect(self.deselect_all_tasks)
+        select_layout.addWidget(select_all_btn)
+        select_layout.addWidget(deselect_all_btn)
+        all_tasks_content_layout.addLayout(select_layout)
+
+        task_layout.addWidget(all_tasks_content)
+
+        def _toggle_all(checked):
+            all_tasks_content.setVisible(checked)
+            all_toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        all_toggle_btn.toggled.connect(_toggle_all)
+
+        # YOLO Ë®ìÁ∑¥Áæ§Á?ÔºàÂèØ?∂Â?Ôº?        yolo_group = QGroupBox("YOLO Ë®ìÁ∑¥")
+        yolo_layout = QVBoxLayout(yolo_group)
+        yolo_layout.setSpacing(2)
+
+        yolo_toggle_bar = QHBoxLayout()
+        yolo_toggle_bar.addStretch()
+        yolo_toggle_btn = QToolButton()
+        yolo_toggle_btn.setCheckable(True)
+        yolo_toggle_btn.setChecked(True)
+        yolo_toggle_btn.setArrowType(Qt.DownArrow)
+        yolo_toggle_btn.setToolTip("Â±ïÈ?/?∂Ëµ∑")
+        yolo_toggle_bar.addWidget(yolo_toggle_btn)
+        yolo_layout.addLayout(yolo_toggle_bar)
+
+        yolo_content = QWidget()
+        yolo_content_layout = QVBoxLayout(yolo_content)
+        yolo_content_layout.setSpacing(2)
+        yolo_grid = QGridLayout()
+        yolo_grid.setSpacing(2)
+        yolo_grid.setContentsMargins(2, 2, 2, 2)
+        yolo_entries = [
+            "YOLO?∏Ê?Â¢ûÂº∑",
+            "?∏Ê??ÜÂâ≤",
+            "YOLOË®ìÁ∑¥",
+            "YOLOË©ï‰º∞",
+            "?üÊ??±Â?",
+            "?∏Ê?Ê™¢Êü•",
+            "Â¢ûÂº∑?êË¶Ω",
+            "?πÊ¨°?®Ë?",
+        ]
+        for i, label_text in enumerate(yolo_entries):
+            cb = CompactCheckBox(label_text)
+            self.task_checkboxes[label_text] = cb
+            row = i // 2
+            col = i % 2
+            yolo_grid.addWidget(cb, row, col)
+        yolo_content_layout.addLayout(yolo_grid)
+
+        yolo_select_layout = QHBoxLayout()
+        yolo_select_layout.setSpacing(4)
+        yolo_select_all = CompactButton("?®ÈÅ∏", "success")
+        yolo_deselect_all = CompactButton("?®‰???, "danger")
+        yolo_select_all.clicked.connect(self.select_all_tasks)
+        yolo_deselect_all.clicked.connect(self.deselect_all_tasks)
+        yolo_select_layout.addWidget(yolo_select_all)
+        yolo_select_layout.addWidget(yolo_deselect_all)
+        yolo_content_layout.addLayout(yolo_select_layout)
+        yolo_layout.addWidget(yolo_content)
+
+        def _toggle_yolo(checked):
+            yolo_content.setVisible(checked)
+            yolo_toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        yolo_toggle_btn.toggled.connect(_toggle_yolo)
+
+        # Ë®ìÁ∑¥?ÉÊï∏Ë¶ÜË? - ?∫Á?ÂºèË®≠Ë®?
+        options_group = QGroupBox("Ë®ìÁ∑¥?ÉÊï∏")
+        options_layout = QVBoxLayout(options_group)
+        options_layout.setSpacing(4)
+        # ?∂Â??áÊ??óÔ?Ë®ìÁ∑¥?ÉÊï∏Ôº?        opts_toggle_bar = QHBoxLayout()
+        opts_toggle_bar.addStretch()
+        opts_toggle_btn = QToolButton()
+        opts_toggle_btn.setCheckable(True)
+        opts_toggle_btn.setChecked(True)
+        opts_toggle_btn.setArrowType(Qt.DownArrow)
+        opts_toggle_btn.setToolTip("Â±ïÈ?/?∂Ëµ∑")
+        opts_toggle_bar.addWidget(opts_toggle_btn)
+        options_layout.addLayout(opts_toggle_bar)
+        
+        self.apply_overrides_cb = CompactCheckBox("?üÁî®?ÉÊï∏Ë¶ÜË?")
+        options_layout.addWidget(self.apply_overrides_cb)
+        
+        # ?ÉÊï∏Ëº∏ÂÖ• - 2x2 Á∂≤Ê†º
+        param_grid = QGridLayout()
+        param_grid.setSpacing(4)
+        
+        self.override_device_edit = QLineEdit()
+        self.override_device_edit.setPlaceholderText("Ë®≠Â? (0/cpu)")
+        self.override_epochs_edit = QLineEdit()
+        self.override_epochs_edit.setPlaceholderText("Ëº™Êï∏")
+        self.override_imgsz_edit = QLineEdit()
+        self.override_imgsz_edit.setPlaceholderText("?ñÁ?Â∞∫ÂØ∏")
+        self.override_batch_edit = QLineEdit()
+        self.override_batch_edit.setPlaceholderText("?πÊ¨°Â§ßÂ?")
+        
+        param_grid.addWidget(QLabel("Device:"), 0, 0)
+        param_grid.addWidget(self.override_device_edit, 0, 1)
+        param_grid.addWidget(QLabel("Epochs:"), 1, 0)
+        param_grid.addWidget(self.override_epochs_edit, 1, 1)
+        param_grid.addWidget(QLabel("ImgSz:"), 2, 0)
+        param_grid.addWidget(self.override_imgsz_edit, 2, 1)
+        param_grid.addWidget(QLabel("Batch:"), 3, 0)
+        param_grid.addWidget(self.override_batch_edit, 3, 1)
+        
+        options_layout.addLayout(param_grid)
+        
+        # GPU?µÊ∏¨?åÂº∑?∂ÈÅ∏??
+        option_buttons = QHBoxLayout()
+        option_buttons.setSpacing(4)
+        detect_btn = CompactButton("?µÊ∏¨GPU", "primary")
+        def _detect_gpu():
+            try:
+                import torch
+                self.override_device_edit.setText('0' if torch.cuda.is_available() else 'cpu')
+            except Exception:
+                self.override_device_edit.setText('cpu')
+        detect_btn.clicked.connect(_detect_gpu)
+        option_buttons.addWidget(detect_btn)
+        
+        self.force_cb = CompactCheckBox("Âº∑Âà∂?çË?")
+        option_buttons.addWidget(self.force_cb)
+        options_layout.addLayout(option_buttons)
+        # ?∂Â??áÊ?ÔºöÂª∂ÂæåÁ?ÂÆöÔ??±Ë?/È°ØÁ§∫?ÉÊï∏?É‰ª∂
+        def _toggle_opts(checked):
+            self.apply_overrides_cb.setVisible(checked)
+            for w in [self.override_device_edit, self.override_epochs_edit, self.override_imgsz_edit, self.override_batch_edit]:
+                w.setVisible(checked)
+            for i in range(option_buttons.count()):
+                item = option_buttons.itemAt(i)
+                wid = item.widget()
+                if wid:
+                    wid.setVisible(checked)
+            opts_toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        opts_toggle_btn.toggled.connect(_toggle_opts)
+
+        # ?∑Ë??ßÂà∂
+        control_group = QGroupBox("?∑Ë??ßÂà∂")
+        control_layout = QVBoxLayout(control_group)
+        control_layout.setSpacing(6)
+        
+        # ?∑Ë??âÈ?
+        control_btn_layout = QHBoxLayout()
+        control_btn_layout.setSpacing(6)
+        self.start_btn = CompactButton("???ãÂ?", "success")
+        self.stop_btn = CompactButton("???úÊ≠¢", "danger")
+        self.stop_btn.setEnabled(False)
+        
+        self.start_btn.clicked.connect(self.start_pipeline)
+        self.stop_btn.clicked.connect(self.stop_pipeline)
+        
+        control_btn_layout.addWidget(self.start_btn)
+        control_btn_layout.addWidget(self.stop_btn)
+        control_layout.addLayout(control_btn_layout)
+
+        # ?≤Â∫¶Ê¢?
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        control_layout.addWidget(self.progress_bar)
+
+        # ?Ä?ãÊ?Á±?
+        self.status_label = QLabel("Â∞±Á?")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("""
+            QLabel {
+                background-color: #d4edda;
+                color: #155724;
+                padding: 6px;
+                border: 1px solid #c3e6cb;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+        """)
+        control_layout.addWidget(self.status_label)
+
+        # Ê∑ªÂ??∞‰∏ª‰ΩàÂ?
+        left_layout.addWidget(config_group)
+        # ?íÂÖ• YOLO Ë®ìÁ∑¥Áæ§Á??º‰ªª?ôÈÅ∏?á‰???        left_layout.addWidget(yolo_group)
+        left_layout.addWidget(task_group)
+        left_layout.addWidget(options_group)
+        left_layout.addWidget(control_group)
+        left_layout.addStretch()
+
+        return left_widget
+
+    def create_right_panel(self):
+        """?µÂª∫?≥ÂÅ¥?ßÂÆπ?¢Êùø"""
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(5, 5, 5, 5)
+
+        # Ê®ôÈ?
+        title_label = QLabel("?ñÂ??ïÁ?Â∑•ÂÖ∑ÁÆ°Á?")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("""
+            QLabel {
+                font-size: 14pt;
+                font-weight: bold;
+                color: #2c3e50;
+                padding: 10px;
+                background-color: #e9ecef;
+                border: 1px solid #dee2e6;
+                border-radius: 6px;
+            }
+        """)
+
+        # Tab Widget - ?øÊ?ÂºèË®≠Ë®?
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                background-color: white;
+                padding: 5px;
+            }
+            QTabBar::tab {
+                background-color: #f8f9fa;
+                color: #495057;
+                padding: 8px 16px;
+                margin-right: 2px;
+                border: 1px solid #dee2e6;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: #007bff;
+                color: white;
+                border-bottom: none;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #e9ecef;
+            }
+        """)
+
+        # ?•Ë?Ê®ôÁ±§??
+        log_widget = QWidget()
+        log_layout = QVBoxLayout(log_widget)
+        log_layout.setSpacing(5)
+        
+        self.log_text = QTextEdit()
+        self.log_text.setPlainText("Ê≠°Ë?‰ΩøÁî®?ñÂ??ïÁ?Â∑•ÂÖ∑ÔºÅ\nË´ãÈÅ∏?á‰ªª?ô‰∏¶ÈªûÊ??ãÂ??∑Ë??Ç\n")
+        self.log_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                color: #2c3e50;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 9pt;
+                padding: 8px;
+            }
+        """)
+        
+        clear_log_btn = CompactButton("Ê∏ÖÁ©∫?•Ë?", "danger")
+        clear_log_btn.clicked.connect(self.clear_log)
+        
+        log_layout.addWidget(self.log_text)
+        
+        # ?âÈ?‰ΩàÂ?
+        log_btn_layout = QHBoxLayout()
+        log_btn_layout.addStretch()
+        log_btn_layout.addWidget(clear_log_btn)
+        log_layout.addLayout(log_btn_layout)
+        
+        # ?çÁΩÆ?êË¶ΩÊ®ôÁ±§??
+        config_widget = QWidget()
+        config_layout = QVBoxLayout(config_widget)
+        config_layout.setSpacing(5)
+        
+        self.config_text = QTextEdit()
+        self.config_text.setPlainText("Ë´ãË??•È?ÁΩÆÊ?‰ª?..")
+        self.config_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                font-family: 'Consolas', monospace;
+                font-size: 9pt;
+                padding: 8px;
+            }
+        """)
+        
+        config_layout.addWidget(self.config_text)
+        
+        # Ê∑ªÂ?Ê®ôÁ±§??
+        self.tab_widget.addTab(log_widget, "?? ?∑Ë??•Ë?")
+        self.tab_widget.addTab(config_widget, "?ôÔ? ?çÁΩÆ?êË¶Ω")
+
+        # Ê∑ªÂ??∞Âè≥?¥‰?Â±Ä
+        right_layout.addWidget(title_label)
+        right_layout.addWidget(self.tab_widget)
+
+        return right_widget
+
+    def browse_config_file(self):
+        """?èË¶Ω?çÁΩÆ?á‰ª∂"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "?∏Ê??çÁΩÆ?á‰ª∂", "", "YAML files (*.yaml *.yml)"
+        )
+        if file_path:
+            self.config_path_edit.setText(file_path)
+            self.load_config()
+
+    def load_default_config(self):
+        """ËºâÂÖ•ÈªòË??çÁΩÆ"""
+        default_config = {
+            "pipeline": {
+                "log_file": "pipeline.log",
+                "tasks": [
+                    {"name": "format_conversion", "enabled": True},
+                    {"name": "anomaly_detection", "enabled": True},
+                    {"name": "yolo_augmentation", "enabled": True},
+                    {"name": "image_augmentation", "enabled": True},
+                    {"name": "dataset_splitter", "enabled": True},
+                    {"name": "yolo_train", "enabled": False},
+                    {"name": "yolo_evaluation", "enabled": False},
+                    {"name": "generate_report", "enabled": True},
+                    {"name": "dataset_lint", "enabled": True},
+                    {"name": "aug_preview", "enabled": True},
+                ]
+            },
+            "format_conversion": {
+                "input_formats": [".bmp", ".tiff"],
+                "output_format": ".png",
+                "input_dir": "input/",
+                "output_dir": "output/"
+            }
+        }
+        self.config = default_config
+        self.update_config_display()
+
+    def load_config(self):
+        """ËºâÂÖ•?çÁΩÆ?á‰ª∂"""
+        config_path = self.config_path_edit.text()
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    self.config = yaml.safe_load(f)
+                self.log_message(f"?êÂ?ËºâÂÖ•?çÁΩÆ?á‰ª∂: {config_path}")
+                self.update_config_display()
+            else:
+                self.log_message(f"?çÁΩÆ?á‰ª∂‰∏çÂ??? {config_path}")
+                self.load_default_config()
+        except Exception as e:
+            self.log_message(f"ËºâÂÖ•?çÁΩÆ?á‰ª∂Â§±Ê?: {str(e)}")
+            self.load_default_config()
+
+    def update_config_display(self):
+        """?¥Êñ∞?çÁΩÆÈ°ØÁ§∫"""
+        config_text = yaml.dump(self.config, default_flow_style=False, 
+                               allow_unicode=True, indent=2)
+        self.config_text.setPlainText(config_text)
+
+    def select_all_tasks(self):
+        """?®ÈÅ∏‰ªªÂ?"""
+        for checkbox in self.task_checkboxes.values():
+            checkbox.setChecked(True)
+
+    def deselect_all_tasks(self):
+        """?ñÊ??®ÈÅ∏‰ªªÂ?"""
+        for checkbox in self.task_checkboxes.values():
+            checkbox.setChecked(False)
+
+    def get_selected_tasks(self):
+        """?≤Â??∏‰∏≠?Ñ‰ªª??""
+        selected_tasks = []
+        for task_name, checkbox in self.task_checkboxes.items():
+            if checkbox.isChecked():
+                selected_tasks.append(task_name)
+        return selected_tasks
+
+    def start_pipeline(self):
+        """?ãÂ??∑Ë?ÁÆ°È?"""
+        selected_tasks = self.get_selected_tasks()
+        if not selected_tasks:
+            QMessageBox.warning(self, "Ë≠¶Â?", "Ë´ãËá≥Â∞ëÈÅ∏?á‰??ã‰ªª?ôÔ?")
+            return
+
+        # ?¥Êñ∞UI?Ä??
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+        self.status_label.setText("?∑Ë?‰∏?..")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                background-color: #fff3cd;
+                color: #856404;
+                padding: 6px;
+                border: 1px solid #ffeaa7;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+        """)
+
+        # ?âÁî®Ë¶ÜË??áÂº∑?∂ÈÅ∏??
+        try:
+            if hasattr(self, 'apply_overrides_cb') and self.apply_overrides_cb.isChecked():
+                yt = self.config.get('yolo_training', {}) or {}
+                dev = self.override_device_edit.text().strip()
+                ep = self.override_epochs_edit.text().strip()
+                im = self.override_imgsz_edit.text().strip()
+                bt = self.override_batch_edit.text().strip()
+                if dev:
+                    yt['device'] = dev
+                if ep.isdigit():
+                    yt['epochs'] = int(ep)
+                if im.isdigit():
+                    yt['imgsz'] = int(im)
+                if bt.isdigit():
+                    yt['batch'] = int(bt)
+                self.config['yolo_training'] = yt
+                ye = self.config.get('yolo_evaluation', {}) or {}
+                if yt.get('device'):
+                    ye['device'] = yt['device']
+                self.config['yolo_evaluation'] = ye
+                bi = self.config.get('batch_inference', {}) or {}
+                if yt.get('device'):
+                    bi['device'] = yt['device']
+                self.config['batch_inference'] = bi
+            if hasattr(self, 'force_cb') and self.force_cb.isChecked():
+                pl = self.config.get('pipeline', {}) or {}
+                pl['force'] = True
+                self.config['pipeline'] = pl
+        except Exception:
+            pass
+
+        self.worker_thread = WorkerThread(selected_tasks, self.config, self.config_path_edit.text())
+        self.worker_thread.progress_updated.connect(self.update_progress)
+        self.worker_thread.task_started.connect(self.on_task_started)
+        self.worker_thread.task_completed.connect(self.on_task_completed)
+        self.worker_thread.log_message.connect(self.log_message)
+        self.worker_thread.finished_signal.connect(self.on_pipeline_finished)
+        self.worker_thread.error_occurred.connect(self.on_error_occurred)
+        
+        self.worker_thread.start()
+        self.log_message(f"?ãÂ??∑Ë?ÁÆ°È?ÔºåÈÅ∏‰∏≠Á?‰ªªÂ?: {', '.join(selected_tasks)}")
+
+    def stop_pipeline(self):
+        """?úÊ≠¢?∑Ë?ÁÆ°È?"""
+        if self.worker_thread:
+            self.worker_thread.cancel()
+            self.log_message("Ê≠?ú®?úÊ≠¢?∑Ë?...")
+
+    def update_progress(self, value):
+        """?¥Êñ∞?≤Â∫¶Ê¢?""
+        self.progress_bar.setValue(value)
+
+    def on_task_started(self, task_name):
+        """‰ªªÂ??ãÂ??ÇÁ??ûË™ø"""
+        self.log_message(f"???ãÂ??∑Ë?‰ªªÂ?: {task_name}")
+
+    def on_task_completed(self, task_name):
+        """‰ªªÂ?ÂÆåÊ??ÇÁ??ûË™ø"""
+        self.log_message(f"??‰ªªÂ?ÂÆåÊ?: {task_name}")
+
+    def on_pipeline_finished(self):
+        """ÁÆ°È??∑Ë?ÂÆåÊ??ÇÁ??ûË™ø"""
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.status_label.setText("ÂÆåÊ?")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                background-color: #d4edda;
+                color: #155724;
+                padding: 6px;
+                border: 1px solid #c3e6cb;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+        """)
+        self.log_message("?? ?Ä?â‰ªª?ôÂü∑Ë°åÂ??êÔ?")
+
+    def on_error_occurred(self, error_message):
+        """?ØË™§?ºÁ??ÇÁ??ûË™ø"""
+        self.log_message(f"???ØË™§: {error_message}")
+        QMessageBox.critical(self, "?ØË™§", f"?∑Ë??éÁ?‰∏≠Áôº?üÈåØË™?\n{error_message}")
+        self.on_pipeline_finished()
+
+    def log_message(self, message):
+        """Ê∑ªÂ??•Ë?Ë®äÊÅØ"""
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {message}"
+        self.log_text.append(formatted_message)
+        # ?™Â?ÊªæÂ??∞Â???
+        scrollbar = self.log_text.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def clear_log(self):
+        """Ê∏ÖÁ©∫?•Ë?"""
+        self.log_text.clear()
+        self.log_message("?•Ë?Â∑≤Ê?Á©?)
+
+    def closeEvent(self, event):
+        """Á™óÂè£?úÈ?‰∫ã‰ª∂"""
+        if self.worker_thread and self.worker_thread.isRunning():
+            reply = QMessageBox.question(
+                self, "Á¢∫Ë??Ä??, 
+                "‰ªªÂ?Ê≠?ú®?∑Ë?‰∏≠Ô?Á¢∫Â?Ë¶ÅÈÄÄ?∫Â?Ôº?,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.worker_thread.cancel()
+                self.worker_thread.wait()
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
+def main():
+    """‰∏ªÂáΩ??""
+    app = QApplication(sys.argv)
+    
+    # Ë®≠ÁΩÆ?âÁî®Á®ãÂ?
+    app.setApplicationName("?ñÂ??ïÁ?Â∑•ÂÖ∑")
+    app.setApplicationVersion("1.0")
+    app.setOrganizationName("ImageTool Corp")
+    
+    # Ë®≠ÁΩÆ?®Â?Â≠óÈ? - ‰ΩøÁî®Á≥ªÁµ±?êË®≠Â≠óÈ?
+    font = app.font()
+    font.setPointSize(9)
+    app.setFont(font)
+    
+    # ?µÂª∫‰∏ªÁ???
+    window = PictureToolGUI()
+    window.show()
+    
+    # ?ãË??âÁî®Á®ãÂ?
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()

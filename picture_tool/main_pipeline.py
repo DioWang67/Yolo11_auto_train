@@ -1,7 +1,9 @@
 import argparse
 import yaml
 import logging
+import os
 from pathlib import Path
+from typing import Iterable, Optional
 from picture_tool.format import convert_format
 from picture_tool.anomaly import process_anomaly_detection
 from picture_tool.augment import YoloDataAugmentor, ImageAugmentor
@@ -10,6 +12,7 @@ from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.report.report_generator import generate_report
 from picture_tool.quality.dataset_linter import lint_dataset, preview_dataset
+from picture_tool.infer.batch_infer import run_batch_inference
 
 def setup_logging(log_file):
     """設置日誌系統"""
@@ -45,6 +48,133 @@ def load_config_if_updated(config_path, config, logger):
         return load_config(config_path)
 
     return config
+
+
+def _mtime_latest(paths: Iterable[Path]) -> float:
+    mts = []
+    for p in paths:
+        if p.is_file():
+            mts.append(p.stat().st_mtime)
+        elif p.is_dir():
+            for sub in p.rglob('*'):
+                if sub.is_file():
+                    mts.append(sub.stat().st_mtime)
+    return max(mts) if mts else 0.0
+
+
+def _exists_and_nonempty(p: Path) -> bool:
+    return p.exists() and any(p.iterdir())
+
+
+def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
+    yt = config.get('yolo_training', {})
+    changed = []
+    if getattr(args, 'device', None):
+        yt['device'] = args.device
+        changed.append(('device', args.device))
+    if getattr(args, 'epochs', None):
+        yt['epochs'] = int(args.epochs)
+        changed.append(('epochs', yt['epochs']))
+    if getattr(args, 'imgsz', None):
+        yt['imgsz'] = int(args.imgsz)
+        changed.append(('imgsz', yt['imgsz']))
+    if getattr(args, 'batch', None):
+        yt['batch'] = int(args.batch)
+        changed.append(('batch', yt['batch']))
+    if getattr(args, 'model', None):
+        yt['model'] = args.model
+        changed.append(('model', yt['model']))
+    if getattr(args, 'project', None):
+        yt['project'] = args.project
+        changed.append(('project', yt['project']))
+    if getattr(args, 'name', None):
+        yt['name'] = args.name
+        changed.append(('name', yt['name']))
+    config['yolo_training'] = yt
+
+    ye = config.get('yolo_evaluation', {})
+    if getattr(args, 'weights', None):
+        ye['weights'] = args.weights
+        changed.append(('eval.weights', ye['weights']))
+    config['yolo_evaluation'] = ye
+
+    bi = config.get('batch_inference', {})
+    if getattr(args, 'infer_input', None):
+        bi['input_dir'] = args.infer_input
+        changed.append(('infer.input', bi['input_dir']))
+    if getattr(args, 'infer_output', None):
+        bi['output_dir'] = args.infer_output
+        changed.append(('infer.output', bi['output_dir']))
+    config['batch_inference'] = bi
+
+    if changed:
+        logger.info('套用 CLI 覆蓋: ' + ', '.join([f"{k}={v}" for k, v in changed]))
+
+
+def _auto_device(config: dict, logger: logging.Logger) -> None:
+    yt = config.get('yolo_training', {})
+    device = str(yt.get('device', 'auto'))
+    if device.lower() == 'auto':
+        try:
+            import torch  # type: ignore
+            yt['device'] = '0' if torch.cuda.is_available() else 'cpu'
+        except Exception:
+            yt['device'] = 'cpu'
+        logger.info(f"自動選擇裝置: {yt['device']}")
+        config['yolo_training'] = yt
+
+
+def _should_skip(task: str, config: dict, args, logger: logging.Logger) -> Optional[str]:
+    force = getattr(args, 'force', False) or config.get('pipeline', {}).get('force', False)
+    if force:
+        return None
+    if task == 'yolo_augmentation':
+        ic = config['yolo_augmentation']['input']
+        oc = config['yolo_augmentation']['output']
+        in_dirs = [Path(ic['image_dir']), Path(ic['label_dir'])]
+        out_dirs = [Path(oc['image_dir']), Path(oc['label_dir'])]
+        if not all(p.exists() for p in in_dirs):
+            raise FileNotFoundError(f"增強輸入不存在: {in_dirs}")
+        if all(_exists_and_nonempty(p) for p in out_dirs):
+            if _mtime_latest(out_dirs) >= _mtime_latest(in_dirs):
+                return '輸出較新，已跳過'
+    if task == 'dataset_splitter':
+        sc = config['train_test_split']
+        in_dirs = [Path(sc['input']['image_dir']), Path(sc['input']['label_dir'])]
+        out_root = Path(sc['output']['output_dir'])
+        out_dirs = [out_root / 'train' / 'images', out_root / 'val' / 'images', out_root / 'test' / 'images']
+        if all(p.exists() for p in in_dirs) and all(p.exists() for p in out_dirs):
+            if _mtime_latest(out_dirs) >= _mtime_latest(in_dirs):
+                return '分割結果較新，已跳過'
+    if task == 'yolo_train':
+        y = config['yolo_training']
+        run_dir = Path(y.get('project', './runs/detect')) / y.get('name', 'train')
+        weights = run_dir / 'weights' / 'best.pt'
+        dataset_dir = Path(y.get('dataset_dir', './data/split'))
+        if weights.exists():
+            if weights.stat().st_mtime >= _mtime_latest([dataset_dir]):
+                return '已有最新 best.pt，已跳過'
+    if task == 'dataset_lint':
+        l = config.get('dataset_lint', {})
+        img_dir = Path(l.get('image_dir', './data/augmented/images'))
+        out_dir = Path(l.get('output_dir', './reports/lint'))
+        csv = out_dir / 'lint.csv'
+        if csv.exists() and csv.stat().st_mtime >= _mtime_latest([img_dir]):
+            return 'Lint 輸出較新，已跳過'
+    if task == 'aug_preview':
+        p = config.get('aug_preview', {})
+        img_dir = Path(p.get('image_dir', './data/augmented/images'))
+        out = Path(p.get('output_dir', './reports/preview')) / 'preview.png'
+        if out.exists() and out.stat().st_mtime >= _mtime_latest([img_dir]):
+            return '預覽較新，已跳過'
+    if task == 'batch_inference':
+        bi = config.get('batch_inference', {})
+        in_dir = Path(bi.get('input_dir', './data/raw/images'))
+        out_dir = Path(bi.get('output_dir', './reports/infer'))
+        csv = out_dir / 'predictions.csv'
+        if csv.exists() and csv.stat().st_mtime >= _mtime_latest([in_dir]):
+            return '推論結果較新，已跳過'
+    return None
 
 def validate_dependencies(tasks, config, logger):
     """驗證任務依賴關係，並保持原始任務順序"""
@@ -153,6 +283,9 @@ def run_dataset_lint(config, args):
 def run_aug_preview(config, args):
     preview_dataset(config)
 
+def run_batch_infer(config, args):
+    run_batch_inference(config)
+
 TASK_HANDLERS = {
     "format_conversion": run_format_conversion,
     "anomaly_detection": run_anomaly_detection,
@@ -164,6 +297,7 @@ TASK_HANDLERS = {
     "generate_report": run_generate_report,
     "dataset_lint": run_dataset_lint,
     "aug_preview": run_aug_preview,
+    "batch_inference": run_batch_infer,
 }
 
 def run_pipeline(tasks, config, logger, args, stop_event=None):
@@ -176,6 +310,12 @@ def run_pipeline(tasks, config, logger, args, stop_event=None):
             break
         config = load_config_if_updated(args.config, config, logger)
         logger.info(f"開始執行任務: {task}")
+        _apply_cli_overrides(config, args, logger)
+        _auto_device(config, logger)
+        skip_reason = _should_skip(task, config, args, logger)
+        if skip_reason:
+            logger.info(f"跳過 {task}: {skip_reason}")
+            continue
         handler = TASK_HANDLERS.get(task)
         if not handler:
             logger.warning(f"未知任務: {task}")
@@ -197,6 +337,21 @@ def main():
     parser.add_argument('--input-format', type=str, help='覆蓋輸入檔案格式（例如 .bmp）')
     parser.add_argument('--output-format', type=str, help='覆蓋輸出檔案格式（例如 .png）')
     
+    # Cache/force and overrides
+    parser.add_argument('--force', action='store_true', help='忽略快取並強制重跑任務')
+    # Training overrides
+    parser.add_argument('--device', type=str, help='覆寫訓練/驗證裝置，例如 0 或 cpu')
+    parser.add_argument('--epochs', type=int, help='覆寫訓練 epochs')
+    parser.add_argument('--imgsz', type=int, help='覆寫訓練影像尺寸')
+    parser.add_argument('--batch', type=int, help='覆寫訓練 batch 大小')
+    parser.add_argument('--model', type=str, help='覆寫初始權重路徑/名稱')
+    parser.add_argument('--project', type=str, help='覆寫 Ultralytics 專案輸出資料夾')
+    parser.add_argument('--name', type=str, help='覆寫實驗名稱')
+    parser.add_argument('--weights', type=str, help='覆寫驗證/推論時的權重路徑')
+    # Inference overrides
+    parser.add_argument('--infer-input', type=str, help='批次推論輸入資料夾')
+    parser.add_argument('--infer-output', type=str, help='批次推論輸出資料夾')
+
     args = parser.parse_args()
     config = load_config(args.config)
     logger = setup_logging(config['pipeline']['log_file'])

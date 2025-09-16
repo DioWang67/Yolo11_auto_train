@@ -23,7 +23,7 @@ debug_heatmap.jpg
 # 日誌檔案
 logs/
 *.log
-
+*.csv
 
 
 # 環境和敏感資訊
@@ -52,6 +52,6 @@ compare_images.log
 # Datasets / generated artifacts (adjust as needed)
 datasets/
 target/
-
+*.pt
 # Archives
 *.zip
