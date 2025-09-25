@@ -246,3 +246,40 @@ aug_preview:
   num_samples: 16
   cols: 4
   seed: 42
+
+led_qc_enhanced:
+  config_path: null
+  config_overrides: {}
+  colors:
+    - Red
+    # - Green
+    # - Blue
+    # - White
+  color_aliases: {}
+  build:
+    ref_dir: ./data/led_qc/reference
+    model_out: ./models/led_qc/enhanced_model.json
+    save_config: ./models/led_qc/default_config.json
+  analyze:
+    model: ./models/led_qc/enhanced_model.json
+    image: ./data/led_qc/samples/sample.png
+    out_dir: ./reports/led_qc/analyze
+    visualize: true
+    stability: false
+  detect:
+    model: ./models/led_qc/enhanced_model.json
+    image: ./data/led_qc/samples/sample.png
+    out_dir: ./reports/led_qc/single
+    label: null
+    sensitivity: 1.0
+    save_annotated: true
+    save_json: true
+  detect_dir:
+    model: ./models/led_qc/enhanced_model.json
+    dir: ./data/led_qc/batch
+    out_dir: ./reports/led_qc/batch
+    sensitivity: 0.85
+    save_annotated: true
+    save_json: false
+    csv_name: enhanced_summary.csv
+
