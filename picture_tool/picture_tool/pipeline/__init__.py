@@ -1,4 +1,4 @@
-from main_pipeline import (
+from .main_pipeline import (
     setup_logging,
     load_config,
     load_config_if_updated,
@@ -17,4 +17,3 @@ __all__ = [
     "interactive_task_selection",
     "run_pipeline",
 ]
-

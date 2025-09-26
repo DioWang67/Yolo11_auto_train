@@ -18,8 +18,14 @@ def _read_last_metrics(results_csv: Path) -> Dict[str, str]:
         last = rows[-1]
         # pick common keys if available
         for k in [
-            "metrics/mAP50-95", "metrics/mAP50", "metrics/precision(B)", "metrics/recall(B)",
-            "val/box_loss", "val/cls_loss", "val/dfl_loss", "lr/pg0"
+            "metrics/mAP50-95",
+            "metrics/mAP50",
+            "metrics/precision(B)",
+            "metrics/recall(B)",
+            "val/box_loss",
+            "val/cls_loss",
+            "val/dfl_loss",
+            "lr/pg0",
         ]:
             if k in last:
                 metrics[k] = last[k]
@@ -32,7 +38,14 @@ def _candidate_runs(project: Path, name: str) -> List[Path]:
     runs = [p for p in project.iterdir() if p.is_dir() and p.name.startswith(name)]
     # Prefer those with results.csv
     runs = [p for p in runs if (p / "results.csv").exists()]
-    runs.sort(key=lambda p: ((p / "results.csv").stat().st_mtime if (p / "results.csv").exists() else p.stat().st_mtime), reverse=True)
+    runs.sort(
+        key=lambda p: (
+            (p / "results.csv").stat().st_mtime
+            if (p / "results.csv").exists()
+            else p.stat().st_mtime
+        ),
+        reverse=True,
+    )
     return runs
 
 
@@ -42,7 +55,9 @@ def generate_report(config: dict, logger: Optional[logging.Logger] = None) -> Pa
 
     ycfg = config.get("yolo_training", {})
     rcfg = config.get("report", {})
-    dataset_dir = Path(str(ycfg.get("dataset_dir", "./datasets/split_dataset"))).resolve()
+    dataset_dir = Path(
+        str(ycfg.get("dataset_dir", "./datasets/split_dataset"))
+    ).resolve()
     project = Path(str(ycfg.get("project", "./runs/detect"))).resolve()
     name = str(ycfg.get("name", "train"))
     # Select latest matching run (train, train2, ...)
@@ -98,10 +113,12 @@ def generate_report(config: dict, logger: Optional[logging.Logger] = None) -> Pa
     else:
         md.append("- (No metrics found in results.csv)")
 
-    md.extend([
-        "",
-        "## Artifacts",
-    ])
+    md.extend(
+        [
+            "",
+            "## Artifacts",
+        ]
+    )
     for fname in artifacts:
         if (report_dir / fname).exists():
             md.append(f"![{fname}]({(report_dir / fname).name})")

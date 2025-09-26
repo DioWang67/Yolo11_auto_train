@@ -16,7 +16,14 @@ def _candidate_runs(project: Path, name: str) -> List[Path]:
     # Prefer those that actually have a best.pt
     runs = [p for p in runs if (p / "weights" / "best.pt").exists()]
     # Sort by latest modification time of best.pt (fallback to dir mtime)
-    runs.sort(key=lambda p: ((p / "weights" / "best.pt").stat().st_mtime if (p / "weights" / "best.pt").exists() else p.stat().st_mtime), reverse=True)
+    runs.sort(
+        key=lambda p: (
+            (p / "weights" / "best.pt").stat().st_mtime
+            if (p / "weights" / "best.pt").exists()
+            else p.stat().st_mtime
+        ),
+        reverse=True,
+    )
     return runs
 
 
@@ -57,7 +64,9 @@ def evaluate_yolo(config: dict, logger: Optional[logging.Logger] = None) -> None
     if not data_yaml.exists():
         raise FileNotFoundError(f"data.yaml not found: {data_yaml}")
 
-    logger.info(f"Evaluating model: {weights_path} | data={data_yaml} imgsz={imgsz} device={device}")
+    logger.info(
+        f"Evaluating model: {weights_path} | data={data_yaml} imgsz={imgsz} device={device}"
+    )
     model = YOLO(str(weights_path))
     _ = model.val(data=str(data_yaml), imgsz=imgsz, device=device)
     logger.info("Evaluation completed.")

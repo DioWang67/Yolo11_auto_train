@@ -1,7 +1,7 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 from sklearn.model_selection import train_test_split
 
 try:
@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 
 def _load_classes_from_label(label_path: Path) -> List[int]:
     try:
-        lines = [ln.strip() for ln in label_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        lines = [
+            ln.strip()
+            for ln in label_path.read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        ]
     except Exception:
         return []
     classes: List[int] = []
@@ -32,7 +36,9 @@ def _load_classes_from_label(label_path: Path) -> List[int]:
     return classes
 
 
-def _build_multilabel_matrix(label_paths: List[Path], num_classes: int) -> List[List[int]]:
+def _build_multilabel_matrix(
+    label_paths: List[Path], num_classes: int
+) -> List[List[int]]:
     Y: List[List[int]] = []
     for p in label_paths:
         cls_list = _load_classes_from_label(p)
@@ -57,8 +63,7 @@ def split_dataset(config, log_file=None, logger=None):
     if log_file:
         log_path = Path(log_file).resolve()
         exists = any(
-            isinstance(h, logging.FileHandler)
-            and Path(h.baseFilename) == log_path
+            isinstance(h, logging.FileHandler) and Path(h.baseFilename) == log_path
             for h in logger.handlers
         )
         if not exists:
@@ -130,17 +135,28 @@ def split_dataset(config, log_file=None, logger=None):
         except Exception:
             pass
 
-    if strat_cfg and MultilabelStratifiedShuffleSplit and num_classes and num_classes > 1:
+    if (
+        strat_cfg
+        and MultilabelStratifiedShuffleSplit
+        and num_classes
+        and num_classes > 1
+    ):
         Y = _build_multilabel_matrix(paired_labels, num_classes)
         # If all-zero (no labels), fallback
         all_zero = all(sum(row) == 0 for row in Y)
         if not all_zero:
-            msss = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=val_ratio + test_ratio, random_state=42)
+            msss = MultilabelStratifiedShuffleSplit(
+                n_splits=1, test_size=val_ratio + test_ratio, random_state=42
+            )
             idx = list(range(len(paired_images)))
             train_idx, temp_idx = next(msss.split(idx, Y))
             # Split temp into val/test
             temp_Y = [Y[i] for i in temp_idx]
-            msss2 = MultilabelStratifiedShuffleSplit(n_splits=1, test_size=test_ratio / (val_ratio + test_ratio), random_state=42)
+            msss2 = MultilabelStratifiedShuffleSplit(
+                n_splits=1,
+                test_size=test_ratio / (val_ratio + test_ratio),
+                random_state=42,
+            )
             temp_idx2, test_idx2 = next(msss2.split(list(range(len(temp_idx))), temp_Y))
             val_idx = [temp_idx[i] for i in temp_idx2]
             test_idx = [temp_idx[i] for i in test_idx2]

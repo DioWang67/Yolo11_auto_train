@@ -10,13 +10,16 @@ def setup_module_logger(name: str, log_file: Optional[str] = None) -> logging.Lo
     if log_file:
         log_path = Path(log_file)
         exists = any(
-            isinstance(h, logging.FileHandler) and Path(getattr(h, "baseFilename", "")) == log_path
+            isinstance(h, logging.FileHandler)
+            and Path(getattr(h, "baseFilename", "")) == log_path
             for h in logger.handlers
         )
         if not exists:
             fh = logging.FileHandler(log_path, encoding="utf-8")
             fh.setLevel(logging.INFO)
-            fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+            fh.setFormatter(
+                logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            )
             logger.addHandler(fh)
 
     root = logging.getLogger()
@@ -27,4 +30,3 @@ def setup_module_logger(name: str, log_file: Optional[str] = None) -> logging.Lo
         logger.addHandler(sh)
 
     return logger
-

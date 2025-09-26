@@ -45,9 +45,15 @@ def _norm_exts(exts: Iterable[str]) -> List[str]:
 
 def _list_images(folder: Path, exts: Iterable[str], recursive: bool) -> List[Path]:
     if recursive:
-        files = [p for p in folder.rglob("*") if p.suffix.lower() in exts and p.is_file()]
+        files = [
+            p for p in folder.rglob("*") if p.suffix.lower() in exts and p.is_file()
+        ]
     else:
-        files = [folder / f for f in os.listdir(folder) if (folder / f).suffix.lower() in exts]
+        files = [
+            folder / f
+            for f in os.listdir(folder)
+            if (folder / f).suffix.lower() in exts
+        ]
         files = [p for p in files if p.is_file()]
     files.sort()
     return files
@@ -64,22 +70,33 @@ def _to_bgr(img_gray: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
 
 
-def _align_ecc(src_gray: np.ndarray, ref_gray: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def _align_ecc(
+    src_gray: np.ndarray, ref_gray: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
     ref32 = ref_gray.astype(np.float32) / 255.0
     src32 = src_gray.astype(np.float32) / 255.0
     warp = np.eye(2, 3, dtype=np.float32)
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-6)
     try:
         _cc, warp = cv2.findTransformECC(
-            ref32, src32, warp, motionType=cv2.MOTION_AFFINE, criteria=criteria, gaussFiltSize=5
+            ref32,
+            src32,
+            warp,
+            motionType=cv2.MOTION_AFFINE,
+            criteria=criteria,
+            gaussFiltSize=5,
         )
     except cv2.error as e:
         raise RuntimeError(f"ECC 對齊失敗: {e}")
-    aligned = cv2.warpAffine(src_gray, warp, (ref_gray.shape[1], ref_gray.shape[0]), flags=cv2.INTER_LINEAR)
+    aligned = cv2.warpAffine(
+        src_gray, warp, (ref_gray.shape[1], ref_gray.shape[0]), flags=cv2.INTER_LINEAR
+    )
     return aligned, warp
 
 
-def _align_orb(src_gray: np.ndarray, ref_gray: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def _align_orb(
+    src_gray: np.ndarray, ref_gray: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
     orb = cv2.ORB_create(2000)
     kp1, des1 = orb.detectAndCompute(src_gray, None)
     kp2, des2 = orb.detectAndCompute(ref_gray, None)
@@ -95,14 +112,20 @@ def _align_orb(src_gray: np.ndarray, ref_gray: np.ndarray) -> Tuple[np.ndarray, 
     H, _mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 3.0)
     if H is None:
         raise RuntimeError("無法估計單應矩陣")
-    aligned = cv2.warpPerspective(src_gray, H, (ref_gray.shape[1], ref_gray.shape[0]), flags=cv2.INTER_LINEAR)
+    aligned = cv2.warpPerspective(
+        src_gray, H, (ref_gray.shape[1], ref_gray.shape[0]), flags=cv2.INTER_LINEAR
+    )
     return aligned, H
 
 
 def _align_image(src_gray: np.ndarray, ref_gray: np.ndarray, mode: str) -> np.ndarray:
     if mode == "none":
         if src_gray.shape != ref_gray.shape:
-            return cv2.resize(src_gray, (ref_gray.shape[1], ref_gray.shape[0]), interpolation=cv2.INTER_LINEAR)
+            return cv2.resize(
+                src_gray,
+                (ref_gray.shape[1], ref_gray.shape[0]),
+                interpolation=cv2.INTER_LINEAR,
+            )
         return src_gray
     if mode in ("ecc", "auto"):
         try:
@@ -116,14 +139,18 @@ def _align_image(src_gray: np.ndarray, ref_gray: np.ndarray, mode: str) -> np.nd
 
 
 class NormalModel:
-    def __init__(self, ref_gray: np.ndarray, mean: np.ndarray, std: np.ndarray, n: int) -> None:
+    def __init__(
+        self, ref_gray: np.ndarray, mean: np.ndarray, std: np.ndarray, n: int
+    ) -> None:
         self.ref_gray = ref_gray
         self.mean = mean
         self.std = std
         self.n = n
 
 
-def _build_normal_model(ref_folder: Path, exts: Iterable[str], recursive: bool, align: str) -> NormalModel:
+def _build_normal_model(
+    ref_folder: Path, exts: Iterable[str], recursive: bool, align: str
+) -> NormalModel:
     paths = _list_images(ref_folder, exts, recursive)
     if not paths:
         raise ValueError("參考資料夾中沒有可用影像")
@@ -149,7 +176,9 @@ def _build_normal_model(ref_folder: Path, exts: Iterable[str], recursive: bool, 
     return NormalModel(ref_gray=ref_gray, mean=mean, std=std, n=n)
 
 
-def _zscore_mask(img_gray: np.ndarray, model: NormalModel, z_thresh: float, abs_thr: float) -> np.ndarray:
+def _zscore_mask(
+    img_gray: np.ndarray, model: NormalModel, z_thresh: float, abs_thr: float
+) -> np.ndarray:
     g = img_gray.astype(np.float32)
     diff = np.abs(g - model.mean)
     z = diff / (model.std + 1e-6)
@@ -157,7 +186,9 @@ def _zscore_mask(img_gray: np.ndarray, model: NormalModel, z_thresh: float, abs_
     return m
 
 
-def _post_process(mask: np.ndarray, min_area: int, open_k: int, close_k: int, dilate_k: int) -> np.ndarray:
+def _post_process(
+    mask: np.ndarray, min_area: int, open_k: int, close_k: int, dilate_k: int
+) -> np.ndarray:
     m = mask
     if open_k > 0:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_k, open_k))
@@ -165,7 +196,9 @@ def _post_process(mask: np.ndarray, min_area: int, open_k: int, close_k: int, di
     if close_k > 0:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_k, close_k))
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k)
-    num, labels, stats, _ = cv2.connectedComponentsWithStats((m > 0).astype(np.uint8), connectivity=8)
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (m > 0).astype(np.uint8), connectivity=8
+    )
     keep = np.zeros_like(m)
     for i in range(1, num):
         if stats[i, cv2.CC_STAT_AREA] >= min_area:
@@ -227,7 +260,9 @@ def process_anomaly_detection(config):
     os.makedirs(cfg.output_folder, exist_ok=True)
 
     logging.info("建立正常模型...")
-    model = _build_normal_model(cfg.reference_folder, cfg.input_formats, cfg.recursive, cfg.align)
+    model = _build_normal_model(
+        cfg.reference_folder, cfg.input_formats, cfg.recursive, cfg.align
+    )
 
     tests = _list_images(cfg.test_folder, cfg.input_formats, cfg.recursive)
     if not tests:
@@ -237,7 +272,9 @@ def process_anomaly_detection(config):
         tg = _imread_gray(p)
         tg = _align_image(tg, model.ref_gray, cfg.align)
         raw = _zscore_mask(tg, model, cfg.z_thresh, cfg.abs_diff_thresh)
-        mask = _post_process(raw, cfg.min_area, cfg.open_ksize, cfg.close_ksize, cfg.dilate_ksize)
+        mask = _post_process(
+            raw, cfg.min_area, cfg.open_ksize, cfg.close_ksize, cfg.dilate_ksize
+        )
 
         rel = p.relative_to(cfg.test_folder)
         out_mask = (cfg.output_folder / rel).with_suffix(".png")

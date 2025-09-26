@@ -27,7 +27,11 @@ class LintConfig:
 def _read_labels(label_path: Path) -> List[List[float]]:
     if not label_path.exists():
         return []
-    lines = [ln.strip() for ln in label_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    lines = [
+        ln.strip()
+        for ln in label_path.read_text(encoding="utf-8").splitlines()
+        if ln.strip()
+    ]
     labels: List[List[float]] = []
     for ln in lines:
         parts = ln.split()
@@ -51,7 +55,9 @@ def _list_files(directory: Path, exts: Tuple[str, ...]) -> Dict[str, Path]:
     return mapping
 
 
-def _validate_labels(labels: List[List[float]], num_classes: Optional[int]) -> List[str]:
+def _validate_labels(
+    labels: List[List[float]], num_classes: Optional[int]
+) -> List[str]:
     issues: List[str] = []
     for row in labels:
         cls, x, y, w, h = row
@@ -82,7 +88,9 @@ def lint_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     output_dir = Path(str(lcfg.get("output_dir", "./reports/lint")))
     output_dir.mkdir(parents=True, exist_ok=True)
     class_names = config.get("yolo_training", {}).get("class_names")
-    num_classes = len(class_names) if isinstance(class_names, list) and class_names else None
+    num_classes = (
+        len(class_names) if isinstance(class_names, list) and class_names else None
+    )
 
     img_map = _list_files(image_dir, DEFAULT_IMAGE_EXTS)
     lbl_map = _list_files(label_dir, (".txt",))
@@ -93,14 +101,16 @@ def lint_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     cls_hist: Dict[int, int] = {}
     with open(issues_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["stem", "issue", "detail"]) 
+        writer.writerow(["stem", "issue", "detail"])
         for stem in stems:
             if stem not in img_map:
                 writer.writerow([stem, "missing_image", str(label_dir / f"{stem}.txt")])
                 counts["missing_image"] = counts.get("missing_image", 0) + 1
                 continue
             if stem not in lbl_map:
-                writer.writerow([stem, "missing_label", str(image_dir / f"{stem}.jpg|png|...")])
+                writer.writerow(
+                    [stem, "missing_label", str(image_dir / f"{stem}.jpg|png|...")]
+                )
                 counts["missing_label"] = counts.get("missing_label", 0) + 1
                 continue
             labels = _read_labels(lbl_map[stem])
@@ -116,14 +126,18 @@ def lint_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     summary_md = output_dir / "summary.md"
     total = len(stems)
     with open(summary_md, "w", encoding="utf-8") as f:
-        f.write(f"# Dataset Lint Summary\n\n")
+        f.write("# Dataset Lint Summary\n\n")
         f.write(f"- Images scanned: {total}\n")
         for k in sorted(counts):
             f.write(f"- {k}: {counts[k]}\n")
         if cls_hist:
             f.write("\n## Class Histogram\n")
             for cid in sorted(cls_hist):
-                cname = class_names[cid] if (isinstance(class_names, list) and cid < len(class_names)) else str(cid)
+                cname = (
+                    class_names[cid]
+                    if (isinstance(class_names, list) and cid < len(class_names))
+                    else str(cid)
+                )
                 f.write(f"- {cname} ({cid}): {cls_hist[cid]}\n")
 
     logger.info(f"Dataset lint written to: {issues_path} and {summary_md}")
@@ -142,7 +156,11 @@ def _draw_boxes(ax, img, labels: List[List[float]], title: str = ""):
         y1 = (y - bh / 2) * h
         ww = bw * w
         hh = bh * h
-        ax.add_patch(patches.Rectangle((x1, y1), ww, hh, fill=False, edgecolor='lime', linewidth=1))
+        ax.add_patch(
+            patches.Rectangle(
+                (x1, y1), ww, hh, fill=False, edgecolor="lime", linewidth=1
+            )
+        )
 
 
 def preview_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
@@ -169,7 +187,7 @@ def preview_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Pa
     # Normalize axes to a flat list of Axes
     if isinstance(axes, (list, tuple)):
         axes = list(axes)
-    elif hasattr(axes, 'ravel'):
+    elif hasattr(axes, "ravel"):
         try:
             axes = list(axes.ravel())
         except Exception:

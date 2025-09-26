@@ -1,0 +1,87 @@
+{
+  "hist_bins": [
+    12,
+    12,
+    12
+  ],
+  "min_led_area_ratio": 0.01,
+  "max_led_area_ratio": 0.99,
+  "default_hist_thr": 0.25,
+  "sigma_multiplier": 2,
+  "min_std_fallback": 8.0,
+  "morphology_kernel_size": 5,
+  "rotation_angles": [
+    0,
+    90,
+    180,
+    270
+  ],
+  "max_workers": 4,
+  "cache_size": 256,
+  "v_headroom": 5.0,
+  "color_conf_min": 0.2,
+  "color_conf_min_white": 0.3,
+  "color_conf_min_per_color": {},
+  "color_hue_range_margin": 8.0,
+  "color_hue_range_weight": 0.35,
+  "color_conf_hue_balance": 0.4,
+  "blackhat_kernel": 7,
+  "hole_k": 2.5,
+  "hole_min_area": 15,
+  "color_hist_min_conf": 0.35,
+  "det_conf_weights": {
+    "brightness": 0.25,
+    "uniformity": 0.2,
+    "area": 0.3,
+    "holes": 0.25
+  },
+  "det_conf_color_alpha": 0.05,
+  "colors": [
+    "Red",
+    "Green",
+    "Blue",
+    "White"
+  ],
+  "color_aliases": {
+    "red": "Red",
+    "green": "Green",
+    "blue": "Blue",
+    "white": "White"
+  },
+  "color_hue_ranges": {
+    "Red": [
+      0.0,
+      20.0
+    ],
+    "Green": [
+      35.0,
+      85.0
+    ],
+    "Blue": [
+      85.0,
+      130.0
+    ],
+    "White": [
+      0.0,
+      360.0
+    ]
+  },
+  "white_s_p90_max": 80,
+  "white_v_p50_min": 200,
+  "white_conf_min": 0.45,
+  "white_weights": [
+    0.45,
+    0.35,
+    0.2
+  ],
+  "white_ring_erode_px": 6,
+  "mask_shrink_when_large": true,
+  "mask_shrink_target": 0.85,
+  "mask_shrink_iter_max": 2,
+  "build_min_feat_conf": 0.2,
+  "ring_target_ratio": 0.25,
+  "ring_max_iter": 4,
+  "awb_clip_percent": 1.0,
+  "lab_white_c_p90_thr": 15.0,
+  "lab_white_weight": 0.55
+}

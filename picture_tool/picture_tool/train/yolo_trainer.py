@@ -10,7 +10,9 @@ except Exception:  # pragma: no cover
     YOLO = None  # type: ignore
 
 
-def _ensure_data_yaml(dataset_dir: Path, names: List[str], out_path: Optional[Path] = None) -> Path:
+def _ensure_data_yaml(
+    dataset_dir: Path, names: List[str], out_path: Optional[Path] = None
+) -> Path:
     dataset_dir = dataset_dir.resolve()
     data = {
         "path": str(dataset_dir),
@@ -67,7 +69,7 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
         f"Starting YOLO training | model={model_arg} epochs={epochs} imgsz={imgsz} batch={batch} device={device}"
     )
     model = YOLO(model_arg)
-    results = model.train(
+    _ = model.train(
         data=str(data_yaml),
         epochs=epochs,
         imgsz=imgsz,
@@ -80,4 +82,3 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     run_dir = Path(project) / name
     logger.info(f"Training completed. Run directory: {run_dir}")
     return run_dir
-

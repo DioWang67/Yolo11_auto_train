@@ -256,6 +256,10 @@ led_qc_enhanced:
     # - Blue
     # - White
   color_aliases: {}
+  color_conf_min_per_color: {}
+  color_hue_range_margin: 8.0
+  color_hue_range_weight: 0.35
+  color_conf_hue_balance: 0.4
   build:
     ref_dir: ./data/led_qc/reference
     model_out: ./models/led_qc/enhanced_model.json

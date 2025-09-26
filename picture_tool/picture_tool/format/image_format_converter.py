@@ -17,12 +17,12 @@ def convert_format(format_config):
     - quality: int (for JPEG)
     - png_compression: int (for PNG)
     """
-    input_dir = Path(format_config['input_dir'])
-    output_dir = Path(format_config['output_dir'])
-    input_formats = format_config['input_formats']
-    output_format = format_config['output_format']
-    quality = format_config.get('quality', 95)
-    png_compression = format_config.get('png_compression', 3)
+    input_dir = Path(format_config["input_dir"])
+    output_dir = Path(format_config["output_dir"])
+    input_formats = format_config["input_formats"]
+    output_format = format_config["output_format"]
+    quality = format_config.get("quality", 95)
+    png_compression = format_config.get("png_compression", 3)
 
     if not input_dir.exists():
         raise FileNotFoundError(f"輸入資料夾 {input_dir} 不存在")
@@ -39,10 +39,16 @@ def convert_format(format_config):
             output_filename = img_path.stem + output_format
             output_path = output_dir / output_filename
 
-            if output_format.lower() in ('.jpg', '.jpeg'):
-                cv2.imwrite(str(output_path), img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-            elif output_format.lower() == '.png':
-                cv2.imwrite(str(output_path), img, [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression])
+            if output_format.lower() in (".jpg", ".jpeg"):
+                cv2.imwrite(
+                    str(output_path), img, [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+                )
+            elif output_format.lower() == ".png":
+                cv2.imwrite(
+                    str(output_path),
+                    img,
+                    [int(cv2.IMWRITE_PNG_COMPRESSION), png_compression],
+                )
             else:
                 cv2.imwrite(str(output_path), img)
 
