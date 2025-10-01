@@ -24,7 +24,7 @@ debug_heatmap.jpg
 logs/
 *.log
 *.csv
-
+*.json
 
 # 環境和敏感資訊
 .env

@@ -252,10 +252,9 @@ led_qc_enhanced:
   config_overrides: {}
   colors:
     - Red
-    # - Green
-    # - Blue
-    # - White
-  color_aliases: {}
+    - Green
+    - Blue
+    - White
   color_conf_min_per_color: {}
   color_hue_range_margin: 8.0
   color_hue_range_weight: 0.35
@@ -266,7 +265,7 @@ led_qc_enhanced:
     save_config: ./models/led_qc/default_config.json
   analyze:
     model: ./models/led_qc/enhanced_model.json
-    image: ./data/led_qc/samples/sample.png
+    image: ./data/led_qc/samples
     out_dir: ./reports/led_qc/analyze
     visualize: true
     stability: false

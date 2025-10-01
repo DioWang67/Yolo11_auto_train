@@ -75,11 +75,12 @@ SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif")
 DEFAULT_COLOR_NAMES = ("Red", "Green", "Blue", "White")
 DEFAULT_COLOR_ALIASES = {name.lower(): name for name in DEFAULT_COLOR_NAMES}
 DEFAULT_COLOR_HUE_RANGES = {
-    "Red": [0.0, 20.0],
-    "Green": [35.0, 85.0],
-    "Blue": [85.0, 130.0],
-    "White": [0.0, 360.0],
+    "Red": (0.0, 20.0),
+    "Green": (35.0, 85.0),
+    "Blue": (85.0, 130.0),
+    "White": (0.0, 360.0),
 }
+
 
 
 class ColorPalette:
@@ -210,7 +211,56 @@ def set_active_colors(
     return set_active_palette(palette)
 
 
+
+def _auto_fill_color_config(cfg: dict) -> None:
+    colors = cfg.get("colors")
+    if not isinstance(colors, (list, tuple)):
+        colors = list(DEFAULT_COLOR_NAMES)
+    else:
+        colors = [str(c).strip() for c in colors if str(c).strip()]
+        if not colors:
+            colors = list(DEFAULT_COLOR_NAMES)
+    # deduplicate while preserving order
+    seen = set()
+    norm_colors: List[str] = []
+    for name in colors:
+        if name not in seen:
+            seen.add(name)
+            norm_colors.append(name)
+    cfg["colors"] = norm_colors
+
+    aliases = dict(cfg.get("color_aliases") or {})
+    for name in norm_colors:
+        aliases.setdefault(name.lower(), name)
+    default_order = list(DEFAULT_COLOR_NAMES)
+    for idx, default_name in enumerate(default_order):
+        key = default_name.lower()
+        if key not in aliases and idx < len(norm_colors):
+            aliases[key] = norm_colors[idx]
+    cfg["color_aliases"] = aliases
+
+    ranges = dict(cfg.get("color_hue_ranges") or {})
+    for idx, name in enumerate(norm_colors):
+        rng = ranges.get(name)
+        valid = False
+        if isinstance(rng, (list, tuple)) and len(rng) >= 2:
+            try:
+                float(rng[0]); float(rng[1])
+            except (TypeError, ValueError):
+                valid = False
+            else:
+                valid = True
+        if not valid:
+            if name in DEFAULT_COLOR_HUE_RANGES:
+                ranges[name] = list(DEFAULT_COLOR_HUE_RANGES[name])
+            elif idx < len(default_order):
+                ranges[name] = list(DEFAULT_COLOR_HUE_RANGES.get(default_order[idx], (0.0, 360.0)))
+            else:
+                ranges[name] = [0.0, 360.0]
+    cfg["color_hue_ranges"] = ranges
+
 def normalize_color_config(cfg: dict) -> dict:
+    _auto_fill_color_config(cfg)
     palette = create_palette_from_config(cfg)
     set_active_palette(palette)
     cfg["colors"] = list(palette.names)
@@ -278,6 +328,9 @@ DEFAULT_CONFIG = {
     "color_hue_range_margin": 8.0,
     "color_hue_range_weight": 0.35,
     "color_conf_hue_balance": 0.4,
+    "color_hue_auto_sigma": 2.5,
+    "color_hue_auto_min_width": 20.0,
+    "color_hue_auto_std_fallback": 6.0,
     # 顏色判定相關
     # black-hat 洞洞偵測
     "blackhat_kernel": 7,  # 橢圓核尺寸（奇數）
@@ -337,6 +390,9 @@ def apply_high_conf_preset(cfg: dict) -> dict:
     cfg.setdefault("color_hue_range_margin", 8.0)
     cfg.setdefault("color_hue_range_weight", 0.35)
     cfg.setdefault("color_conf_hue_balance", 0.4)
+    cfg.setdefault("color_hue_auto_sigma", cfg.get("sigma_multiplier", 2.0))
+    cfg.setdefault("color_hue_auto_min_width", 20.0)
+    cfg.setdefault("color_hue_auto_std_fallback", 6.0)
 
     cfg.setdefault("white_s_p90_max", 100)
     cfg.setdefault("white_v_p50_min", 200)
@@ -1110,6 +1166,57 @@ def _build_color_model_statistics(
     }
 
 
+
+def _maybe_update_auto_hue_ranges(cfg: dict, color_models: Dict[str, "EnhancedColorModel"]) -> List[str]:
+    """Derive hue ranges for colors that do not have explicit config."""
+    ranges = dict(cfg.get("color_hue_ranges") or {})
+    updated: List[str] = []
+    auto_sigma = float(cfg.get("color_hue_auto_sigma", cfg.get("sigma_multiplier", 2.0)))
+    min_width = float(cfg.get("color_hue_auto_min_width", 20.0))
+    std_fallback = float(cfg.get("color_hue_auto_std_fallback", 6.0))
+    min_width = max(min_width, 1.0)
+    std_fallback = max(std_fallback, 1.0)
+
+    for name, model in color_models.items():
+        existing = ranges.get(name)
+        need_auto = False
+        if existing is None:
+            need_auto = True
+        else:
+            try:
+                start, end = float(existing[0]), float(existing[1])
+            except Exception:
+                need_auto = True
+            else:
+                if name not in DEFAULT_COLOR_HUE_RANGES:
+                    if abs(start) < 1e-4 and abs(end - 360.0) < 1e-4:
+                        need_auto = True
+        if not need_auto:
+            continue
+        if not getattr(model, "mean_hsv_mu", None):
+            continue
+        try:
+            hue_mean = float(model.mean_hsv_mu[0]) * 2.0
+        except (IndexError, TypeError, ValueError):
+            continue
+        try:
+            hue_std = float(model.mean_hsv_std[0]) * 2.0
+        except (IndexError, TypeError, ValueError):
+            hue_std = 0.0
+        hue_std = max(hue_std, std_fallback)
+        half = max(auto_sigma * hue_std, min_width / 2.0)
+        if half >= 180.0:
+            start, end = 0.0, 360.0
+        else:
+            start = (hue_mean - half) % 360.0
+            end = (hue_mean + half) % 360.0
+        ranges[name] = [round(start, 2), round(end, 2)]
+        updated.append(name)
+
+    if updated:
+        cfg["color_hue_ranges"] = ranges
+    return updated
+
 def build_enhanced_reference(ref_dir: Path, cfg: dict) -> EnhancedReferenceModel:
     cfg = normalize_color_config(cfg)
     palette = create_palette_from_config(cfg)
@@ -1185,6 +1292,10 @@ def build_enhanced_reference(ref_dir: Path, cfg: dict) -> EnhancedReferenceModel
                 continue
             colors[c] = EnhancedColorModel(**_build_color_model_statistics(feats, cfg))
             total += len(feats)
+
+        auto_adjusted = _maybe_update_auto_hue_ranges(cfg, colors)
+        if auto_adjusted:
+            logger.info("Auto-derived hue ranges: %s", ", ".join(auto_adjusted))
 
         if not colors:
             joined = "/".join(palette.names) or "configured colors"
@@ -1766,220 +1877,419 @@ def cmd_detect_dir(args: argparse.Namespace) -> None:
     print(f"📈 CSV：{csv_path}")
 
 
+
+
+def _get_visual_font() -> "FontProperties":
+    from matplotlib.font_manager import FontProperties
+
+    try:
+        return FontProperties(fname="C:/Windows/Fonts/msyh.ttc")
+    except Exception:
+        return FontProperties()
+
+
+def _visualize_color_analysis(
+    image_path: Path,
+    img_bgr: np.ndarray,
+    model: "EnhancedReferenceModel",
+    res: "EnhancedDetectionResult",
+    font: "FontProperties",
+    save_path: Optional[Path],
+    show_plot: bool,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    mask, _ = _make_adaptive_led_mask(hsv[..., 2], model.config)
+    led_mask = mask > 0
+
+    h_values = hsv[..., 0][led_mask]
+    s_values = hsv[..., 1][led_mask]
+    v_values = hsv[..., 2][led_mask]
+
+    fig = plt.figure(figsize=(15, 10))
+    plt.rcParams["figure.facecolor"] = "white"
+    plt.rcParams["axes.facecolor"] = "white"
+
+    # Panel 1: original image
+    plt.subplot(231)
+    rgb_img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    plt.imshow(rgb_img)
+    plt.title("Original image", fontproperties=font, fontsize=12)
+
+    # Panel 2: hue histogram with ranges
+    plt.subplot(232)
+    plt.hist(h_values, bins=180, range=(0, 180), density=True, alpha=0.6, color="blue")
+
+    hue_regions = [
+        ((0, 20), (1, 0, 0, 0.2), "Red range"),
+        ((35, 85), (0, 1, 0, 0.2), "Green range"),
+        ((85, 130), (0, 0, 1, 0.2), "Blue range"),
+    ]
+    ymax = max(plt.ylim()[1], 1e-3)
+    for (start, end), rgba, label in hue_regions:
+        plt.axvspan(start, end, color=rgba, label=label)
+        region_percent = safe_ratio((h_values >= start) & (h_values <= end), len(h_values))
+        rp = float(region_percent) if region_percent is not None else float("nan")
+        if not math.isnan(rp) and rp > 5:
+            text_y = ymax * 0.9 if ymax > 0 else 0.1
+            plt.text(
+                (start + end) / 2,
+                text_y,
+                f"{rp:.1f}%",
+                horizontalalignment="center",
+                fontproperties=font,
+            )
+
+    plt.title("Hue distribution", fontproperties=font, fontsize=12)
+    plt.xlabel("Hue (H)", fontproperties=font)
+    plt.ylabel("Density", fontproperties=font)
+    handles, labels = plt.gca().get_legend_handles_labels()
+    if handles:
+        plt.legend(prop=font, loc="upper right")
+
+    # Panel 3: brightness histogram
+    plt.subplot(233)
+    plt.hist(v_values, bins=50, range=(0, 255), alpha=0.7, color="gray")
+    brightness_ranges = [
+        (0, 84, "Dark"),
+        (85, 170, "Mid"),
+        (171, 255, "Bright"),
+    ]
+    for start, end, label in brightness_ranges:
+        range_percent = safe_ratio((v_values >= start) & (v_values <= end), len(v_values))
+        rp = float(range_percent) if range_percent is not None else float("nan")
+        if not math.isnan(rp) and rp > 5:
+            plt.axvspan(start, end, alpha=0.2, label=f"{label}: {rp:.1f}%")
+
+    plt.title("Brightness distribution", fontproperties=font, fontsize=12)
+    plt.xlabel("Value (V)", fontproperties=font)
+    plt.ylabel("Count", fontproperties=font)
+    handles, labels = plt.gca().get_legend_handles_labels()
+    if handles:
+        plt.legend(prop=font, loc="upper right")
+
+    # Panel 4: mask visualization
+    plt.subplot(234)
+    plt.imshow(mask, cmap="gray")
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if contours:
+        max_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(max_contour)
+        area = cv2.contourArea(max_contour)
+        perimeter = cv2.arcLength(max_contour, True)
+        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0.0
+
+        plt.text(
+            0.02,
+            0.98,
+            f"Shape metrics\nCircularity: {circularity:.2f}\nArea: {area:.0f}px",
+            transform=plt.gca().transAxes,
+            fontproperties=font,
+            verticalalignment="top",
+            bbox=dict(facecolor="white", alpha=0.8),
+        )
+        plt.plot(
+            [x, x + w, x + w, x, x],
+            [y, y, y + h, y + h, y],
+            "r-",
+            linewidth=2,
+        )
+
+    plt.title("LED mask", fontproperties=font, fontsize=12)
+
+    # Panel 5: saturation histogram
+    plt.subplot(235)
+    plt.hist(s_values, bins=50, range=(0, 255), alpha=0.7, color="orange")
+    s_low = safe_percentile(s_values, 25)
+    s_high = safe_percentile(s_values, 75)
+    s_median = float(np.median(s_values)) if s_values.size else float("nan")
+    if s_values.size:
+        plt.axvline(s_median, color="r", linestyle="--", label=f"Median: {s_median:.1f}")
+        plt.axvspan(s_low, s_high, alpha=0.2, color="y", label=f"IQR: {s_high - s_low:.1f}")
+
+    plt.title("Saturation distribution", fontproperties=font, fontsize=12)
+    plt.xlabel("Saturation (S)", fontproperties=font)
+    plt.ylabel("Count", fontproperties=font)
+    handles, labels = plt.gca().get_legend_handles_labels()
+    if handles:
+        plt.legend(prop=font, loc="upper right")
+
+    # Panel 6: textual summary
+    plt.subplot(236)
+    color_hue_cov = float(res.color_hue_coverage.get(res.color_used, 0.0))
+    h_mean = float(np.mean(h_values)) if h_values.size else 0.0
+    h_std = float(np.std(h_values)) if h_values.size else 0.0
+    s_mean = float(np.mean(s_values)) if s_values.size else 0.0
+    s_median_display = s_median if not math.isnan(s_median) else 0.0
+    v_mean = float(np.mean(v_values)) if v_values.size else 0.0
+    v_uniformity = 1 - (float(np.std(v_values)) / 255.0) if v_values.size else float("nan")
+    color_purity = s_mean * (v_mean / 255.0) if v_values.size else 0.0
+
+    main_hue_range = {"Red": (0, 20), "Green": (35, 85), "Blue": (85, 130)}
+    main_hue_percent = 0.0
+    if res.color_used in main_hue_range and h_values.size:
+        start, end = main_hue_range[res.color_used]
+        mh = safe_ratio((h_values >= start) & (h_values <= end), len(h_values))
+        mh = float(mh) if mh is not None else float("nan")
+        if not math.isnan(mh):
+            main_hue_percent = mh
+
+    ft = res.features
+    area_ratio = float(getattr(ft, "area_ratio", float("nan")))
+    uniformity = float(getattr(ft, "uniformity", float("nan")))
+    hole_ratio = float(getattr(ft, "hole_ratio", float("nan")))
+
+    result_lines = [
+        "Detection summary",
+        "----------------",
+        f"Predicted color: {res.color_used}",
+        f"Color confidence: {res.color_confidence:.3f}",
+        f"Feature confidence: {res.confidence:.3f}",
+        f"Hue coverage: {color_hue_cov:.3f}",
+        f"Severity score: {res.severity_score:.3f}",
+        f"Anomaly: {'Yes' if res.is_anomaly else 'No'}",
+        "",
+        "Hue statistics",
+        "----------------",
+        f"Main hue coverage: {main_hue_percent:.1f}%",
+        f"Mean hue: {h_mean:.1f} deg",
+        f"Hue std: {h_std:.1f} deg",
+        "",
+        "Brightness & saturation",
+        "----------------",
+        f"Mean saturation: {s_mean:.1f}",
+        f"Median saturation: {s_median_display:.1f}",
+        f"Mean brightness: {v_mean:.1f}",
+        f"Brightness uniformity: {v_uniformity:.2f}",
+        f"Color purity: {color_purity:.1f}",
+        "",
+        "Mask features",
+        "----------------",
+        f"Area ratio: {area_ratio:.3f}",
+        f"Uniformity: {uniformity:.3f}",
+        f"Hole ratio: {hole_ratio:.3f}",
+    ]
+    result_text = "\n".join(result_lines)
+
+    plt.text(
+        0.05,
+        0.95,
+        result_text,
+        fontproperties=font,
+        fontsize=10,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round,pad=1", facecolor="white", alpha=0.8),
+    )
+    plt.axis("off")
+
+    plt.tight_layout()
+
+    if save_path:
+        ensure_dir(save_path.parent)
+        plt.savefig(save_path, bbox_inches="tight", dpi=300)
+        print(f"[analyze] saved figure: {save_path}")
+    if show_plot:
+        plt.show()
+    plt.close(fig)
+
+
+def _analyze_single(args: argparse.Namespace, model: "EnhancedReferenceModel") -> None:
+    image_arg = getattr(args, "image", None)
+    if not image_arg:
+        print("[analyze] --image is required when directory is not provided")
+        return
+
+    image_path = Path(image_arg)
+    img = robust_imread(str(image_path))
+    if img is None:
+        print(f"[analyze] failed to read image: {image_path}")
+        return
+
+    res = enhanced_detect_one(img, model)
+    hue_cov = float(res.color_hue_coverage.get(res.color_used, 0.0))
+    status = "PASS" if not res.is_anomaly else f"FAIL (severity={res.severity_score:.2f})"
+    print(f"[analyze] {status}")
+    print(
+        f"[analyze] color={res.color_used} (conf={res.color_confidence:.3f}, "
+        f"hue_cov={hue_cov:.3f})"
+    )
+    print(
+        f"[analyze] feature_conf={res.confidence:.3f} "
+        f"time={res.processing_time * 1000.0:.1f}ms"
+    )
+    if res.reasons:
+        print("[analyze] reasons:")
+        for r in res.reasons:
+            print(f"  - {r}")
+    if res.recommendations:
+        print("[analyze] recommendations:")
+        for r in res.recommendations:
+            print(f"  - {r}")
+
+    if getattr(args, "visualize", False):
+        font = _get_visual_font()
+        out_dir_arg = getattr(args, "out_dir", None)
+        show_plot = not out_dir_arg
+        save_path = None
+        if out_dir_arg:
+            out_dir = Path(out_dir_arg)
+            ensure_dir(out_dir)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_path = out_dir / f"{image_path.stem}_analysis_{timestamp}.png"
+        _visualize_color_analysis(image_path, img, model, res, font, save_path, show_plot)
+
+
+def _analyze_directory(args: argparse.Namespace, model: "EnhancedReferenceModel") -> None:
+    dir_arg = getattr(args, "dir", None)
+    if not dir_arg:
+        print("[analyze] --dir is required when image is not provided")
+        return
+
+    root = Path(dir_arg)
+    if not root.is_dir():
+        print(f"[analyze] directory not found: {root}")
+        return
+
+    valid_suffixes = {s.lower() for s in SUPPORTED_FORMATS}
+    image_paths = sorted(p for p in root.rglob("*") if p.suffix.lower() in valid_suffixes)
+    if not image_paths:
+        print(f"[analyze] no images found under {root}")
+        return
+
+    print(f"[analyze] found {len(image_paths)} images under {root}")
+
+    visualize = bool(getattr(args, "visualize", False))
+    out_dir_arg = getattr(args, "out_dir", None)
+    font = _get_visual_font() if visualize else None
+    out_root: Optional[Path]
+    if visualize:
+        out_root = Path(out_dir_arg) if out_dir_arg else root / "analysis"
+        ensure_dir(out_root)
+    else:
+        out_root = Path(out_dir_arg) if out_dir_arg else None
+        if out_root:
+            ensure_dir(out_root)
+
+    rows: List[Dict[str, object]] = []
+    failed = 0
+    total = len(image_paths)
+
+    for idx, img_path in enumerate(image_paths, 1):
+        img = robust_imread(str(img_path))
+        if img is None:
+            print(f"[analyze] #{idx} failed to read: {img_path}")
+            failed += 1
+            continue
+
+        res = enhanced_detect_one(img, model)
+        hue_cov = float(res.color_hue_coverage.get(res.color_used, 0.0))
+        print(
+            f"[analyze] #{idx}/{total} {img_path.name}: "
+            f"color={res.color_used} conf={res.color_confidence:.3f} "
+            f"hue_cov={hue_cov:.3f}"
+        )
+
+        if visualize and out_root is not None and font is not None:
+            rel = img_path.relative_to(root)
+            hash_suffix = hashlib.md5(str(rel).encode("utf-8")).hexdigest()[:8]
+            target_dir = out_root / rel.parent
+            ensure_dir(target_dir)
+            save_name = f"{img_path.stem}_{hash_suffix}_analysis.png"
+            save_path = target_dir / save_name
+            _visualize_color_analysis(img_path, img, model, res, font, save_path, show_plot=False)
+
+        rows.append(
+            {
+                "file": str(img_path),
+                "is_anomaly": int(res.is_anomaly),
+                "severity_score": float(res.severity_score),
+                "color": res.color_used,
+                "color_conf": float(res.color_confidence),
+                "conf": float(res.confidence),
+                "time_ms": float(res.processing_time * 1000.0),
+                "anomaly_boxes": ";".join(
+                    f"{x},{y},{w},{h}" for x, y, w, h in res.anomaly_regions
+                ),
+                "reasons": "; ".join(res.reasons),
+                "recommendations": "; ".join(res.recommendations),
+                "area_ratio": float(getattr(res.features, "area_ratio", float("nan"))),
+                "valid_mask": int(bool(getattr(res.features, "valid_mask", 0))),
+                "mean_v": float(getattr(res.features, "mean_v", float("nan"))),
+                "uniformity": float(getattr(res.features, "uniformity", float("nan"))),
+                "hole_ratio": float(getattr(res.features, "hole_ratio", float("nan"))),
+                "color_dist": float(res.color_distances.get(res.color_used, 0.0)),
+                "color_hue_cov": hue_cov,
+            }
+        )
+
+    processed = len(rows)
+    print(f"[analyze] completed {processed} images (failed: {failed})")
+
+    if rows and out_root:
+        import csv
+
+        csv_path = out_root / "analysis_summary.csv"
+        fieldnames = [
+            "file",
+            "is_anomaly",
+            "severity_score",
+            "color",
+            "color_conf",
+            "conf",
+            "time_ms",
+            "anomaly_boxes",
+            "reasons",
+            "recommendations",
+            "area_ratio",
+            "valid_mask",
+            "mean_v",
+            "uniformity",
+            "hole_ratio",
+            "color_dist",
+            "color_hue_cov",
+        ]
+        with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"[analyze] saved summary: {csv_path}")
+
+
 def cmd_analyze(args: argparse.Namespace) -> None:
     model = EnhancedReferenceModel.from_json(Path(args.model))
 
-    if args.visualize:
-        import matplotlib.pyplot as plt
-        from matplotlib.font_manager import FontProperties
+    image_arg = getattr(args, "image", None)
+    dir_arg = getattr(args, "dir", None)
 
-        # 設定字型
+    has_image = bool(image_arg)
+    has_dir = bool(dir_arg)
+
+    if has_image:
         try:
-            font = FontProperties(fname="C:/Windows/Fonts/msyh.ttc")
-        except Exception:
-            # 非 Windows 或找不到就用預設字型
-            font = FontProperties()
-        plt.figure(figsize=(15, 10))
-        plt.rcParams["figure.facecolor"] = "white"
-        plt.rcParams["axes.facecolor"] = "white"
+            image_path = Path(image_arg)
+        except (TypeError, ValueError):
+            image_path = None
+        if image_path and image_path.is_dir():
+            # allow --image pointing to a directory
+            dir_arg = str(image_path)
+            has_dir = True
+            has_image = False
+            setattr(args, "dir", dir_arg)
+            setattr(args, "image", None)
 
-        # 1. 原始圖片 + ROI標記
-        plt.subplot(231)
-        img = robust_imread(args.image)
-        if img is None:
-            print(f"❌ 無法讀取圖片：{args.image}")
-            return
+    if has_image and has_dir:
+        print("[analyze] please provide either --image or --dir, not both")
+        return
+    if not has_image and not has_dir:
+        print("[analyze] please provide --image or --dir")
+        return
 
-        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        plt.imshow(rgb_img)
-        plt.title("原始圖片", fontproperties=font, fontsize=12)
+    if has_dir:
+        _analyze_directory(args, model)
+    else:
+        _analyze_single(args, model)
 
-        # 2. HSV 色調分析（增強版）
-        plt.subplot(232)
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        mask, _ = _make_adaptive_led_mask(hsv[..., 2], model.config)
-        h_values = hsv[..., 0][mask > 0]
-
-        # 使用更細的bins進行直方圖分析
-        n, bins, patches = plt.hist(
-            h_values, bins=180, range=(0, 180), density=True, alpha=0.6, color="blue"
-        )
-
-        # 顏色區域標記（使用漸變色）
-        colors = [(1, 0, 0, 0.2), (0, 1, 0, 0.2), (0, 0, 1, 0.2)]  # RGBA格式
-        ranges = [(0, 20), (35, 85), (85, 130)]
-        labels = ["紅色區域", "綠色區域", "藍色區域"]
-
-        for (start, end), color, label in zip(ranges, colors, labels):
-            plt.axvspan(start, end, color=color, label=label)
-            # 添加主色調區域的百分比標註
-            region_percent = safe_ratio(
-                (h_values >= start) & (h_values <= end), len(h_values)
-            )
-            if region_percent > 5:  # 只標註主要區域
-                plt.text(
-                    (start + end) / 2,
-                    plt.ylim()[1] * 0.9,
-                    f"{region_percent:.1f}%",
-                    horizontalalignment="center",
-                    fontproperties=font,
-                )
-
-        plt.title("LED區域色調分布", fontproperties=font, fontsize=12)
-        plt.xlabel("色調值 (H)", fontproperties=font)
-        plt.ylabel("密度", fontproperties=font)
-        plt.legend(prop=font, loc="upper right")
-
-        # 3. 亮度分析（增強版）
-        plt.subplot(233)
-        v_values = hsv[..., 2][mask > 0]
-        plt.hist(v_values, bins=50, range=(0, 255), alpha=0.7, color="gray")
-
-        # 添加亮度區域標註
-        v_ranges = [(0, 84, "暗"), (85, 170, "中"), (171, 255, "亮")]
-        for start, end, label in v_ranges:
-            range_percent = safe_ratio(
-                (v_values >= start) & (v_values <= end), len(v_values)
-            )
-
-            if range_percent > 5:
-                plt.axvspan(
-                    start, end, alpha=0.2, label=f"{label}區域: {range_percent:.1f}%"
-                )
-
-        plt.title("LED區域亮度分布", fontproperties=font, fontsize=12)
-        plt.xlabel("亮度值 (V)", fontproperties=font)
-        plt.ylabel("像素數量", fontproperties=font)
-        plt.legend(prop=font, loc="upper right")
-
-        # 4. LED檢測區域（增強版）
-        plt.subplot(234)
-        plt.imshow(mask, cmap="gray")
-        contours, _ = cv2.findContours(
-            mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-
-        if contours:
-            max_contour = max(contours, key=cv2.contourArea)
-            x, y, w, h = cv2.boundingRect(max_contour)
-
-            # 計算輪廓特徵
-            area = cv2.contourArea(max_contour)
-            perimeter = cv2.arcLength(max_contour, True)
-            circularity = (
-                4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
-            )
-
-            # 添加形狀分析結果
-            plt.text(
-                0.02,
-                0.98,
-                f"形狀分析:\n圓形度: {circularity:.2f}\n區域: {area:.0f}px",
-                transform=plt.gca().transAxes,
-                fontproperties=font,
-                verticalalignment="top",
-                bbox=dict(facecolor="white", alpha=0.8),
-            )
-
-            plt.plot(
-                [x, x + w, x + w, x, x], [y, y, y + h, y + h, y], "r-", linewidth=2
-            )
-
-        plt.title("LED檢測區域", fontproperties=font, fontsize=12)
-
-        # 5. 飽和度分析（增強版）
-        plt.subplot(235)
-        s_values = hsv[..., 1][mask > 0]
-        plt.hist(s_values, bins=50, range=(0, 255), alpha=0.7, color="orange")
-
-        # 添加飽和度區域分析
-        s_low = safe_percentile(s_values, 25)
-        s_high = safe_percentile(s_values, 75)
-
-        s_med = np.median(s_values)
-
-        plt.axvline(s_med, color="r", linestyle="--", label=f"中位數: {s_med:.1f}")
-        plt.axvspan(
-            s_low, s_high, alpha=0.2, color="y", label=f"四分位區間: {s_high-s_low:.1f}"
-        )
-
-        plt.title("LED區域飽和度分布", fontproperties=font, fontsize=12)
-        plt.xlabel("飽和度值 (S)", fontproperties=font)
-        plt.ylabel("像素數量", fontproperties=font)
-        plt.legend(prop=font, loc="upper right")
-
-        # 6. 檢測結果和統計分析
-        plt.subplot(236)
-        res = enhanced_detect_one(img, model)
-
-        color_map = {"White": "白色", "Red": "紅色", "Green": "綠色", "Blue": "藍色"}
-
-        # 計算更詳細的統計信息
-        h_mean = np.mean(h_values)
-        h_std = np.std(h_values)
-        s_mean = np.mean(s_values)
-        v_mean = np.mean(v_values)
-
-        # 計算色彩純度指標
-        color_purity = s_mean * (v_mean / 255.0)  # 0-255範圍
-
-        # 計算主色調佔比
-        main_hue_range = {"Red": (0, 20), "Green": (35, 85), "Blue": (85, 130)}
-        if res.color_used in main_hue_range:
-            start, end = main_hue_range[res.color_used]
-            main_hue_percent = (
-                np.sum((h_values >= start) & (h_values <= end)) / len(h_values) * 100
-            )
-        else:
-            main_hue_percent = 0
-
-        result_text = (
-            f"檢測結果摘要\n"
-            f"----------------\n"
-            f"檢測顏色: {color_map.get(res.color_used, res.color_used)}\n"
-            f"顏色信度: {res.color_confidence:.3f}\n"
-            f"特徵信度: {res.confidence:.3f}\n\n"
-            f"色調分析\n"
-            f"----------------\n"
-            f"主色調佔比: {main_hue_percent:.1f}%\n"
-            f"平均色調: {h_mean:.1f}°\n"
-            f"色調標準差: {h_std:.1f}°\n"
-            f"色彩純度: {color_purity:.1f}\n\n"
-            f"亮度分析\n"
-            f"----------------\n"
-            f"平均飽和度: {s_mean:.1f}\n"
-            f"中位飽和度: {s_med:.1f}\n"
-            f"平均亮度: {v_mean:.1f}\n"
-            f"亮度均勻度: {1 - np.std(v_values)/255:.2f}"
-        )
-
-        plt.text(
-            0.05,
-            0.95,
-            result_text,
-            fontproperties=font,
-            fontsize=10,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round,pad=1", facecolor="white", alpha=0.8),
-        )
-        plt.axis("off")
-
-        plt.tight_layout()
-
-        if args.out_dir:
-            out_dir = Path(args.out_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            plt.savefig(
-                out_dir / f"{Path(args.image).stem}_分析_{timestamp}.png",
-                bbox_inches="tight",
-                dpi=300,
-            )
-            print(
-                f"✅ 已儲存分析圖：{out_dir / Path(args.image).stem}_分析_{timestamp}.png"
-            )
-        else:
-            plt.show()
 
 
 def cmd_info(args: argparse.Namespace) -> None:
@@ -2059,7 +2369,8 @@ def make_parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser("analyze", help="分析工具")
     a.add_argument("--model", required=True, help="模型檔案路徑")
-    a.add_argument("--image", required=True, help="要分析的圖片路徑")
+    a.add_argument("--image", help="Single image path")
+    a.add_argument("--dir", help="Root directory containing paired folders for analysis")
     a.add_argument("--visualize", action="store_true", help="執行可視化分析")
     a.add_argument("--stability", action="store_true", help="執行穩定性測試")
     a.add_argument("--out-dir", help="輸出目錄")

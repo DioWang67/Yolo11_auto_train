@@ -101,6 +101,14 @@ class LedQcManager:
         if overrides:
             cfg.update(overrides)
 
+        simple_keys = ("colors", "color_aliases", "color_hue_ranges", "color_conf_min_per_color")
+        for source in (led_section, sub_cfg):
+            if not isinstance(source, dict):
+                continue
+            for key in simple_keys:
+                if key in source and source[key] is not None:
+                    cfg[key] = copy.deepcopy(source[key])
+
         if hasattr(led_qc_enhanced, "set_active_colors"):
             led_qc_enhanced.set_active_colors(
                 cfg.get("colors"),
