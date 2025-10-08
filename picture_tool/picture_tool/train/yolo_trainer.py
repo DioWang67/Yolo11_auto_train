@@ -81,4 +81,12 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     # Ultralytics returns a Results object; run dir is typically project/name
     run_dir = Path(project) / name
     logger.info(f"Training completed. Run directory: {run_dir}")
+    position_cfg = ycfg.get("position_validation", {})
+    if position_cfg.get("enabled"):
+        try:
+            from picture_tool.position.yolo_position_validator import run_position_validation
+
+            run_position_validation(config, run_dir, logger=logger)
+        except Exception as exc:
+            logger.error(f"Position validation failed: {exc}")
     return run_dir

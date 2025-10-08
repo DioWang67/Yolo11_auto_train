@@ -1,26 +1,36 @@
 import cv2
-import albumentations as A
+try:
+    import albumentations as A  # type: ignore[import]
+except ImportError as exc:
+    raise ImportError('Albumentations is required for DataAugmentor.') from exc
+
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
-from typing import List
-from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger
-import yaml
+from typing import Any, List, Optional, TYPE_CHECKING
+from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger  # type: ignore[import]
+import yaml  # type: ignore[import]
 from pathlib import Path
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore[import]
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 
+if TYPE_CHECKING:
+    from albumentations.core.composition import Compose  # type: ignore[import]
+else:
+    Compose = Any
+
+
 class DataAugmentor:
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: Optional[str] = None):
         self._setup_logging()
         self.config = (
             self._load_config(config_path) if config_path else self._default_config()
         )
         # 延後初始化，避免在 main_pipeline 覆蓋 config 前就建立多餘輸出資料夾
-        self.augmentations = None
+        self.augmentations: Optional[Compose] = None
 
     def _setup_logging(self):
         self.logger = setup_module_logger(__name__, "augmentation_fixed.log")
@@ -43,7 +53,7 @@ class DataAugmentor:
             self.logger.error(f"建立輸出目錄失敗: {e}")
             raise
 
-    def _load_config(self, config_path: str) -> dict:
+    def _load_config(self, config_path: Optional[str]) -> dict:
         try:
             if config_path and Path(config_path).exists():
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -146,7 +156,7 @@ class DataAugmentor:
         else:
             plt.show()
 
-    def _create_augmentations(self) -> A.Compose:
+    def _create_augmentations(self) -> Compose:
         aug_config = self.config["augmentation"]
         ops_config = aug_config["operations"]
         aug_list = []
@@ -302,6 +312,11 @@ class DataAugmentor:
             if not bboxes:
                 self.logger.warning(f"沒有有效的標註: {label_path}")
                 return
+            if self.augmentations is None:
+                self.augmentations = self._create_augmentations()
+            augmentations = self.augmentations
+            if augmentations is None:
+                raise RuntimeError('Augmentation pipeline failed to initialize.')
             if self.config["processing"].get("debug_mode", False):
                 debug_dir = Path(
                     self.config["output"].get("debug_dir", "debug_visualizations")
@@ -317,8 +332,8 @@ class DataAugmentor:
             target_size = self.config["augmentation"].get("target_size", 640)
             for i in range(self.config["augmentation"]["num_images"]):
                 try:
-                    if len(self.augmentations.transforms) > 0:
-                        transformed = self.augmentations(
+                    if len(augmentations.transforms) > 0:
+                        transformed = augmentations(
                             image=image, bboxes=bboxes, class_labels=class_labels
                         )
                         augmented_image = transformed["image"]

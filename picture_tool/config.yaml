@@ -208,6 +208,19 @@ yolo_training:
   # Ultralytics outputs
   project: ./runs/detect
   name: train
+  position_validation:
+    enabled: false
+    product: null
+    area: null
+    imgsz: 640
+    sample_dir: null
+    config_path: ./models/yolo/position_config.yaml
+    config: {}
+    output_dir: ./reports/position
+    weights: null
+    device: null
+    conf: 0.25
+    tolerance_override: null
 
 # YOLO evaluation settings
 yolo_evaluation:

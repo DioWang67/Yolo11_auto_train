@@ -29,10 +29,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from threading import Lock
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import cv2
 import numpy as np
+
+if TYPE_CHECKING:
+    from matplotlib.font_manager import FontProperties
 
 # ----------------------------
 # 基本設定
@@ -82,15 +85,14 @@ DEFAULT_COLOR_HUE_RANGES = {
 }
 
 
-
 class ColorPalette:
     """Encapsulates color names, aliases, and hue ranges used by LED QC."""
 
     def __init__(
         self,
-        names: Optional[List[str]] = None,
-        aliases: Optional[Dict[str, str]] = None,
-        hue_ranges: Optional[Dict[str, List[float]]] = None,
+        names: Optional[Sequence[str]] = None,
+        aliases: Optional[Mapping[str, str]] = None,
+        hue_ranges: Optional[Mapping[str, Sequence[float]]] = None,
     ) -> None:
         clean_names: List[str] = []
         for raw in names or DEFAULT_COLOR_NAMES:
@@ -104,7 +106,7 @@ class ColorPalette:
         self.names: Tuple[str, ...] = tuple(clean_names)
 
         alias_map: Dict[str, str] = {name.lower(): name for name in self.names}
-        if isinstance(aliases, dict):
+        if aliases is not None:
             for alias, target in aliases.items():
                 alias_key = str(alias or "").strip().lower()
                 target_name = str(target or "").strip()
@@ -113,18 +115,20 @@ class ColorPalette:
         self.aliases: Dict[str, str] = alias_map
 
         normalized_ranges: Dict[str, Tuple[float, float]] = {}
-        base_ranges = hue_ranges if isinstance(hue_ranges, dict) else {}
+        base_ranges: Mapping[str, Sequence[float]]
+        base_ranges = hue_ranges if hue_ranges is not None else {}
         for name in self.names:
-            rng = (
+            rng_obj = (
                 base_ranges.get(name)
                 or DEFAULT_COLOR_HUE_RANGES.get(name)
-                or [0.0, 360.0]
+                or (0.0, 360.0)
             )
             try:
-                start, end = float(rng[0]), float(rng[1])
-            except Exception:
-                start, end = DEFAULT_COLOR_HUE_RANGES.get(name, [0.0, 360.0])
-            normalized_ranges[name] = (start, end)
+                start_val = float(rng_obj[0])
+                end_val = float(rng_obj[1])
+            except (TypeError, ValueError, IndexError):
+                start_val, end_val = DEFAULT_COLOR_HUE_RANGES.get(name, (0.0, 360.0))
+            normalized_ranges[name] = (start_val, end_val)
         self.hue_ranges: Dict[str, Tuple[float, float]] = normalized_ranges
 
         self.regex: re.Pattern = _build_color_regex(self.aliases)
@@ -155,7 +159,7 @@ class ColorPalette:
         }
 
 
-def _build_color_regex(alias_map: Dict[str, str]) -> re.Pattern:
+def _build_color_regex(alias_map: Mapping[str, str]) -> re.Pattern:
     if not alias_map:
         return re.compile(r"(red|green|blue|white)", re.IGNORECASE)
     pattern = "|".join(sorted(alias_map.keys(), key=len, reverse=True))
@@ -182,11 +186,46 @@ def set_active_palette(palette: ColorPalette) -> Tuple[Tuple[str, ...], Dict[str
 
 
 def create_palette_from_config(cfg: Dict[str, object]) -> ColorPalette:
-    return ColorPalette(
-        cfg.get("colors"),
-        cfg.get("color_aliases"),
-        cfg.get("color_hue_ranges"),
-    )
+    colors_obj = cfg.get("colors")
+    colors_seq: Optional[List[str]]
+    if isinstance(colors_obj, (list, tuple)):
+        colors_seq = [str(item).strip() for item in colors_obj if str(item).strip()]
+    else:
+        colors_seq = None
+
+    aliases_obj = cfg.get("color_aliases")
+    aliases_map: Optional[Dict[str, str]]
+    if isinstance(aliases_obj, dict):
+        alias_temp: Dict[str, str] = {}
+        for raw_key, raw_value in aliases_obj.items():
+            key = str(raw_key or "").strip().lower()
+            value = str(raw_value or "").strip()
+            if key and value:
+                alias_temp[key] = value
+        aliases_map = alias_temp
+    else:
+        aliases_map = None
+
+    ranges_obj = cfg.get("color_hue_ranges")
+    ranges_map: Optional[Dict[str, List[float]]]
+    if isinstance(ranges_obj, dict):
+        temp: Dict[str, List[float]] = {}
+        for raw_key, raw_value in ranges_obj.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if isinstance(raw_value, (list, tuple)) and len(raw_value) >= 2:
+                try:
+                    start_val = float(raw_value[0])
+                    end_val = float(raw_value[1])
+                except (TypeError, ValueError):
+                    continue
+                temp[key] = [start_val, end_val]
+        ranges_map = temp
+    else:
+        ranges_map = None
+
+    return ColorPalette(colors_seq, aliases_map, ranges_map)
 
 
 @contextmanager
@@ -203,61 +242,88 @@ def use_palette(palette: ColorPalette):
 
 
 def set_active_colors(
-    colors: Optional[List[str]] = None,
+    colors: Optional[Sequence[str]] = None,
     aliases: Optional[Dict[str, str]] = None,
-    hue_ranges: Optional[Dict[str, List[float]]] = None,
+    hue_ranges: Optional[Dict[str, Sequence[float]]] = None,
 ) -> Tuple[Tuple[str, ...], Dict[str, str]]:
-    palette = ColorPalette(colors, aliases, hue_ranges or DEFAULT_COLOR_HUE_RANGES)
+    config_seed: Dict[str, object] = {}
+    if colors is not None:
+        config_seed["colors"] = list(colors)
+    if aliases is not None:
+        config_seed["color_aliases"] = dict(aliases)
+    if hue_ranges is not None:
+        config_seed["color_hue_ranges"] = dict(hue_ranges)
+    _auto_fill_color_config(config_seed)
+    palette = create_palette_from_config(config_seed)
     return set_active_palette(palette)
 
 
-
 def _auto_fill_color_config(cfg: dict) -> None:
-    colors = cfg.get("colors")
-    if not isinstance(colors, (list, tuple)):
-        colors = list(DEFAULT_COLOR_NAMES)
+    colors_obj = cfg.get("colors")
+    if isinstance(colors_obj, (list, tuple)):
+        candidate = [str(item).strip() for item in colors_obj]
     else:
-        colors = [str(c).strip() for c in colors if str(c).strip()]
-        if not colors:
-            colors = list(DEFAULT_COLOR_NAMES)
-    # deduplicate while preserving order
-    seen = set()
+        candidate = list(DEFAULT_COLOR_NAMES)
+    candidate = [name for name in candidate if name]
+    if not candidate:
+        candidate = list(DEFAULT_COLOR_NAMES)
+
+    seen: set[str] = set()
     norm_colors: List[str] = []
-    for name in colors:
+    for name in candidate:
         if name not in seen:
             seen.add(name)
             norm_colors.append(name)
     cfg["colors"] = norm_colors
 
-    aliases = dict(cfg.get("color_aliases") or {})
+    aliases_obj = cfg.get("color_aliases")
+    aliases: Dict[str, str] = {}
+    if isinstance(aliases_obj, dict):
+        for raw_key, raw_value in aliases_obj.items():
+            key = str(raw_key or "").strip().lower()
+            value = str(raw_value or "").strip()
+            if key and value:
+                aliases[key] = value
     for name in norm_colors:
         aliases.setdefault(name.lower(), name)
     default_order = list(DEFAULT_COLOR_NAMES)
     for idx, default_name in enumerate(default_order):
         key = default_name.lower()
-        if key not in aliases and idx < len(norm_colors):
-            aliases[key] = norm_colors[idx]
+        if key in aliases:
+            continue
+        if not norm_colors:
+            continue
+        target_name = norm_colors[idx] if idx < len(norm_colors) else norm_colors[-1]
+        aliases[key] = target_name
     cfg["color_aliases"] = aliases
 
-    ranges = dict(cfg.get("color_hue_ranges") or {})
+    ranges_obj = cfg.get("color_hue_ranges")
+    ranges: Dict[str, List[float]] = {}
+    if isinstance(ranges_obj, dict):
+        for raw_key, raw_value in ranges_obj.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if isinstance(raw_value, (list, tuple)) and len(raw_value) >= 2:
+                try:
+                    start_val = float(raw_value[0])
+                    end_val = float(raw_value[1])
+                except (TypeError, ValueError):
+                    continue
+                ranges[key] = [start_val, end_val]
+    default_ranges = DEFAULT_COLOR_HUE_RANGES
     for idx, name in enumerate(norm_colors):
-        rng = ranges.get(name)
-        valid = False
-        if isinstance(rng, (list, tuple)) and len(rng) >= 2:
-            try:
-                float(rng[0]); float(rng[1])
-            except (TypeError, ValueError):
-                valid = False
-            else:
-                valid = True
-        if not valid:
-            if name in DEFAULT_COLOR_HUE_RANGES:
-                ranges[name] = list(DEFAULT_COLOR_HUE_RANGES[name])
-            elif idx < len(default_order):
-                ranges[name] = list(DEFAULT_COLOR_HUE_RANGES.get(default_order[idx], (0.0, 360.0)))
-            else:
-                ranges[name] = [0.0, 360.0]
+        if name in ranges:
+            continue
+        if name in default_ranges:
+            start_val, end_val = default_ranges[name]
+        elif idx < len(default_order):
+            start_val, end_val = default_ranges.get(default_order[idx], (0.0, 360.0))
+        else:
+            start_val, end_val = (0.0, 360.0)
+        ranges[name] = [float(start_val), float(end_val)]
     cfg["color_hue_ranges"] = ranges
+
 
 def normalize_color_config(cfg: dict) -> dict:
     _auto_fill_color_config(cfg)
@@ -301,13 +367,17 @@ def normalize_color_config(cfg: dict) -> dict:
 
 
 def get_color_hue_range(cfg: dict, color: str) -> Tuple[float, float]:
-    ranges = cfg.get("color_hue_ranges") or {}
-    value = ranges.get(color)
-    try:
-        start, end = value
-        return float(start), float(end)
-    except Exception:
-        return DEFAULT_COLOR_HUE_RANGES.get(color, (0.0, 360.0))
+    ranges_obj = cfg.get("color_hue_ranges")
+    ranges_map = ranges_obj if isinstance(ranges_obj, dict) else {}
+    value = ranges_map.get(color)
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            start = float(value[0])
+            end = float(value[1])
+            return start, end
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_COLOR_HUE_RANGES.get(color, (0.0, 360.0))
 
 
 DEFAULT_CONFIG = {
@@ -544,48 +614,55 @@ class EnhancedImageFeatures:
 
 
 def _make_adaptive_led_mask(v: np.ndarray, config: dict) -> Tuple[np.ndarray, float]:
-    """自適應 LED 遮罩生成，回傳 (mask, used_threshold)。"""
+    """Adaptive LED mask generator returning (mask, used_threshold)."""
     try:
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        v = clahe.apply(v)
+        v_equalized = clahe.apply(v)
         methods = [
             (cv2.THRESH_BINARY + cv2.THRESH_OTSU, "Otsu"),
             (cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE, "Triangle"),
         ]
-        best_mask, best_score, used_thr = None, 0.0, 0.0
+        best_mask: Optional[np.ndarray] = None
+        best_score = 0.0
+        used_thr = 0.0
 
         for method, _ in methods:
-            thr, m = cv2.threshold(v, 0, 255, method)
-            m = m.astype(np.uint8)
+            thr_val, mask_arr = cv2.threshold(v_equalized, 0, 255, method)
+            mask_u8 = np.asarray(mask_arr, dtype=np.uint8)
 
-            area_ratio = float(np.count_nonzero(m)) / float(m.size)
+            area_ratio = float(np.count_nonzero(mask_u8)) / float(mask_u8.size)
             if (
                 config["min_led_area_ratio"]
                 <= area_ratio
                 <= config["max_led_area_ratio"]
             ):
-                score = 1.0 - abs(area_ratio - 0.3)  # 偏好 ~30%
+                score = 1.0 - abs(area_ratio - 0.3)
                 if score > best_score:
-                    best_mask, best_score, used_thr = m, score, float(thr)
+                    best_mask = mask_u8
+                    best_score = score
+                    used_thr = float(thr_val)
 
         if best_mask is None:
-            used_thr, best_mask = cv2.threshold(
-                v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            fallback_thr, fallback_mask = cv2.threshold(
+                v_equalized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
             )
-            best_mask = best_mask.astype(np.uint8)
-            used_thr = float(used_thr)
+            best_mask = np.asarray(fallback_mask, dtype=np.uint8)
+            used_thr = float(fallback_thr)
 
-        # 形態學清理
         k = get_morph_kernel(int(config.get("morphology_kernel_size", 3)))
-        best_mask = cv2.morphologyEx(best_mask, cv2.MORPH_OPEN, k, iterations=1)
-        best_mask = cv2.morphologyEx(best_mask, cv2.MORPH_CLOSE, k, iterations=1)
+        best_mask = np.asarray(
+            cv2.morphologyEx(best_mask, cv2.MORPH_OPEN, k, iterations=1),
+            dtype=np.uint8,
+        )
+        best_mask = np.asarray(
+            cv2.morphologyEx(best_mask, cv2.MORPH_CLOSE, k, iterations=1),
+            dtype=np.uint8,
+        )
 
-        # 只保留最大連通區
         best_mask = _keep_largest_component(
             best_mask, min_area=int(config.get("hole_min_area", 20))
         )
 
-        # 遮罩過大時自動收縮（避免把整張亮區吃進來）
         if bool(config.get("mask_shrink_when_large", True)):
             max_ratio = float(config.get("max_led_area_ratio", 0.98))
             target = float(config.get("mask_shrink_target", 0.85))
@@ -594,18 +671,25 @@ def _make_adaptive_led_mask(v: np.ndarray, config: dict) -> Tuple[np.ndarray, fl
             area_ratio = float(np.count_nonzero(best_mask)) / float(best_mask.size)
             it = 0
             while area_ratio > max_ratio and it < iter_max:
-                best_mask = cv2.erode(best_mask, k, iterations=1)
+                best_mask = np.asarray(
+                    cv2.erode(best_mask, k, iterations=1),
+                    dtype=np.uint8,
+                )
                 area_ratio = float(np.count_nonzero(best_mask)) / float(best_mask.size)
                 it += 1
 
             if area_ratio > target and it < iter_max:
-                best_mask = cv2.erode(best_mask, k, iterations=1)
+                best_mask = np.asarray(
+                    cv2.erode(best_mask, k, iterations=1),
+                    dtype=np.uint8,
+                )
 
         return best_mask, used_thr
 
     except Exception as e:
-        logger.error(f"遮罩生成失敗：{e}")
-        return (np.ones_like(v, dtype=np.uint8) * 255, 128.0)
+        logger.error(f"LED mask generation failed: {e}")
+        fallback = np.asarray(np.ones_like(v, dtype=np.uint8) * 255, dtype=np.uint8)
+        return fallback, 128.0
 
 
 def _keep_largest_component(mask: np.ndarray, min_area: int = 50) -> np.ndarray:
@@ -637,9 +721,12 @@ def _rotation_invariant_hist(
             hsv_r = cv2.warpAffine(hsv, M, (w, h))
             mask_r = cv2.warpAffine(mask, M, (w, h))
         hist = cv2.calcHist([hsv_r], [0, 1, 2], mask_r, bins, [0, 180, 0, 256, 0, 256])
-        acc += hist
-    acc = cv2.normalize(acc, acc).flatten()
-    return acc
+        hist_arr = np.asarray(hist, dtype=np.float32)
+        acc = np.add(acc, hist_arr, out=acc)
+    normed = cv2.normalize(acc, dst=np.empty_like(acc))
+    if normed is None:
+        normed = acc
+    return np.asarray(normed, dtype=np.float32).flatten()
 
 
 def _compute_geometric(mask: np.ndarray) -> Tuple[float, float, float]:
@@ -663,23 +750,30 @@ def _texture_energy(v: np.ndarray, mask: np.ndarray) -> float:
         return 0.0
     gx = cv2.Sobel(v, cv2.CV_32F, 1, 0, ksize=3)
     gy = cv2.Sobel(v, cv2.CV_32F, 0, 1, ksize=3)
-    mag = cv2.magnitude(gx, gy)
-    return float(np.std(mag[mask > 0]))
+    mag = np.asarray(cv2.magnitude(gx, gy), dtype=np.float32)
+    active = mag[mask > 0]
+    if active.size == 0:
+        return 0.0
+    return float(np.std(active))
 
 
 def _blackhat_holes(v: np.ndarray, mask: np.ndarray, cfg: dict) -> np.ndarray:
     ksize = int(cfg.get("blackhat_kernel", 9))
     k = get_morph_kernel(ksize)
-    closed = cv2.morphologyEx(v, cv2.MORPH_CLOSE, k)
-    bh = cv2.subtract(closed, v)  # 亮底上的暗洞回應越大
-    bh_in = bh[mask > 0].astype(np.float32)
+    closed = np.asarray(cv2.morphologyEx(v, cv2.MORPH_CLOSE, k), dtype=np.uint8)
+    v_u8 = np.asarray(v, dtype=np.uint8)
+    bh = np.asarray(cv2.subtract(closed, v_u8), dtype=np.float32)
+    mask_active = np.asarray(mask > 0, dtype=bool)
+    bh_in = bh[mask_active]
     if bh_in.size == 0:
-        return np.zeros_like(v, dtype=np.uint8)
-    thr = float(np.mean(bh_in) + cfg.get("hole_k", 3.0) * np.std(bh_in))
-    hole = ((bh > thr) & (mask > 0)).astype(np.uint8) * 255
-    # 清理
-    hole = cv2.morphologyEx(hole, cv2.MORPH_OPEN, k, iterations=1)
-    hole = cv2.morphologyEx(hole, cv2.MORPH_CLOSE, k, iterations=1)
+        return np.zeros_like(v_u8, dtype=np.uint8)
+    hole_k = float(cfg.get("hole_k", 3.0))
+    thr = float(np.mean(bh_in) + hole_k * np.std(bh_in))
+    hole_bool = (bh > thr) & mask_active
+    hole = np.zeros_like(v_u8, dtype=np.uint8)
+    hole[hole_bool] = 255
+    hole = np.asarray(cv2.morphologyEx(hole, cv2.MORPH_OPEN, k, iterations=1), dtype=np.uint8)
+    hole = np.asarray(cv2.morphologyEx(hole, cv2.MORPH_CLOSE, k, iterations=1), dtype=np.uint8)
     return hole
 
 
@@ -965,10 +1059,10 @@ def _decide_color_robust(
         return "White", 0.0, {}, {}
 
     if np.count_nonzero(mask) == 0:
-        coverage = {color: 0.0 for color in color_names}
+        empty_coverage = {color: 0.0 for color in color_names}
         distances = {color: 1.0 for color in color_names}
         fallback = "White" if "White" in model.colors else color_names[0]
-        return fallback, 0.0, distances, coverage
+        return fallback, 0.0, distances, empty_coverage
 
     led_region = mask > 0
     h_vals = hsv[..., 0][led_region].astype(np.float32)
@@ -1026,10 +1120,11 @@ def _decide_color_robust(
 
     bins = config.get("hist_bins", [12, 12, 12])
     hist = cv2.calcHist([hsv], [0, 1, 2], mask, bins, [0, 180, 0, 256, 0, 256])
-    hist = cv2.normalize(hist, hist).flatten()
+    hist_norm = cv2.normalize(hist, dst=np.empty_like(hist))
+    hist_vec = np.asarray(hist_norm if hist_norm is not None else hist, dtype=np.float32).flatten()
 
     distances = {
-        color: bhattacharyya_dist(hist, np.array(cm.avg_color_hist))
+        color: bhattacharyya_dist(hist_vec, np.array(cm.avg_color_hist, dtype=np.float32))
         for color, cm in model.colors.items()
     }
     if not distances:
@@ -1040,7 +1135,7 @@ def _decide_color_robust(
         color: float(dist) + (1.0 - coverage.get(color, 0.0)) * hue_weight
         for color, dist in distances.items()
     }
-    best_candidate = min(scored, key=scored.get)
+    best_candidate = min(scored, key=lambda color: scored[color])
     best_color = best_candidate
 
     if white_score is not None and white_score > white_threshold:
@@ -1166,7 +1261,6 @@ def _build_color_model_statistics(
     }
 
 
-
 def _maybe_update_auto_hue_ranges(cfg: dict, color_models: Dict[str, "EnhancedColorModel"]) -> List[str]:
     """Derive hue ranges for colors that do not have explicit config."""
     ranges = dict(cfg.get("color_hue_ranges") or {})
@@ -1216,6 +1310,7 @@ def _maybe_update_auto_hue_ranges(cfg: dict, color_models: Dict[str, "EnhancedCo
     if updated:
         cfg["color_hue_ranges"] = ranges
     return updated
+
 
 def build_enhanced_reference(ref_dir: Path, cfg: dict) -> EnhancedReferenceModel:
     cfg = normalize_color_config(cfg)
@@ -1555,7 +1650,7 @@ def enhanced_detect_one(
 
     if chosen_color not in model.colors:
         if dist_by_color:
-            chosen_color = min(dist_by_color, key=dist_by_color.get)
+            chosen_color = min(dist_by_color, key=lambda name: dist_by_color[name])
             if not manual_override:
                 color_conf = auto_conf
         else:
@@ -1877,8 +1972,6 @@ def cmd_detect_dir(args: argparse.Namespace) -> None:
     print(f"📈 CSV：{csv_path}")
 
 
-
-
 def _get_visual_font() -> "FontProperties":
     from matplotlib.font_manager import FontProperties
 
@@ -1903,9 +1996,9 @@ def _visualize_color_analysis(
     mask, _ = _make_adaptive_led_mask(hsv[..., 2], model.config)
     led_mask = mask > 0
 
-    h_values = hsv[..., 0][led_mask]
-    s_values = hsv[..., 1][led_mask]
-    v_values = hsv[..., 2][led_mask]
+    h_values = np.asarray(hsv[..., 0][led_mask], dtype=np.float32)
+    s_values = np.asarray(hsv[..., 1][led_mask], dtype=np.float32)
+    v_values = np.asarray(hsv[..., 2][led_mask], dtype=np.float32)
 
     fig = plt.figure(figsize=(15, 10))
     plt.rcParams["figure.facecolor"] = "white"
@@ -2257,7 +2350,10 @@ def _analyze_directory(args: argparse.Namespace, model: "EnhancedReferenceModel"
 
 
 def cmd_analyze(args: argparse.Namespace) -> None:
-    model = EnhancedReferenceModel.from_json(Path(args.model))
+    model_arg = getattr(args, "model", None)
+    if not isinstance(model_arg, (str, os.PathLike)):
+        raise TypeError("model path must be a string or PathLike")
+    model = EnhancedReferenceModel.from_json(Path(model_arg))
 
     image_arg = getattr(args, "image", None)
     dir_arg = getattr(args, "dir", None)
@@ -2266,11 +2362,12 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     has_dir = bool(dir_arg)
 
     if has_image:
-        try:
+        image_path: Optional[Path]
+        if isinstance(image_arg, (str, os.PathLike)):
             image_path = Path(image_arg)
-        except (TypeError, ValueError):
+        else:
             image_path = None
-        if image_path and image_path.is_dir():
+        if image_path is not None and image_path.is_dir():
             # allow --image pointing to a directory
             dir_arg = str(image_path)
             has_dir = True
@@ -2291,9 +2388,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         _analyze_single(args, model)
 
 
-
 def cmd_info(args: argparse.Namespace) -> None:
-    m = EnhancedReferenceModel.from_json(Path(args.model))
+    model_arg = getattr(args, "model", None)
+    if not isinstance(model_arg, (str, os.PathLike)):
+        raise TypeError("model path must be a string or PathLike")
+    m = EnhancedReferenceModel.from_json(Path(model_arg))
     print("=" * 50)
     print("模型資訊")
     print("=" * 50)

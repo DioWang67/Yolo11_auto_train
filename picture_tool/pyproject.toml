@@ -25,5 +25,9 @@ dependencies = [
 picture-tool-pipeline = "main_pipeline:main"
 picture-tool-gui = "gui:main"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["picture_tool", "picture_tool.*", "gui", "gui.*"]
+
 [tool.setuptools.package-data]
 picture_tool = ["**/*.py"]

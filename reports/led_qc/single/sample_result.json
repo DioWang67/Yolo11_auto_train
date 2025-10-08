@@ -1,22 +1,36 @@
 {
   "file": "data\\led_qc\\samples\\sample.png",
-  "timestamp": "2025-09-26 13:59:52",
+  "timestamp": "2025-10-03 09:31:03",
   "result": {
-    "is_anomaly": false,
-    "severity_score": 0.0,
-    "reasons": [],
-    "recommendations": [],
+    "is_anomaly": true,
+    "severity_score": 0.959701942637026,
+    "reasons": [
+      "色彩分布異常 (dist=0.600 > 0.250)",
+      "旋轉不變特徵異常 (dist=0.600 > 0.250)"
+    ],
+    "recommendations": [
+      "檢查 LED 發光波長/螢光粉一致性與製程穩定度"
+    ],
     "color_used": "Red",
-    "color_confidence": 0.8905703919275094,
-    "feature_anomalies": {},
-    "processing_time": 0.003991127014160156,
+    "color_confidence": 0.6401103319582013,
+    "feature_anomalies": {
+      "color_histogram": 2.399254856592565,
+      "rotation_invariant": 2.399254856592565
+    },
+    "processing_time": 0.008030891418457031,
     "anomaly_regions": [],
     "color_diagnostics": {
       "distances": {
-        "Red": 0.18238268012081776
+        "Red": 0.5998161134029978,
+        "Green": 1.0,
+        "Blue": 1.0,
+        "White": 1.0
       },
       "hue_coverage": {
-        "Red": 1.0
+        "Red": 1.0,
+        "Green": 0.0,
+        "Blue": 0.0,
+        "White": 0.6080760095011877
       }
     }
   },
@@ -3493,7 +3507,7 @@
     "mask_area": 2105,
     "valid_mask": true,
     "confidence_score": 1.0,
-    "processing_time": 0.001996755599975586,
+    "processing_time": 0.0010004043579101562,
     "mean_hsv": [
       4.389064275260884,
       245.53729216152018,

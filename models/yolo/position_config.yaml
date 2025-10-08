@@ -1,0 +1,9 @@
+﻿# Sample position configuration for YOLO position validation
+# Customize per product/area using imgsz-aligned coordinates.
+PCBA1:
+  A:
+    enabled: true
+    mode: bbox
+    tolerance: 2.0
+    expected_boxes:
+      J5-1: {x1: 400, y1: 200, x2: 540, y2: 340}

@@ -1,34 +1,23 @@
 import sys
 import os
 from pathlib import Path
-
 import yaml
+from typing import Optional
 
 if __name__ == "__main__" or __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PyQt5.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QVBoxLayout,
-    QHBoxLayout,
-    QWidget,
-    QPushButton,
-    QLabel,
-    QTextEdit,
-    QProgressBar,
-    QGroupBox,
-    QCheckBox,
-    QLineEdit,
-    QFileDialog,
-    QSplitter,
-    QTabWidget,
-    QScrollArea,
-    QGridLayout,
-    QMessageBox,
-    QToolButton,
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
+    QPushButton, QLabel, QTextEdit, QProgressBar, QGroupBox,
+    QCheckBox, QLineEdit, QFileDialog, QSplitter, QTabWidget,
+    QScrollArea, QGridLayout, QMessageBox, QToolButton,
+    QDialog, QDialogButtonBox, QFrame
 )
 from PyQt5.QtCore import Qt
+
+POSITION_TASK_LABEL = "位置檢查"
+YOLO_TRAIN_LABEL = "YOLO訓練"
 
 from picture_tool.gui.task_thread import WorkerThread
 
@@ -36,8 +25,7 @@ from picture_tool.gui.task_thread import WorkerThread
 class CompactCheckBox(QCheckBox):
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
-        self.setStyleSheet(
-            """
+        self.setStyleSheet("""
             QCheckBox {
                 font-size: 9pt;
                 color: #2c3e50;
@@ -59,13 +47,10 @@ class CompactCheckBox(QCheckBox):
             QCheckBox::indicator:hover {
                 border-color: #80bdff;
             }
-        """
-        )
+        """)
 
 
 class CompactButton(QPushButton):
-    """緊湊型按鈕"""
-
     def __init__(self, text, color_theme="primary", parent=None):
         super().__init__(text, parent)
         self.color_theme = color_theme
@@ -87,9 +72,8 @@ class CompactButton(QPushButton):
                 color: #dee2e6;
             }
         """
-
-        if self.color_theme == "primary":
-            color_style = """
+        color_styles = {
+            "primary": """
                 QPushButton {
                     background-color: #007bff;
                     color: white;
@@ -100,9 +84,8 @@ class CompactButton(QPushButton):
                 QPushButton:pressed {
                     background-color: #004085;
                 }
-            """
-        elif self.color_theme == "success":
-            color_style = """
+            """,
+            "success": """
                 QPushButton {
                     background-color: #28a745;
                     color: white;
@@ -113,9 +96,8 @@ class CompactButton(QPushButton):
                 QPushButton:pressed {
                     background-color: #1e7e34;
                 }
-            """
-        elif self.color_theme == "danger":
-            color_style = """
+            """,
+            "danger": """
                 QPushButton {
                     background-color: #dc3545;
                     color: white;
@@ -126,11 +108,164 @@ class CompactButton(QPushButton):
                 QPushButton:pressed {
                     background-color: #bd2130;
                 }
+            """,
+            "secondary": """
+                QPushButton {
+                    background-color: #6c757d;
+                    color: white;
+                }
+                QPushButton:hover {
+                    background-color: #5a6268;
+                }
+                QPushButton:pressed {
+                    background-color: #545b62;
+                }
             """
-        else:
-            color_style = base_style
+        }
+        self.setStyleSheet(base_style + color_styles.get(self.color_theme, ""))
 
-        self.setStyleSheet(base_style + color_style)
+
+class PositionSettingsDialog(QDialog):
+    def __init__(self, parent, settings: dict):
+        super().__init__(parent)
+        self.setWindowTitle("YOLO 位置檢查設定")
+        self.setMinimumWidth(500)
+        self._settings = settings or {}
+
+        layout = QVBoxLayout(self)
+        form = QGridLayout()
+        form.setSpacing(8)
+
+        # 基本設定
+        self.product_edit = QLineEdit(self._settings.get("product") or "")
+        self.area_edit = QLineEdit(self._settings.get("area") or "")
+        
+        form.addWidget(QLabel("產品:"), 0, 0)
+        form.addWidget(self.product_edit, 0, 1)
+        form.addWidget(QLabel("區域:"), 1, 0)
+        form.addWidget(self.area_edit, 1, 1)
+
+        # 模型參數
+        imgsz_value = self._settings.get("imgsz")
+        self.imgsz_edit = QLineEdit("" if imgsz_value in (None, "") else str(imgsz_value))
+        conf_value = self._settings.get("conf")
+        self.conf_edit = QLineEdit("" if conf_value in (None, "") else str(conf_value))
+        tol_value = self._settings.get("tolerance_override")
+        self.tolerance_edit = QLineEdit("" if tol_value in (None, "") else str(tol_value))
+
+        form.addWidget(QLabel("影像尺寸:"), 2, 0)
+        form.addWidget(self.imgsz_edit, 2, 1)
+        form.addWidget(QLabel("信心閾值:"), 3, 0)
+        form.addWidget(self.conf_edit, 3, 1)
+        form.addWidget(QLabel("容差 (%):"), 4, 0)
+        form.addWidget(self.tolerance_edit, 4, 1)
+
+        # 分隔線
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        form.addWidget(line, 5, 0, 1, 2)
+
+        # 路徑設定
+        self.sample_dir_edit = QLineEdit(self._settings.get("sample_dir") or "")
+        sample_btn = CompactButton("瀏覽", "secondary")
+        sample_btn.clicked.connect(self._browse_sample_dir)
+        sample_layout = QHBoxLayout()
+        sample_layout.addWidget(self.sample_dir_edit)
+        sample_layout.addWidget(sample_btn)
+        form.addWidget(QLabel("樣本資料夾:"), 6, 0)
+        form.addLayout(sample_layout, 6, 1)
+
+        self.config_path_edit = QLineEdit(self._settings.get("config_path") or "")
+        config_btn = CompactButton("瀏覽", "secondary")
+        config_btn.clicked.connect(self._browse_config_path)
+        config_layout = QHBoxLayout()
+        config_layout.addWidget(self.config_path_edit)
+        config_layout.addWidget(config_btn)
+        form.addWidget(QLabel("設定檔:"), 7, 0)
+        form.addLayout(config_layout, 7, 1)
+
+        self.output_dir_edit = QLineEdit(self._settings.get("output_dir") or "")
+        output_btn = CompactButton("瀏覽", "secondary")
+        output_btn.clicked.connect(self._browse_output_dir)
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(self.output_dir_edit)
+        output_layout.addWidget(output_btn)
+        form.addWidget(QLabel("輸出資料夾:"), 8, 0)
+        form.addLayout(output_layout, 8, 1)
+
+        self.weights_path_edit = QLineEdit(self._settings.get("weights") or "")
+        weights_btn = CompactButton("瀏覽", "secondary")
+        weights_btn.clicked.connect(self._browse_weights_path)
+        weights_layout = QHBoxLayout()
+        weights_layout.addWidget(self.weights_path_edit)
+        weights_layout.addWidget(weights_btn)
+        form.addWidget(QLabel("權重檔:"), 9, 0)
+        form.addLayout(weights_layout, 9, 1)
+
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse_sample_dir(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "選擇樣本資料夾", self.sample_dir_edit.text() or ""
+        )
+        if directory:
+            self.sample_dir_edit.setText(directory)
+
+    def _browse_config_path(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "選擇位置設定檔", self.config_path_edit.text() or "",
+            "YAML files (*.yaml *.yml)"
+        )
+        if file_path:
+            self.config_path_edit.setText(file_path)
+
+    def _browse_output_dir(self):
+        directory = QFileDialog.getExistingDirectory(
+            self, "選擇輸出資料夾", self.output_dir_edit.text() or ""
+        )
+        if directory:
+            self.output_dir_edit.setText(directory)
+
+    def _browse_weights_path(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "選擇權重檔", self.weights_path_edit.text() or "",
+            "Model files (*.pt *.onnx *.engine);;All files (*.*)"
+        )
+        if file_path:
+            self.weights_path_edit.setText(file_path)
+
+    def get_settings(self):
+        return {
+            "product": self.product_edit.text().strip() or None,
+            "area": self.area_edit.text().strip() or None,
+            "imgsz": self._parse_int(self.imgsz_edit.text()),
+            "tolerance_override": self._parse_float(self.tolerance_edit.text()),
+            "conf": self._parse_float(self.conf_edit.text()),
+            "sample_dir": self.sample_dir_edit.text().strip() or None,
+            "config_path": self.config_path_edit.text().strip() or None,
+            "output_dir": self.output_dir_edit.text().strip() or None,
+            "weights": self.weights_path_edit.text().strip() or None,
+        }
+
+    @staticmethod
+    def _parse_int(value: str):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_float(value: str):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 
 class PictureToolGUI(QMainWindow):
@@ -138,532 +273,825 @@ class PictureToolGUI(QMainWindow):
         super().__init__()
         self.config = {}
         self.worker_thread = None
+        self.position_settings: dict = {}
         self.init_ui()
         self.load_config()
 
     def init_ui(self):
-        self.setWindowTitle("圖像處理工具 - 響應式GUI")
-        self.setGeometry(100, 100, 1200, 800)
-        self.setMinimumSize(800, 600)
+        self.setWindowTitle("圖像處理工具")
+        self.setGeometry(100, 100, 1400, 850)
+        self.setMinimumSize(1000, 700)
 
-        # 設置全局樣式
-        self.setStyleSheet(
-            """
+        # 全局樣式
+        self.setStyleSheet("""
             QMainWindow {
-                background-color: #f8f9fa;
+                background-color: #f5f6fa;
             }
             QGroupBox {
                 font-size: 10pt;
                 font-weight: bold;
                 color: #2c3e50;
-                border: 2px solid #dee2e6;
-                border-radius: 6px;
-                margin: 8px 2px 2px 2px;
-                padding-top: 8px;
+                border: 2px solid #e1e8ed;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 10px;
                 background-color: white;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 5px 0 5px;
+                left: 12px;
+                padding: 0 6px;
+                background-color: white;
             }
             QTextEdit {
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
+                border: 1px solid #e1e8ed;
+                border-radius: 6px;
                 background-color: #ffffff;
-                font-family: 'Consolas', monospace;
+                font-family: 'Consolas', 'Monaco', monospace;
                 font-size: 9pt;
-                padding: 8px;
+                padding: 10px;
             }
             QProgressBar {
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
+                border: 1px solid #e1e8ed;
+                border-radius: 6px;
                 background-color: #f8f9fa;
                 text-align: center;
                 font-size: 9pt;
                 font-weight: bold;
                 color: #2c3e50;
-                height: 20px;
+                height: 24px;
             }
             QProgressBar::chunk {
-                background-color: #28a745;
-                border-radius: 3px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #28a745, stop:1 #20c997);
+                border-radius: 5px;
             }
-            QComboBox, QLineEdit {
-                padding: 4px 8px;
+            QLineEdit {
+                padding: 6px 10px;
                 border: 1px solid #ced4da;
-                border-radius: 4px;
+                border-radius: 5px;
                 background-color: white;
                 font-size: 9pt;
-                min-height: 16px;
+                min-height: 20px;
             }
-            QComboBox:hover, QLineEdit:hover {
-                border-color: #80bdff;
-            }
-            QComboBox:focus, QLineEdit:focus {
-                border-color: #007bff;
+            QLineEdit:focus {
+                border: 2px solid #007bff;
             }
             QLabel {
                 font-size: 9pt;
                 color: #495057;
             }
-        """
-        )
+            QScrollArea {
+                border: none;
+            }
+        """)
 
-        # 中央部件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-
-        # 使用 QSplitter 來創建可調整的佈局
         main_splitter = QSplitter(Qt.Horizontal)
         central_layout = QVBoxLayout(central_widget)
-        central_layout.setContentsMargins(5, 5, 5, 5)
+        central_layout.setContentsMargins(8, 8, 8, 8)
         central_layout.addWidget(main_splitter)
 
-        # 左側面板（使用滾動區域）
+        # 左側面板
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        left_scroll.setMinimumWidth(280)
-        left_scroll.setMaximumWidth(400)
-
+        left_scroll.setMinimumWidth(320)
+        left_scroll.setMaximumWidth(450)
         left_panel = self.create_left_panel()
         left_scroll.setWidget(left_panel)
 
         # 右側面板
         right_panel = self.create_right_panel()
 
-        # 添加到分割器
         main_splitter.addWidget(left_scroll)
         main_splitter.addWidget(right_panel)
-
-        # 設置初始比例
-        main_splitter.setSizes([300, 700])
+        main_splitter.setSizes([350, 900])
 
     def create_left_panel(self):
-        """創建左側控制面板"""
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setSpacing(8)
-        left_layout.setContentsMargins(5, 5, 5, 5)
+        left_layout.setSpacing(10)
+        left_layout.setContentsMargins(8, 8, 8, 8)
 
-        # 配置文件選擇 - 緊湊版
-        config_group = QGroupBox("配置設定")
+        # 1. 配置設定
+        config_group = QGroupBox("⚙️ 配置設定")
         config_layout = QVBoxLayout(config_group)
-        config_layout.setSpacing(6)
+        config_layout.setSpacing(8)
 
-        # 配置文件路徑
         try:
             default_cfg_path = str((Path(__file__).parent / "config.yaml").resolve())
         except Exception:
             default_cfg_path = os.path.join("picture_tool", "config.yaml")
 
         self.config_path_edit = QLineEdit(default_cfg_path)
-        self.config_path_edit.setToolTip("配置文件路徑")
+        self.config_path_edit.setPlaceholderText("配置文件路徑")
 
         config_btn_layout = QHBoxLayout()
-        config_btn_layout.setSpacing(4)
-        config_browse_btn = CompactButton("瀏覽", "primary")
+        config_btn_layout.setSpacing(6)
+        config_browse_btn = CompactButton("📁 瀏覽", "primary")
         config_browse_btn.clicked.connect(self.browse_config_file)
-        reload_config_btn = CompactButton("重載", "primary")
+        reload_config_btn = CompactButton("🔄 重載", "success")
         reload_config_btn.clicked.connect(self.load_config)
-
         config_btn_layout.addWidget(config_browse_btn)
         config_btn_layout.addWidget(reload_config_btn)
 
-        config_layout.addWidget(QLabel("配置文件:"))
         config_layout.addWidget(self.config_path_edit)
         config_layout.addLayout(config_btn_layout)
 
-        # 任務選擇 - 緊湊版
-        task_group = QGroupBox("任務選擇")
+        # 2. 任務選擇 (單一清單，移除重複)
+        task_group = QGroupBox("📋 任務選擇")
         task_layout = QVBoxLayout(task_group)
-        task_layout.setSpacing(2)
-        # 收合切換列（任務選擇）
-        all_toggle_bar = QHBoxLayout()
-        all_toggle_bar.addStretch()
-        all_toggle_btn = QToolButton()
-        all_toggle_btn.setCheckable(True)
-        all_toggle_btn.setChecked(True)
-        all_toggle_btn.setArrowType(Qt.DownArrow)
-        all_toggle_btn.setToolTip("展開/收起")
-        all_toggle_bar.addWidget(all_toggle_btn)
-        task_layout.addLayout(all_toggle_bar)
+        task_layout.setSpacing(6)
 
-        # 可收合容器
-        all_tasks_content = QWidget()
-        all_tasks_content_layout = QVBoxLayout(all_tasks_content)
-        all_tasks_content_layout.setSpacing(2)
-
-        # 任務複選框 - 使用網格佈局節省空間
+        # 任務清單 - 3列佈局更緊湊
         task_grid = QGridLayout()
-        task_grid.setSpacing(2)
-        task_grid.setContentsMargins(2, 2, 2, 2)
+        task_grid.setSpacing(4)
+        task_grid.setHorizontalSpacing(8)
 
         self.task_checkboxes = {}
         tasks = [
-            "格式轉換",
-            "異常檢測",
-            "YOLO數據增強",
-            "圖像數據增強",
-            "數據集分割",
-            "YOLO訓練",
-            "YOLO評估",
-            "生成報告",
-            "數據集檢查",
-            "增強預覽",
-            "批次推論",
-            "LED QC 建模",
-            "LED QC 單張檢測",
-            "LED QC 批次檢測",
-            "LED QC 分析",
+            ("格式轉換", "🔄"),
+            ("異常檢測", "🔍"),
+            ("YOLO數據增強", "📊"),
+            ("影像增強", "🎨"),
+            ("數據分割", "✂️"),
+            (YOLO_TRAIN_LABEL, "🚀"),
+            ("YOLO評估", "📈"),
+            ("生成報告", "📝"),
+            ("數據檢查", "✅"),
+            ("增強預覽", "👁️"),
+            ("批次推論", "⚡"),
+            ("LED QC 建模", "🔧"),
+            ("LED QC 單張檢測", "🔬"),
+            ("LED QC 批次檢測", "🔬"),
+            ("LED QC 分析", "📊"),
+            (POSITION_TASK_LABEL, "📍"),
         ]
 
-        # 2列佈局
-        for i, task in enumerate(tasks):
-            checkbox = CompactCheckBox(task)
+        for i, (task, icon) in enumerate(tasks):
+            checkbox = CompactCheckBox(f"{icon} {task}")
             self.task_checkboxes[task] = checkbox
             row = i // 2
             col = i % 2
             task_grid.addWidget(checkbox, row, col)
 
-        all_tasks_content_layout.addLayout(task_grid)
+        task_layout.addLayout(task_grid)
 
-        # 全選/取消全選按鈕
+        # 快速選擇按鈕
         select_layout = QHBoxLayout()
-        select_layout.setSpacing(4)
-        select_all_btn = CompactButton("全選", "success")
-        deselect_all_btn = CompactButton("取消", "danger")
+        select_layout.setSpacing(6)
+        select_all_btn = CompactButton("✓ 全選", "success")
+        deselect_all_btn = CompactButton("✗ 全不選", "danger")
+        yolo_preset_btn = CompactButton("🎯 YOLO流程", "primary")
+        
         select_all_btn.clicked.connect(self.select_all_tasks)
         deselect_all_btn.clicked.connect(self.deselect_all_tasks)
+        yolo_preset_btn.clicked.connect(self.select_yolo_preset)
+        
         select_layout.addWidget(select_all_btn)
         select_layout.addWidget(deselect_all_btn)
-        all_tasks_content_layout.addLayout(select_layout)
+        select_layout.addWidget(yolo_preset_btn)
+        task_layout.addLayout(select_layout)
 
-        task_layout.addWidget(all_tasks_content)
+        # 3. 位置檢查設定
+        position_group = QGroupBox("📍 位置檢查")
+        position_layout = QVBoxLayout(position_group)
+        position_layout.setSpacing(8)
 
-        def _toggle_all(checked):
-            all_tasks_content.setVisible(checked)
-            all_toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        # 狀態列
+        status_row = QHBoxLayout()
+        self.position_enable_cb = CompactCheckBox("✓ 啟用位置驗證")
+        self.position_enable_cb.toggled.connect(self._on_position_enabled)
+        self.position_summary_label = QLabel("未設定")
+        self.position_summary_label.setStyleSheet("""
+            QLabel {
+                color: #6c757d;
+                font-size: 9pt;
+                font-style: italic;
+                padding: 4px 8px;
+                background-color: #f8f9fa;
+                border-radius: 4px;
+            }
+        """)
+        status_row.addWidget(self.position_enable_cb)
+        status_row.addWidget(self.position_summary_label)
+        status_row.addStretch()
+        position_layout.addLayout(status_row)
 
-        all_toggle_btn.toggled.connect(_toggle_all)
+        # 操作按鈕
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self.position_settings_btn = CompactButton("⚙️ 詳細設定", "primary")
+        self.position_build_btn = CompactButton("🔨 生成配置", "secondary")
+        self.position_settings_btn.clicked.connect(self._show_position_settings_dialog)
+        self.position_build_btn.clicked.connect(self._generate_position_reference)
+        btn_row.addWidget(self.position_settings_btn)
+        btn_row.addWidget(self.position_build_btn)
+        position_layout.addLayout(btn_row)
 
-        # YOLO 訓練群組（可收合）
-        yolo_group = QGroupBox("YOLO 訓練")
-        yolo_layout = QVBoxLayout(yolo_group)
-        yolo_layout.setSpacing(2)
-
-        yolo_toggle_bar = QHBoxLayout()
-        yolo_toggle_bar.addStretch()
-        yolo_toggle_btn = QToolButton()
-        yolo_toggle_btn.setCheckable(True)
-        yolo_toggle_btn.setChecked(True)
-        yolo_toggle_btn.setArrowType(Qt.DownArrow)
-        yolo_toggle_btn.setToolTip("展開/收起")
-        yolo_toggle_bar.addWidget(yolo_toggle_btn)
-        yolo_layout.addLayout(yolo_toggle_bar)
-
-        yolo_content = QWidget()
-        yolo_content_layout = QVBoxLayout(yolo_content)
-        yolo_content_layout.setSpacing(2)
-        yolo_grid = QGridLayout()
-        yolo_grid.setSpacing(2)
-        yolo_grid.setContentsMargins(2, 2, 2, 2)
-        yolo_entries = [
-            "YOLO數據增強",
-            "數據分割",
-            "YOLO訓練",
-            "YOLO評估",
-            "生成報告",
-            "數據檢查",
-            "增強預覽",
-            "批次推論",
-        ]
-        for i, label_text in enumerate(yolo_entries):
-            cb = CompactCheckBox(label_text)
-            self.task_checkboxes[label_text] = cb
-            row = i // 2
-            col = i % 2
-            yolo_grid.addWidget(cb, row, col)
-        yolo_content_layout.addLayout(yolo_grid)
-
-        yolo_select_layout = QHBoxLayout()
-        yolo_select_layout.setSpacing(4)
-        yolo_select_all = CompactButton("全選", "success")
-        yolo_deselect_all = CompactButton("全不選", "danger")
-        yolo_select_all.clicked.connect(self.select_all_tasks)
-        yolo_deselect_all.clicked.connect(self.deselect_all_tasks)
-        yolo_select_layout.addWidget(yolo_select_all)
-        yolo_select_layout.addWidget(yolo_deselect_all)
-        yolo_content_layout.addLayout(yolo_select_layout)
-        yolo_layout.addWidget(yolo_content)
-
-        def _toggle_yolo(checked):
-            yolo_content.setVisible(checked)
-            yolo_toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
-
-        yolo_toggle_btn.toggled.connect(_toggle_yolo)
-
-        # 訓練參數覆蓋 - 摺疊式設計
-        options_group = QGroupBox("訓練參數")
+        # 4. 訓練參數
+        options_group = QGroupBox("🎛️ 訓練參數")
         options_layout = QVBoxLayout(options_group)
-        options_layout.setSpacing(4)
-        # 收合切換列（訓練參數）
-        opts_toggle_bar = QHBoxLayout()
-        opts_toggle_bar.addStretch()
-        opts_toggle_btn = QToolButton()
-        opts_toggle_btn.setCheckable(True)
-        opts_toggle_btn.setChecked(True)
-        opts_toggle_btn.setArrowType(Qt.DownArrow)
-        opts_toggle_btn.setToolTip("展開/收起")
-        opts_toggle_bar.addWidget(opts_toggle_btn)
-        options_layout.addLayout(opts_toggle_bar)
+        options_layout.setSpacing(8)
 
-        self.apply_overrides_cb = CompactCheckBox("啟用參數覆蓋")
+        self.apply_overrides_cb = CompactCheckBox("✓ 啟用參數覆寫")
         options_layout.addWidget(self.apply_overrides_cb)
 
-        # 參數輸入 - 2x2 網格
+        # 參數網格
         param_grid = QGridLayout()
-        param_grid.setSpacing(4)
+        param_grid.setSpacing(6)
+        param_grid.setVerticalSpacing(8)
 
         self.override_device_edit = QLineEdit()
-        self.override_device_edit.setPlaceholderText("設備 (0/cpu)")
+        self.override_device_edit.setPlaceholderText("0 或 cpu")
         self.override_epochs_edit = QLineEdit()
-        self.override_epochs_edit.setPlaceholderText("輪數")
+        self.override_epochs_edit.setPlaceholderText("例: 100")
         self.override_imgsz_edit = QLineEdit()
-        self.override_imgsz_edit.setPlaceholderText("圖片尺寸")
+        self.override_imgsz_edit.setPlaceholderText("例: 640")
         self.override_batch_edit = QLineEdit()
-        self.override_batch_edit.setPlaceholderText("批次大小")
+        self.override_batch_edit.setPlaceholderText("例: 16")
 
-        param_grid.addWidget(QLabel("Device:"), 0, 0)
+        param_grid.addWidget(QLabel("🖥️ 裝置:"), 0, 0)
         param_grid.addWidget(self.override_device_edit, 0, 1)
-        param_grid.addWidget(QLabel("Epochs:"), 1, 0)
+        param_grid.addWidget(QLabel("🔁 訓練輪數:"), 1, 0)
         param_grid.addWidget(self.override_epochs_edit, 1, 1)
-        param_grid.addWidget(QLabel("ImgSz:"), 2, 0)
+        param_grid.addWidget(QLabel("📏 影像尺寸:"), 2, 0)
         param_grid.addWidget(self.override_imgsz_edit, 2, 1)
-        param_grid.addWidget(QLabel("Batch:"), 3, 0)
+        param_grid.addWidget(QLabel("📦 批次大小:"), 3, 0)
         param_grid.addWidget(self.override_batch_edit, 3, 1)
 
         options_layout.addLayout(param_grid)
 
-        # GPU偵測和強制選項
-        option_buttons = QHBoxLayout()
-        option_buttons.setSpacing(4)
-        detect_btn = CompactButton("偵測GPU", "primary")
+        # 工具按鈕
+        tool_btn_layout = QHBoxLayout()
+        tool_btn_layout.setSpacing(6)
+        detect_gpu_btn = CompactButton("🔍 偵測GPU", "primary")
+        detect_gpu_btn.clicked.connect(self._detect_gpu)
+        self.force_cb = CompactCheckBox("⚠️ 強制執行")
+        tool_btn_layout.addWidget(detect_gpu_btn)
+        tool_btn_layout.addWidget(self.force_cb)
+        tool_btn_layout.addStretch()
+        options_layout.addLayout(tool_btn_layout)
 
-        def _detect_gpu():
-            try:
-                import torch
-
-                self.override_device_edit.setText(
-                    "0" if torch.cuda.is_available() else "cpu"
-                )
-            except Exception:
-                self.override_device_edit.setText("cpu")
-
-        detect_btn.clicked.connect(_detect_gpu)
-        option_buttons.addWidget(detect_btn)
-
-        self.force_cb = CompactCheckBox("強制重跑")
-        option_buttons.addWidget(self.force_cb)
-        options_layout.addLayout(option_buttons)
-        # 收合切換：延後綁定，隱藏/顯示參數元件
-
-        def _toggle_opts(checked):
-            self.apply_overrides_cb.setVisible(checked)
-            for w in [
-                self.override_device_edit,
-                self.override_epochs_edit,
-                self.override_imgsz_edit,
-                self.override_batch_edit,
-            ]:
-                w.setVisible(checked)
-            for i in range(option_buttons.count()):
-                item = option_buttons.itemAt(i)
-                wid = item.widget()
-                if wid:
-                    wid.setVisible(checked)
-            opts_toggle_btn.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
-
-        opts_toggle_btn.toggled.connect(_toggle_opts)
-
-        # 執行控制
-        control_group = QGroupBox("執行控制")
+        # 5. 控制面板
+        control_group = QGroupBox("🎮 執行控制")
         control_layout = QVBoxLayout(control_group)
-        control_layout.setSpacing(6)
+        control_layout.setSpacing(10)
 
         # 執行按鈕
-        control_btn_layout = QHBoxLayout()
-        control_btn_layout.setSpacing(6)
-        self.start_btn = CompactButton("▶ 開始", "success")
-        self.stop_btn = CompactButton("⏹ 停止", "danger")
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        self.start_btn = CompactButton("▶️ 開始執行", "success")
+        self.stop_btn = CompactButton("⏹️ 停止", "danger")
         self.stop_btn.setEnabled(False)
-
         self.start_btn.clicked.connect(self.start_pipeline)
         self.stop_btn.clicked.connect(self.stop_pipeline)
-
-        control_btn_layout.addWidget(self.start_btn)
-        control_btn_layout.addWidget(self.stop_btn)
-        control_layout.addLayout(control_btn_layout)
+        
+        # 放大按鈕
+        self.start_btn.setMinimumHeight(36)
+        self.stop_btn.setMinimumHeight(36)
+        
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.stop_btn)
+        control_layout.addLayout(btn_layout)
 
         # 進度條
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
+        self.progress_bar.setMinimumHeight(28)
         control_layout.addWidget(self.progress_bar)
 
         # 狀態標籤
-        self.status_label = QLabel("就緒")
+        self.status_label = QLabel("🟢 就緒")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.status_label.setStyleSheet(
-            """
+        self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #d4edda;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #d4edda, stop:1 #c3e6cb);
                 color: #155724;
-                padding: 6px;
-                border: 1px solid #c3e6cb;
-                border-radius: 4px;
+                padding: 10px;
+                border: 2px solid #c3e6cb;
+                border-radius: 6px;
                 font-weight: bold;
+                font-size: 10pt;
             }
-        """
-        )
+        """)
         control_layout.addWidget(self.status_label)
 
-        # 添加到主佈局
+        # 組裝左側面板
         left_layout.addWidget(config_group)
-        # 插入 YOLO 訓練群組於任務選擇之前
-        left_layout.addWidget(yolo_group)
         left_layout.addWidget(task_group)
+        left_layout.addWidget(position_group)
         left_layout.addWidget(options_group)
         left_layout.addWidget(control_group)
         left_layout.addStretch()
 
+        self._sync_position_controls()
         return left_widget
 
     def create_right_panel(self):
-        """創建右側內容面板"""
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setSpacing(8)
-        right_layout.setContentsMargins(5, 5, 5, 5)
+        right_layout.setSpacing(10)
+        right_layout.setContentsMargins(8, 8, 8, 8)
 
-        # 標題
-        title_label = QLabel("圖像處理工具管理")
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet(
-            """
-            QLabel {
-                font-size: 14pt;
-                font-weight: bold;
-                color: #2c3e50;
-                padding: 10px;
-                background-color: #e9ecef;
-                border: 1px solid #dee2e6;
-                border-radius: 6px;
+        # 標題卡片
+        title_card = QFrame()
+        title_card.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #667eea, stop:1 #764ba2);
+                border-radius: 10px;
+                padding: 15px;
             }
-        """
-        )
+        """)
+        title_layout = QVBoxLayout(title_card)
+        title_label = QLabel("🖼️ 圖像處理工具")
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setStyleSheet("""
+            QLabel {
+                font-size: 16pt;
+                font-weight: bold;
+                color: white;
+                background: transparent;
+            }
+        """)
+        subtitle_label = QLabel("智能視覺處理與 YOLO 訓練平台")
+        subtitle_label.setAlignment(Qt.AlignCenter)
+        subtitle_label.setStyleSheet("""
+            QLabel {
+                font-size: 9pt;
+                color: rgba(255, 255, 255, 0.9);
+                background: transparent;
+            }
+        """)
+        title_layout.addWidget(title_label)
+        title_layout.addWidget(subtitle_label)
 
-        # Tab Widget - 響應式設計
+        # Tab Widget
         self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet(
-            """
+        self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
+                border: 2px solid #e1e8ed;
+                border-radius: 8px;
                 background-color: white;
-                padding: 5px;
+                padding: 8px;
             }
             QTabBar::tab {
                 background-color: #f8f9fa;
                 color: #495057;
-                padding: 8px 16px;
-                margin-right: 2px;
-                border: 1px solid #dee2e6;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                font-size: 9pt;
+                padding: 10px 20px;
+                margin-right: 4px;
+                border: 2px solid #e1e8ed;
+                border-bottom: none;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                font-size: 10pt;
                 font-weight: bold;
+                min-width: 100px;
             }
             QTabBar::tab:selected {
-                background-color: #007bff;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #007bff, stop:1 #0056b3);
                 color: white;
-                border-bottom: none;
+                border-bottom: 2px solid white;
             }
             QTabBar::tab:hover:!selected {
                 background-color: #e9ecef;
             }
-        """
-        )
+        """)
 
-        # 日誌標籤頁
+        # 日誌頁
         log_widget = QWidget()
         log_layout = QVBoxLayout(log_widget)
-        log_layout.setSpacing(5)
+        log_layout.setSpacing(8)
 
         self.log_text = QTextEdit()
         self.log_text.setPlainText(
-            "歡迎使用圖像處理工具！\n請選擇任務並點擊開始執行。\n"
+            "🎉 歡迎使用圖像處理工具！\n"
+            "📝 請選擇任務並點擊開始執行。\n"
+            "💡 提示：可使用快速預設按鈕快速選擇常用任務組合。\n"
         )
-        self.log_text.setStyleSheet(
-            """
+        self.log_text.setStyleSheet("""
             QTextEdit {
-                background-color: #f8f9fa;
-                color: #2c3e50;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                font-family: 'Consolas', monospace;
+                background-color: #2c3e50;
+                color: #ecf0f1;
+                border: none;
+                border-radius: 8px;
+                font-family: 'Consolas', 'Monaco', monospace;
                 font-size: 9pt;
-                padding: 8px;
+                padding: 12px;
+                line-height: 1.5;
             }
-        """
-        )
+        """)
 
-        clear_log_btn = CompactButton("清空日誌", "danger")
+        clear_log_btn = CompactButton("🗑️ 清空日誌", "danger")
         clear_log_btn.clicked.connect(self.clear_log)
 
         log_layout.addWidget(self.log_text)
-
-        # 按鈕佈局
         log_btn_layout = QHBoxLayout()
         log_btn_layout.addStretch()
         log_btn_layout.addWidget(clear_log_btn)
         log_layout.addLayout(log_btn_layout)
 
-        # 配置預覽標籤頁
+        # 配置預覽頁
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
-        config_layout.setSpacing(5)
+        config_layout.setSpacing(8)
 
         self.config_text = QTextEdit()
         self.config_text.setPlainText("請載入配置文件...")
-        self.config_text.setStyleSheet(
-            """
+        self.config_text.setStyleSheet("""
             QTextEdit {
-                background-color: #ffffff;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                font-family: 'Consolas', monospace;
+                background-color: #f8f9fa;
+                color: #2c3e50;
+                border: none;
+                border-radius: 8px;
+                font-family: 'Consolas', 'Monaco', monospace;
                 font-size: 9pt;
-                padding: 8px;
+                padding: 12px;
             }
-        """
-        )
-
+        """)
         config_layout.addWidget(self.config_text)
 
         # 添加標籤頁
         self.tab_widget.addTab(log_widget, "📋 執行日誌")
         self.tab_widget.addTab(config_widget, "⚙️ 配置預覽")
 
-        # 添加到右側佈局
-        right_layout.addWidget(title_label)
+        right_layout.addWidget(title_card)
         right_layout.addWidget(self.tab_widget)
 
         return right_widget
 
+    def select_yolo_preset(self):
+        """快速選擇 YOLO 相關任務"""
+        yolo_tasks = [
+            "YOLO數據增強",
+            "數據分割",
+            YOLO_TRAIN_LABEL,
+            "YOLO評估",
+            "生成報告",
+            "數據檢查",
+            "增強預覽",
+            "批次推論",
+        ]
+        for task_name, checkbox in self.task_checkboxes.items():
+            checkbox.setChecked(task_name in yolo_tasks)
+        self.log_message("✅ 已選擇 YOLO 完整流程任務")
+
+    def _detect_gpu(self):
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self.override_device_edit.setText("0")
+                self.log_message(f"🎮 偵測到 GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                self.override_device_edit.setText("cpu")
+                self.log_message("⚠️ 未偵測到 GPU，將使用 CPU")
+        except Exception as e:
+            self.override_device_edit.setText("cpu")
+            self.log_message(f"⚠️ GPU 偵測失敗: {e}")
+
+    def _generate_position_reference(self):
+        self._apply_position_settings()
+        settings = dict(getattr(self, "position_settings", {}) or {})
+        product = settings.get("product")
+        area = settings.get("area")
+        if not product or not area:
+            QMessageBox.warning(self, "警告", "請先在位置檢查設定中填寫產品與區域。")
+            return
+
+        tolerance = settings.get("tolerance_override")
+        if tolerance is None:
+            tolerance = 0.0
+        
+        imgsz_value = settings.get("imgsz")
+        try:
+            imgsz_int = int(imgsz_value) if imgsz_value else 640
+        except ValueError:
+            imgsz_int = 640
+
+        conf_value = settings.get("conf")
+        try:
+            conf = float(conf_value) if conf_value else 0.25
+        except ValueError:
+            conf = 0.25
+
+        source_choice = QMessageBox(self)
+        source_choice.setWindowTitle("選擇來源")
+        source_choice.setText("要使用單張圖片還是資料夾？")
+        image_button = source_choice.addButton("選擇圖片", QMessageBox.ActionRole)
+        folder_button = source_choice.addButton("選擇資料夾", QMessageBox.ActionRole)
+        cancel_button = source_choice.addButton(QMessageBox.Cancel)
+        source_choice.exec_()
+        
+        images = []
+        if source_choice.clickedButton() == cancel_button:
+            return
+        
+        default_sample_dir = settings.get("sample_dir") or settings.get("output_dir") or ""
+        
+        if source_choice.clickedButton() == image_button:
+            files, _ = QFileDialog.getOpenFileNames(
+                self, "選擇參考圖片", default_sample_dir,
+                "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp)"
+            )
+            images = [Path(f) for f in files if f]
+            if images:
+                settings["sample_dir"] = str(images[0].parent)
+        elif source_choice.clickedButton() == folder_button:
+            folder = QFileDialog.getExistingDirectory(self, "選擇圖片資料夾", default_sample_dir)
+            if folder:
+                folder_path = Path(folder)
+                exts = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
+                images = [p for p in sorted(folder_path.iterdir()) if p.suffix.lower() in exts]
+                if images:
+                    settings["sample_dir"] = str(folder_path)
+        
+        if not images:
+            QMessageBox.information(self, "提示", "未選取任何圖片。")
+            return
+
+        weights_path = settings.get("weights")
+        chosen_weights: Optional[str] = None
+        
+        if weights_path and Path(weights_path).exists():
+            reuse = QMessageBox.question(
+                self, "使用既有權重",
+                f"是否使用目前設定的權重？\n{weights_path}",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reuse == QMessageBox.Yes:
+                chosen_weights = weights_path
+        
+        if not chosen_weights:
+            default_weights_dir = str(Path(weights_path).parent) if weights_path else ""
+            chosen_weights, _ = QFileDialog.getOpenFileName(
+                self, "選擇模型權重", default_weights_dir,
+                "PyTorch Weights (*.pt);;All Files (*.*)"
+            )
+            if not chosen_weights:
+                QMessageBox.information(self, "提示", "未選擇權重檔。")
+                return
+        
+        settings["weights"] = chosen_weights
+        weights_path = chosen_weights
+
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "輸出位置設定檔",
+            f"{product}_{area}_position.yaml",
+            "YAML Files (*.yaml *.yml)"
+        )
+        if not save_path:
+            return
+        save_path = Path(save_path)
+
+        try:
+            from ultralytics import YOLO
+        except Exception as exc:
+            QMessageBox.critical(self, "錯誤", f"無法載入 Ultralytics YOLO：{exc}")
+            return
+
+        try:
+            from picture_tool.position.yolo_position_validator import convert_results_to_detections
+        except Exception as exc:
+            QMessageBox.critical(self, "錯誤", f"無法載入位置檢查工具：{exc}")
+            return
+
+        self.log_message(f"🔨 使用權重 {weights_path} 生成參考設定...")
+        
+        try:
+            model = YOLO(weights_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "錯誤", f"載入權重失敗：{exc}")
+            return
+
+        device_value = settings.get("device")
+        if not device_value:
+            device_value = self.config.get("yolo_training", {}).get("device") if isinstance(self.config, dict) else None
+        device_str = str(device_value) if device_value else "cpu"
+
+        boxes_by_class: dict[str, list[list[int]]] = {}
+        for img_path in images:
+            try:
+                results = model(str(img_path), imgsz=imgsz_int, device=device_str, conf=conf)
+            except Exception as exc:
+                self.log_message(f"⚠️ 推論失敗 {img_path.name}: {exc}")
+                continue
+            
+            for res in results:
+                detections = convert_results_to_detections(res, imgsz_int)
+                for det in detections:
+                    cls = str(det.get("class"))
+                    bbox = det.get("bbox")
+                    if not isinstance(bbox, list) or len(bbox) != 4:
+                        continue
+                    boxes_by_class.setdefault(cls, []).append([int(v) for v in bbox])
+
+        if not boxes_by_class:
+            QMessageBox.warning(self, "提醒", "未偵測到任何物件，無法生成位置設定。")
+            return
+
+        def aggregate(boxes: list[list[int]]) -> dict[str, int]:
+            x1 = min(b[0] for b in boxes)
+            y1 = min(b[1] for b in boxes)
+            x2 = max(b[2] for b in boxes)
+            y2 = max(b[3] for b in boxes)
+            return {"x1": int(x1), "y1": int(y1), "x2": int(x2), "y2": int(y2)}
+
+        expected_boxes = {cls: aggregate(bxs) for cls, bxs in boxes_by_class.items()}
+        position_config = {
+            str(product): {
+                str(area): {
+                    "enabled": True,
+                    "mode": "bbox",
+                    "tolerance": float(tolerance or 0.0),
+                    "expected_boxes": expected_boxes,
+                }
+            }
+        }
+        if imgsz_int:
+            position_config[str(product)][str(area)]["imgsz"] = int(imgsz_int)
+
+        try:
+            with open(save_path, "w", encoding="utf-8") as fh:
+                yaml.safe_dump(position_config, fh, allow_unicode=True, sort_keys=False)
+        except Exception as exc:
+            QMessageBox.critical(self, "錯誤", f"寫入設定檔失敗：{exc}")
+            return
+
+        if not hasattr(self, "position_settings"):
+            self.position_settings = {}
+        self.position_settings.update({
+            "product": product,
+            "area": area,
+            "tolerance_override": tolerance,
+            "imgsz": imgsz_int,
+            "conf": conf,
+            "config_path": str(save_path),
+        })
+        self._apply_position_settings()
+
+        self.log_message(f"✅ 已產生位置設定：{save_path}")
+        QMessageBox.information(self, "完成", f"位置設定已寫入：{save_path}")
+
+    def _on_position_enabled(self, checked: bool):
+        self._sync_position_controls()
+        self.update_config_display()
+
+    def _show_position_settings_dialog(self):
+        dialog = PositionSettingsDialog(self, dict(self.position_settings))
+        if dialog.exec_() == QDialog.Accepted:
+            updated = dialog.get_settings()
+            for key in ("config", "device"):
+                if key not in updated:
+                    updated[key] = self.position_settings.get(key) if hasattr(self, "position_settings") else None
+            self.position_settings = updated
+            self._sync_position_controls()
+            self.update_config_display()
+
+    def _sync_position_controls(self):
+        if not hasattr(self, "position_settings_btn"):
+            return
+        
+        settings = getattr(self, "position_settings", {}) if hasattr(self, "position_settings") else {}
+        product = settings.get("product")
+        area = settings.get("area")
+        summary_core = " / ".join([str(v) for v in (product, area) if v]) or "未設定"
+        is_enabled = bool(self.position_enable_cb.isChecked()) if hasattr(self, "position_enable_cb") else False
+        
+        if hasattr(self, "position_summary_label"):
+            if is_enabled and summary_core != "未設定":
+                display_text = f"✅ {summary_core}"
+                style = """
+                    QLabel {
+                        color: #155724;
+                        background-color: #d4edda;
+                        border: 1px solid #c3e6cb;
+                        font-size: 9pt;
+                        font-weight: bold;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                    }
+                """
+            elif is_enabled:
+                display_text = "⚠️ 已啟用但未設定"
+                style = """
+                    QLabel {
+                        color: #856404;
+                        background-color: #fff3cd;
+                        border: 1px solid #ffeaa7;
+                        font-size: 9pt;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                    }
+                """
+            else:
+                display_text = "⭕ 未啟用"
+                style = """
+                    QLabel {
+                        color: #6c757d;
+                        background-color: #f8f9fa;
+                        border: 1px solid #dee2e6;
+                        font-size: 9pt;
+                        font-style: italic;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                    }
+                """
+            self.position_summary_label.setText(display_text)
+            self.position_summary_label.setStyleSheet(style)
+
+        if hasattr(self, "position_enable_cb"):
+            self.position_enable_cb.blockSignals(True)
+            self.position_enable_cb.setChecked(is_enabled)
+            self.position_enable_cb.blockSignals(False)
+
+    def _populate_position_widgets(self):
+        if not hasattr(self, "position_enable_cb"):
+            return
+        
+        ycfg = self.config.get("yolo_training", {}) if isinstance(self.config, dict) else {}
+        pos_cfg = ycfg.get("position_validation", {}) if isinstance(ycfg, dict) else {}
+        
+        self.position_settings = {
+            "product": pos_cfg.get("product"),
+            "area": pos_cfg.get("area"),
+            "imgsz": pos_cfg.get("imgsz"),
+            "tolerance_override": pos_cfg.get("tolerance_override"),
+            "conf": pos_cfg.get("conf"),
+            "sample_dir": pos_cfg.get("sample_dir"),
+            "config_path": pos_cfg.get("config_path"),
+            "output_dir": pos_cfg.get("output_dir"),
+            "weights": pos_cfg.get("weights"),
+            "config": pos_cfg.get("config"),
+            "device": pos_cfg.get("device"),
+        }
+        
+        if self.position_settings.get("imgsz") in (None, "", 0):
+            self.position_settings["imgsz"] = ycfg.get("imgsz", 640)
+        if self.position_settings.get("conf") in (None, ""):
+            self.position_settings["conf"] = 0.25
+        if self.position_settings.get("tolerance_override") in (None, ""):
+            self.position_settings["tolerance_override"] = None
+        
+        enabled = bool(pos_cfg.get("enabled", False))
+        self.position_enable_cb.blockSignals(True)
+        self.position_enable_cb.setChecked(enabled)
+        self.position_enable_cb.blockSignals(False)
+        self._sync_position_controls()
+
+    def _apply_position_settings(self):
+        if not hasattr(self, "position_enable_cb"):
+            return
+        
+        if not isinstance(self.config, dict):
+            self.config = {}
+        
+        ycfg = self.config.get("yolo_training")
+        if not isinstance(ycfg, dict):
+            ycfg = {}
+        
+        settings = dict(getattr(self, "position_settings", {}) or {})
+
+        def _ensure_int(value):
+            if isinstance(value, int):
+                return value
+            try:
+                return int(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        def _ensure_float(value):
+            if isinstance(value, float):
+                return value
+            try:
+                return float(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        pos_cfg = {
+            "enabled": bool(self.position_enable_cb.isChecked()),
+            "product": settings.get("product"),
+            "area": settings.get("area"),
+            "imgsz": _ensure_int(settings.get("imgsz")),
+            "tolerance_override": _ensure_float(settings.get("tolerance_override")),
+            "conf": _ensure_float(settings.get("conf")),
+            "sample_dir": settings.get("sample_dir"),
+            "config_path": settings.get("config_path"),
+            "output_dir": settings.get("output_dir"),
+            "weights": settings.get("weights"),
+            "config": settings.get("config"),
+            "device": settings.get("device"),
+        }
+        ycfg["position_validation"] = pos_cfg
+        self.config["yolo_training"] = ycfg
+        self._sync_position_controls()
+
     def browse_config_file(self):
-        """瀏覽配置文件"""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "選擇配置文件", "", "YAML files (*.yaml *.yml)"
         )
@@ -672,7 +1100,6 @@ class PictureToolGUI(QMainWindow):
             self.load_config()
 
     def load_default_config(self):
-        """載入默認配置"""
         default_config = {
             "pipeline": {
                 "log_file": "pipeline.log",
@@ -695,45 +1122,62 @@ class PictureToolGUI(QMainWindow):
                 "input_dir": "input/",
                 "output_dir": "output/",
             },
+            "yolo_training": {
+                "dataset_dir": "./data/split",
+                "class_names": [],
+                "imgsz": 640,
+                "position_validation": {
+                    "enabled": False,
+                    "product": None,
+                    "area": None,
+                    "imgsz": 640,
+                    "sample_dir": None,
+                    "config_path": None,
+                    "output_dir": None,
+                    "weights": None,
+                    "conf": 0.25,
+                    "tolerance_override": None,
+                },
+            },
         }
         self.config = default_config
+        self._populate_position_widgets()
         self.update_config_display()
 
     def load_config(self):
-        """載入配置文件"""
         config_path = self.config_path_edit.text()
         try:
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     self.config = yaml.safe_load(f)
-                self.log_message(f"成功載入配置文件: {config_path}")
+                self.log_message(f"✅ 成功載入配置文件: {config_path}")
+                self._populate_position_widgets()
                 self.update_config_display()
             else:
-                self.log_message(f"配置文件不存在: {config_path}")
+                self.log_message(f"⚠️ 配置文件不存在: {config_path}")
                 self.load_default_config()
         except Exception as e:
-            self.log_message(f"載入配置文件失敗: {str(e)}")
+            self.log_message(f"❌ 載入配置文件失敗: {str(e)}")
             self.load_default_config()
 
     def update_config_display(self):
-        """更新配置顯示"""
+        self._apply_position_settings()
         config_text = yaml.dump(
             self.config, default_flow_style=False, allow_unicode=True, indent=2
         )
         self.config_text.setPlainText(config_text)
 
     def select_all_tasks(self):
-        """全選任務"""
         for checkbox in self.task_checkboxes.values():
             checkbox.setChecked(True)
+        self.log_message("✅ 已選擇所有任務")
 
     def deselect_all_tasks(self):
-        """取消全選任務"""
         for checkbox in self.task_checkboxes.values():
             checkbox.setChecked(False)
+        self.log_message("❌ 已取消所有任務")
 
     def get_selected_tasks(self):
-        """獲取選中的任務"""
         selected_tasks = []
         for task_name, checkbox in self.task_checkboxes.items():
             if checkbox.isChecked():
@@ -741,36 +1185,30 @@ class PictureToolGUI(QMainWindow):
         return selected_tasks
 
     def start_pipeline(self):
-        """開始執行管道"""
         selected_tasks = self.get_selected_tasks()
         if not selected_tasks:
             QMessageBox.warning(self, "警告", "請至少選擇一個任務！")
             return
 
-        # 更新UI狀態
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText("執行中...")
-        self.status_label.setStyleSheet(
-            """
+        self.status_label.setText("🔄 執行中...")
+        self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #fff3cd;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #fff3cd, stop:1 #ffeaa7);
                 color: #856404;
-                padding: 6px;
-                border: 1px solid #ffeaa7;
-                border-radius: 4px;
+                padding: 10px;
+                border: 2px solid #ffeaa7;
+                border-radius: 6px;
                 font-weight: bold;
+                font-size: 10pt;
             }
-        """
-        )
+        """)
 
-        # 應用覆蓋與強制選項
         try:
-            if (
-                hasattr(self, "apply_overrides_cb")
-                and self.apply_overrides_cb.isChecked()
-            ):
+            if hasattr(self, "apply_overrides_cb") and self.apply_overrides_cb.isChecked():
                 yt = self.config.get("yolo_training", {}) or {}
                 dev = self.override_device_edit.text().strip()
                 ep = self.override_epochs_edit.text().strip()
@@ -785,14 +1223,51 @@ class PictureToolGUI(QMainWindow):
                 if bt.isdigit():
                     yt["batch"] = int(bt)
                 self.config["yolo_training"] = yt
+                
                 ye = self.config.get("yolo_evaluation", {}) or {}
                 if yt.get("device"):
                     ye["device"] = yt["device"]
                 self.config["yolo_evaluation"] = ye
+                
                 bi = self.config.get("batch_inference", {}) or {}
                 if yt.get("device"):
                     bi["device"] = yt["device"]
                 self.config["batch_inference"] = bi
+            
+            self._apply_position_settings()
+            pos_cfg: dict = {}
+            if isinstance(self.config, dict):
+                ycfg = self.config.get("yolo_training", {})
+                if isinstance(ycfg, dict):
+                    pos_cfg = ycfg.get("position_validation", {}) or {}
+            
+            want_position_validation = POSITION_TASK_LABEL in selected_tasks
+            train_selected = YOLO_TRAIN_LABEL in selected_tasks
+            
+            if want_position_validation and not pos_cfg.get("enabled"):
+                QMessageBox.warning(
+                    self, "警告",
+                    "已選擇位置檢查任務，但未啟用或設定位置檢查。請先在左側啟用並填寫必要欄位。"
+                )
+                self.on_pipeline_finished()
+                return
+            
+            if pos_cfg.get("enabled") and (want_position_validation or train_selected):
+                missing_fields = []
+                if not pos_cfg.get("product"):
+                    missing_fields.append("產品")
+                if not pos_cfg.get("area"):
+                    missing_fields.append("區域")
+                if not (pos_cfg.get("config_path") or pos_cfg.get("config")):
+                    missing_fields.append("位置設定檔")
+                if missing_fields:
+                    QMessageBox.warning(
+                        self, "警告",
+                        "定位檢查缺少必要欄位：" + "、".join(missing_fields)
+                    )
+                    self.on_pipeline_finished()
+                    return
+            
             if hasattr(self, "force_cb") and self.force_cb.isChecked():
                 pl = self.config.get("pipeline", {}) or {}
                 pl["force"] = True
@@ -811,76 +1286,64 @@ class PictureToolGUI(QMainWindow):
         self.worker_thread.error_occurred.connect(self.on_error_occurred)
 
         self.worker_thread.start()
-        self.log_message(f"開始執行管道，選中的任務: {', '.join(selected_tasks)}")
+        self.log_message(f"🚀 開始執行管道，選中的任務: {', '.join(selected_tasks)}")
 
     def stop_pipeline(self):
-        """停止執行管道"""
         if self.worker_thread:
             self.worker_thread.cancel()
-            self.log_message("正在停止執行...")
+            self.log_message("⏹️ 正在停止執行...")
 
     def update_progress(self, value):
-        """更新進度條"""
         self.progress_bar.setValue(value)
 
     def on_task_started(self, task_name):
-        """任務開始時的回調"""
         self.log_message(f"⚡ 開始執行任務: {task_name}")
 
     def on_task_completed(self, task_name):
-        """任務完成時的回調"""
         self.log_message(f"✅ 任務完成: {task_name}")
 
     def on_pipeline_finished(self):
-        """管道執行完成時的回調"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.status_label.setText("完成")
-        self.status_label.setStyleSheet(
-            """
+        self.status_label.setText("🟢 完成")
+        self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #d4edda;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #d4edda, stop:1 #c3e6cb);
                 color: #155724;
-                padding: 6px;
-                border: 1px solid #c3e6cb;
-                border-radius: 4px;
+                padding: 10px;
+                border: 2px solid #c3e6cb;
+                border-radius: 6px;
                 font-weight: bold;
+                font-size: 10pt;
             }
-        """
-        )
+        """)
         self.log_message("🎉 所有任務執行完成！")
 
     def on_error_occurred(self, error_message):
-        """錯誤發生時的回調"""
         self.log_message(f"❌ 錯誤: {error_message}")
         QMessageBox.critical(self, "錯誤", f"執行過程中發生錯誤:\n{error_message}")
         self.on_pipeline_finished()
 
     def log_message(self, message):
-        """添加日誌訊息"""
         from datetime import datetime
-
         timestamp = datetime.now().strftime("%H:%M:%S")
         formatted_message = f"[{timestamp}] {message}"
         self.log_text.append(formatted_message)
-        # 自動滾動到底部
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
     def clear_log(self):
-        """清空日誌"""
         self.log_text.clear()
-        self.log_message("日誌已清空")
+        self.log_message("🗑️ 日誌已清空")
 
     def closeEvent(self, event):
-        """窗口關閉事件"""
         if self.worker_thread and self.worker_thread.isRunning():
             reply = QMessageBox.question(
-                self,
-                "確認退出",
+                self, "確認退出",
                 "任務正在執行中，確定要退出嗎？",
                 QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.No
             )
             if reply == QMessageBox.Yes:
                 self.worker_thread.cancel()
@@ -893,24 +1356,18 @@ class PictureToolGUI(QMainWindow):
 
 
 def main():
-    """主函數"""
     app = QApplication(sys.argv)
-
-    # 設置應用程式
     app.setApplicationName("圖像處理工具")
-    app.setApplicationVersion("1.0")
+    app.setApplicationVersion("2.0")
     app.setOrganizationName("ImageTool Corp")
 
-    # 設置全局字體 - 使用系統預設字體
     font = app.font()
     font.setPointSize(9)
     app.setFont(font)
 
-    # 創建主窗口
     window = PictureToolGUI()
     window.show()
 
-    # 運行應用程式
     sys.exit(app.exec_())
 
 
