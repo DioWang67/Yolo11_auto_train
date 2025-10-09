@@ -1,6 +1,7 @@
 import sys
 import os
 from pathlib import Path
+import csv
 import yaml
 from typing import Optional
 
@@ -11,10 +12,11 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
     QPushButton, QLabel, QTextEdit, QProgressBar, QGroupBox,
     QCheckBox, QLineEdit, QFileDialog, QSplitter, QTabWidget,
-    QScrollArea, QGridLayout, QMessageBox, QToolButton,
-    QComboBox, QInputDialog, QDialog, QDialogButtonBox, QFrame
+    QScrollArea, QGridLayout, QMessageBox, QToolButton, QMenu,
+    QComboBox, QInputDialog, QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QFrame
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QColor, QIcon, QPixmap
 
 POSITION_TASK_LABEL = "位置檢查"
 YOLO_TRAIN_LABEL = "YOLO訓練"
@@ -279,6 +281,8 @@ class PictureToolGUI(QMainWindow):
         self.task_checkboxes: dict[str, QCheckBox] = {}
         self.task_presets: dict[str, list[str]] = {}
         self.preset_storage: dict = {'presets': {}}
+        self.task_status_items: dict[str, QListWidgetItem] = {}
+        self._status_icon_cache: dict[str, QIcon] = {}
         self.preset_config_path = PRESET_CONFIG_PATH
         self.init_ui()
         self._load_preset_storage()
@@ -441,8 +445,8 @@ class PictureToolGUI(QMainWindow):
         for index, (task, icon) in enumerate(tasks):
             checkbox = CompactCheckBox(f"{icon} {task}")
             self.task_checkboxes[task] = checkbox
-            row = index // 2
-            col = index % 2
+            row = index // 3  # 改為 3 列
+            col = index % 3
             task_grid.addWidget(checkbox, row, col)
 
         task_layout.addLayout(task_grid)
@@ -473,15 +477,73 @@ class PictureToolGUI(QMainWindow):
         manage_layout.setSpacing(6)
         self.save_preset_btn = CompactButton('儲存流程', 'secondary')
         self.delete_preset_btn = CompactButton('刪除流程', 'danger')
+        export_preset_btn = CompactButton('匯出流程', 'secondary')
+        import_preset_btn = CompactButton('匯入流程', 'secondary')
         self.save_preset_btn.clicked.connect(self.save_selected_as_preset)
         self.delete_preset_btn.clicked.connect(self.delete_selected_preset)
         self.delete_preset_btn.setEnabled(False)
+        export_preset_btn.clicked.connect(self.export_presets)
+        import_preset_btn.clicked.connect(self.import_presets)
         manage_layout.addWidget(self.save_preset_btn)
         manage_layout.addWidget(self.delete_preset_btn)
+        manage_layout.addWidget(export_preset_btn)
+        manage_layout.addWidget(import_preset_btn)
         manage_layout.addStretch()
         task_layout.addLayout(manage_layout)
 
-        # 3. 位置檢查設定
+        status_group = QGroupBox('流程狀態')
+        status_layout = QVBoxLayout(status_group)
+        self.status_list = QListWidget()
+        self.status_list.setIconSize(QSize(14, 14))
+        self.status_list.setSelectionMode(QListWidget.NoSelection)
+        self.status_list.setFocusPolicy(Qt.NoFocus)
+        self.status_list.setMaximumHeight(200)
+        status_layout.addWidget(self.status_list)
+        reset_status_btn = CompactButton('重設狀態', 'secondary')
+        reset_status_btn.clicked.connect(self.reset_task_statuses)
+        status_layout.addWidget(reset_status_btn)
+        task_layout.addWidget(status_group)
+        self._populate_status_items()
+
+        utility_layout = QHBoxLayout()
+        utility_layout.setSpacing(6)
+        self.quick_nav_btn = QToolButton()
+        self.quick_nav_btn.setText('快速導覽')
+        self.quick_nav_btn.setPopupMode(QToolButton.InstantPopup)
+        self.quick_nav_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.quick_nav_btn.setCursor(Qt.PointingHandCursor)
+        self.quick_nav_btn.setStyleSheet("""
+            QToolButton {
+                background-color: #6c757d;
+                color: white;
+                border: none;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QToolButton:hover {
+                background-color: #5a6268;
+            }
+            QToolButton:pressed {
+                background-color: #545b62;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+            }
+        """)
+        self.quick_nav_menu = QMenu(self.quick_nav_btn)
+        self.quick_nav_menu.addAction('操作指南', self.show_quick_guide)
+        self.quick_nav_btn.setMenu(self.quick_nav_menu)
+        utility_layout.addWidget(self.quick_nav_btn)
+
+        self.preflight_btn = CompactButton('啟動前檢查', 'primary')
+        self.preflight_btn.clicked.connect(self.run_preflight_check)
+        utility_layout.addWidget(self.preflight_btn)
+        utility_layout.addStretch()
+        task_layout.addLayout(utility_layout)
+
+# 3. 位置檢查設定
         position_group = QGroupBox("📍 位置檢查")
         position_layout = QVBoxLayout(position_group)
         position_layout.setSpacing(8)
@@ -624,37 +686,38 @@ class PictureToolGUI(QMainWindow):
         right_layout.setContentsMargins(8, 8, 8, 8)
 
         # 標題卡片
+
         title_card = QFrame()
         title_card.setStyleSheet("""
             QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #667eea, stop:1 #764ba2);
-                border-radius: 10px;
-                padding: 15px;
+                background-color: white;
+                border: none;
+                border-bottom: 3px solid #667eea;
+                padding: 12px;
             }
         """)
-        title_layout = QVBoxLayout(title_card)
+        title_layout = QHBoxLayout(title_card)  # 改為橫向
         title_label = QLabel("🖼️ 圖像處理工具")
-        title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("""
             QLabel {
-                font-size: 16pt;
+                font-size: 14pt;
                 font-weight: bold;
-                color: white;
+                color: #2c3e50;
                 background: transparent;
             }
         """)
         subtitle_label = QLabel("智能視覺處理與 YOLO 訓練平台")
-        subtitle_label.setAlignment(Qt.AlignCenter)
         subtitle_label.setStyleSheet("""
             QLabel {
                 font-size: 9pt;
-                color: rgba(255, 255, 255, 0.9);
+                color: #6c757d;
                 background: transparent;
+                margin-left: 10px;
             }
         """)
         title_layout.addWidget(title_label)
         title_layout.addWidget(subtitle_label)
+        title_layout.addStretch()
 
         # Tab Widget
         self.tab_widget = QTabWidget()
@@ -763,14 +826,43 @@ class PictureToolGUI(QMainWindow):
         """)
         preset_layout.addWidget(self.preset_text)
 
+        metrics_widget = QWidget()
+        metrics_layout = QVBoxLayout(metrics_widget)
+        metrics_layout.setSpacing(8)
+
+        self.metrics_text = QTextEdit()
+        self.metrics_text.setReadOnly(True)
+        self.metrics_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                color: #2c3e50;
+                border: none;
+                border-radius: 8px;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 9pt;
+                padding: 12px;
+            }
+        """)
+        metrics_layout.addWidget(self.metrics_text)
+        metrics_refresh_btn = CompactButton('重新整理指標', 'primary')
+        metrics_refresh_btn.clicked.connect(self.refresh_metrics_dashboard)
+        metrics_layout.addWidget(metrics_refresh_btn)
+
         # Tabs
-        self.tab_widget.addTab(log_widget, '執行紀錄')
-        self.tab_widget.addTab(config_widget, '設定預覽')
-        self.tab_widget.addTab(preset_widget, '流程設定')
+        self.log_tab = log_widget
+        self.tab_widget.addTab(self.log_tab, '執行紀錄')
+        self.config_tab = config_widget
+        self.tab_widget.addTab(self.config_tab, '設定預覽')
+        self.preset_tab = preset_widget
+        self.tab_widget.addTab(self.preset_tab, '流程設定')
+        self.metrics_tab = metrics_widget
+        self.tab_widget.addTab(self.metrics_tab, '重要指標')
 
         right_layout.addWidget(title_card)
         right_layout.addWidget(self.tab_widget)
 
+        self._rebuild_quick_nav_menu()
+        self.refresh_metrics_dashboard()
         return right_widget
 
 
@@ -933,6 +1025,360 @@ class PictureToolGUI(QMainWindow):
         self._update_preset_display()
         self.update_config_display()
         self.log_message(f"已刪除流程：{name}")
+
+
+    def reset_task_statuses(self, selected: Optional[list[str]] = None) -> None:
+        if not hasattr(self, 'status_list') or not self.task_status_items:
+            return
+        labels = list(self.task_status_items.keys())
+        if isinstance(selected, list):
+            selected_set = set(selected)
+        else:
+            selected_set = set(labels)
+        pending_color = QColor('#6c757d')
+        skipped_color = QColor('#adb5bd')
+        for label in labels:
+            if label in selected_set:
+                self._set_task_status(label, '待執行', pending_color)
+            else:
+                self._set_task_status(label, '略過', skipped_color)
+
+    def _populate_status_items(self) -> None:
+        if not hasattr(self, 'status_list'):
+            return
+        self.status_list.clear()
+        self.task_status_items.clear()
+        for label in self.task_checkboxes.keys():
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, label)
+            item.setFlags(Qt.ItemIsEnabled)
+            self.status_list.addItem(item)
+            self.task_status_items[label] = item
+        self.reset_task_statuses()
+
+    def _set_task_status(self, label: str, status: str, color: QColor) -> None:
+        item = self.task_status_items.get(label)
+        if not item:
+            return
+        item.setText(f"{label} - {status}")
+        item.setIcon(self._get_status_icon(color))
+        item.setData(Qt.UserRole + 1, status)
+        background = QColor(color).lighter(170)
+        item.setBackground(background)
+        item.setForeground(QColor('#212529'))
+        item.setToolTip(f"{label} 狀態：{status}")
+
+    def _get_status_icon(self, color: QColor) -> QIcon:
+        key = color.name()
+        icon = self._status_icon_cache.get(key)
+        if icon is None:
+            pixmap = QPixmap(14, 14)
+            pixmap.fill(color)
+            icon = QIcon(pixmap)
+            self._status_icon_cache[key] = icon
+        return icon
+
+    def _rebuild_quick_nav_menu(self) -> None:
+        if not hasattr(self, 'quick_nav_menu') or self.quick_nav_menu is None:
+            return
+        if not hasattr(self, 'tab_widget'):
+            return
+        self.quick_nav_menu.clear()
+        tab_entries = [
+            ('執行紀錄', getattr(self, 'log_tab', None)),
+            ('設定預覽', getattr(self, 'config_tab', None)),
+            ('流程設定', getattr(self, 'preset_tab', None)),
+            ('重要指標', getattr(self, 'metrics_tab', None)),
+        ]
+        for label, widget in tab_entries:
+            if widget is None:
+                continue
+            action = self.quick_nav_menu.addAction(label)
+            action.triggered.connect(lambda _, target=widget: self.tab_widget.setCurrentWidget(target))
+        if tab_entries:
+            self.quick_nav_menu.addSeparator()
+        guide_action = self.quick_nav_menu.addAction('操作指南')
+        guide_action.triggered.connect(self.show_quick_guide)
+
+    def show_quick_guide(self) -> None:
+        guide_text = (
+            "建議流程：\n"
+            "1. 準備資料：將原始影像放在 data/raw/images，標註放在 data/raw/labels。\n"
+            "2. 依序執行格式轉換 → 增強 → 切割 → 訓練 → 評估。\n"
+            "3. 完成後可執行批次推論與 LED QC 檢測。\n\n"
+            "Sample dataset：data/sample_dataset（可自行建立或下載示例資料）。"
+        )
+        QMessageBox.information(self, '快速導覽', guide_text)
+
+    def _validate_pipeline_configuration(self, selected_tasks: list[str]) -> list[str]:
+        issues: list[str] = []
+
+        config = self.config if isinstance(self.config, dict) else {}
+        yolo_cfg = config.get('yolo_training') if isinstance(config, dict) else None
+        if not isinstance(yolo_cfg, dict):
+            yolo_cfg = {}
+        pos_cfg = yolo_cfg.get('position_validation') if isinstance(yolo_cfg, dict) else None
+        if not isinstance(pos_cfg, dict):
+            pos_cfg = {}
+
+        want_position_validation = POSITION_TASK_LABEL in selected_tasks
+        train_selected = YOLO_TRAIN_LABEL in selected_tasks
+
+        if want_position_validation and not pos_cfg.get('enabled'):
+            issues.append('已選擇位置檢查任務，但未啟用位置檢查設定。請在左側啟用並填寫必填欄位。')
+
+        if pos_cfg.get('enabled') and (want_position_validation or train_selected):
+            missing_fields: list[str] = []
+            if not pos_cfg.get('product'):
+                missing_fields.append('產品')
+            if not pos_cfg.get('area'):
+                missing_fields.append('區域')
+            if not (pos_cfg.get('config_path') or pos_cfg.get('config')):
+                missing_fields.append('位置設定檔')
+            if missing_fields:
+                issues.append('定位檢查缺少必要欄位：' + '、'.join(missing_fields))
+
+            config_path = pos_cfg.get('config_path')
+            if isinstance(config_path, str) and config_path and not Path(config_path).exists():
+                issues.append(f'位置設定檔不存在：{config_path}')
+
+            sample_dir = pos_cfg.get('sample_dir')
+            if isinstance(sample_dir, str) and sample_dir and not Path(sample_dir).exists():
+                issues.append(f'定位樣本資料夾不存在：{sample_dir}')
+
+        if train_selected:
+            dataset_dir = yolo_cfg.get('dataset_dir') if isinstance(yolo_cfg, dict) else None
+            if isinstance(dataset_dir, str) and dataset_dir and not Path(dataset_dir).exists():
+                issues.append(f'YOLO 訓練資料集不存在：{dataset_dir}')
+
+        return issues
+
+    def run_preflight_check(self) -> None:
+        selected_tasks = self.get_selected_tasks()
+        if not selected_tasks:
+            QMessageBox.information(self, '提示', '請先勾選至少一個任務再進行檢查。')
+            return
+        self._apply_position_settings()
+        issues = self._validate_pipeline_configuration(selected_tasks)
+        if issues:
+            QMessageBox.warning(
+                self,
+                '啟動前檢查',
+                '\n'.join(issues),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                '啟動前檢查',
+                '所有檢查項目通過，準備就緒。',
+            )
+
+    def export_presets(self) -> None:
+        if not isinstance(self.preset_storage, dict) or not self.preset_storage.get('presets'):
+            QMessageBox.information(self, '提醒', '目前沒有可匯出的流程。')
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, '匯出流程設定', str(Path.cwd() / 'preset_export.yaml'), 'YAML Files (*.yaml *.yml)')
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'w', encoding='utf-8') as fh:
+                yaml.safe_dump({'presets': self.preset_storage.get('presets', {})}, fh, allow_unicode=True, sort_keys=True)
+            message = f'流程設定已匯出至：\n{file_path}'
+            QMessageBox.information(
+                self,
+                '匯出成功',
+                message,
+            )
+        except Exception as exc:
+            error_message = f'寫入檔案時發生錯誤：\n{exc}'
+            QMessageBox.critical(
+                self,
+                '匯出失敗',
+                error_message,
+            )
+
+    def import_presets(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(self, '匯入流程設定', '', 'YAML Files (*.yaml *.yml)')
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'r', encoding='utf-8') as fh:
+                data = yaml.safe_load(fh) or {}
+            presets = data.get('presets') if isinstance(data, dict) else None
+            if not isinstance(presets, dict):
+                QMessageBox.warning(self, '匯入失敗', '檔案格式不符合預期。')
+                return
+            self.preset_storage.setdefault('presets', {}).update(presets)
+            self._save_preset_storage()
+            self._rebuild_task_presets()
+            self._update_preset_display()
+            QMessageBox.information(
+                self,
+                '匯入完成',
+                '流程設定已更新。',
+            )
+        except Exception as exc:
+            error_message = f'讀取檔案時發生錯誤：\n{exc}'
+            QMessageBox.critical(
+                self,
+                '匯入失敗',
+                error_message,
+            )
+
+    def refresh_metrics_dashboard(self) -> None:
+        if not hasattr(self, 'metrics_text'):
+            return
+        summary_lines = []
+        summary_lines.append('【YOLO 訓練指標】')
+        yolo_stats = self._load_latest_yolo_metrics()
+        if yolo_stats:
+            summary_lines.extend(yolo_stats)
+        else:
+            summary_lines.append('尚未找到訓練結果 (runs/detect)。')
+        summary_lines.append('')
+        summary_lines.append('【LED QC 統計】')
+        led_stats = self._load_latest_led_metrics()
+        if led_stats:
+            summary_lines.extend(led_stats)
+        else:
+            summary_lines.append('尚未找到 LED QC 報表 (reports/led_qc)。')
+        self.metrics_text.setPlainText("\n".join(summary_lines))
+
+
+    def _load_latest_yolo_metrics(self) -> list[str]:
+        from datetime import datetime
+
+        search_roots: list[Path] = []
+        if isinstance(self.config, dict):
+            project = self.config.get('yolo_training', {}).get('project')
+            if isinstance(project, str) and project:
+                search_roots.append(Path(project))
+        for fallback in ('./runs/train', './runs/detect'):
+            candidate = Path(fallback)
+            if candidate not in search_roots:
+                search_roots.append(candidate)
+
+        candidates: list[Path] = []
+        for root in search_roots:
+            try:
+                if root.exists():
+                    candidates.extend(root.glob('**/results.csv'))
+            except Exception:
+                continue
+        if not candidates:
+            return []
+
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        try:
+            with latest.open('r', encoding='utf-8') as fh:
+                rows = list(csv.DictReader(fh))
+        except Exception:
+            return []
+        if not rows:
+            return []
+
+        last = rows[-1]
+
+        def pick(*keys: str) -> str:
+            for key in keys:
+                value = last.get(key)
+                if value not in (None, '', 'nan'):
+                    return str(value)
+            return 'N/A'
+
+        epoch = pick('epoch', 'Epoch', 'epochs')
+        map50 = pick('metrics/mAP50', 'metrics/mAP_50', 'mAP50', 'map50')
+        map50_95 = pick('metrics/mAP50-95', 'metrics/mAP_50_95', 'mAP50-95', 'map50-95')
+        precision = pick('metrics/precision(B)', 'precision', 'metrics/precision')
+        recall = pick('metrics/recall(B)', 'recall', 'metrics/recall')
+        box_loss = pick('train/box_loss', 'box_loss', 'loss/box')
+        cls_loss = pick('train/cls_loss', 'cls_loss', 'loss/cls')
+
+        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+        metrics = [
+            f"結果目錄：{self._format_relative_path(latest.parent)}",
+            f"最後更新：{last_update}",
+            f"最新 Epoch：{epoch}",
+            f"mAP50：{map50}",
+            f"mAP50-95：{map50_95}",
+            f"Precision：{precision}",
+            f"Recall：{recall}",
+        ]
+        if box_loss != 'N/A' or cls_loss != 'N/A':
+            metrics.append(f"Box/Cls Loss：{box_loss} / {cls_loss}")
+        return metrics
+
+    def _load_latest_led_metrics(self) -> list[str]:
+        from datetime import datetime
+
+        led_config = self.config.get('led_qc_enhanced', {}) if isinstance(self.config, dict) else {}
+        detect_dir_cfg = led_config.get('detect_dir', {}) if isinstance(led_config, dict) else {}
+        led_dir = Path(detect_dir_cfg.get('out_dir') or './reports/led_qc/batch')
+        fallback_dirs = [Path('./reports/led_qc'), Path('./reports/led_qc/batch')]
+
+        search_roots: list[Path] = []
+        for root in [led_dir, *fallback_dirs]:
+            if root not in search_roots:
+                search_roots.append(root)
+
+        candidates: list[Path] = []
+        for root in search_roots:
+            if root and root.exists():
+                candidates.extend(root.glob('**/*.csv'))
+        if not candidates:
+            return []
+
+        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        try:
+            with latest.open('r', encoding='utf-8') as fh:
+                rows = list(csv.DictReader(fh))
+        except Exception:
+            return []
+        if not rows:
+            return []
+
+        total = len(rows)
+        pass_markers = {'PASS', 'OK', '正常', '合格', '良品'}
+        fail_markers = {'FAIL', 'NG', '異常', '不良', 'FAILURE'}
+
+        anomalies = 0
+        for row in rows:
+            raw_status = None
+            for key in ('color_status', 'status', 'result', 'decision'):
+                if row.get(key):
+                    raw_status = row.get(key)
+                    break
+            status = (raw_status or '').strip()
+            normalized = status.upper()
+            if not status:
+                continue
+            if normalized in pass_markers or status in pass_markers:
+                continue
+            if normalized in fail_markers or status in fail_markers or status:
+                anomalies += 1
+
+        pass_count = total - anomalies
+        pass_rate = (pass_count / total * 100) if total else 0.0
+        anomaly_rate = (anomalies / total * 100) if total else 0.0
+        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+
+        metrics = [
+            f"統計檔案：{self._format_relative_path(latest)}",
+            f"最後更新：{last_update}",
+            f"樣本總數：{total}",
+        ]
+        if total:
+            metrics.append(f"疑似異常：{anomalies} ({anomaly_rate:.1f}%)")
+            metrics.append(f"良品數：{pass_count}")
+            metrics.append(f"通過率：{pass_rate:.1f}%")
+        return metrics
+
+    def _format_relative_path(self, path: Path) -> str:
+        try:
+            return str(path.resolve().relative_to(Path.cwd()))
+        except Exception:
+            return str(path)
 
     def _detect_gpu(self):
         try:
@@ -1362,6 +1808,7 @@ class PictureToolGUI(QMainWindow):
         self._populate_position_widgets()
         self._load_preset_storage()
         self.update_config_display()
+        self.refresh_metrics_dashboard()
 
     def load_config(self):
         config_path = self.config_path_edit.text()
@@ -1389,6 +1836,7 @@ class PictureToolGUI(QMainWindow):
             self._populate_position_widgets()
             self._load_preset_storage()
             self.update_config_display()
+            self.refresh_metrics_dashboard()
             
         except yaml.YAMLError as e:
             self.log_message(f"❌ YAML 解析錯誤: {str(e)}")
@@ -1444,6 +1892,17 @@ class PictureToolGUI(QMainWindow):
             self.worker_thread.deleteLater()
             self.worker_thread = None
 
+        self.reset_task_statuses(selected_tasks)
+        self._apply_position_settings()
+        validation_errors = self._validate_pipeline_configuration(selected_tasks)
+        if validation_errors:
+            QMessageBox.warning(
+                self,
+                '啟動前檢查',
+                '\n'.join(validation_errors),
+            )
+            return
+
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
@@ -1488,7 +1947,6 @@ class PictureToolGUI(QMainWindow):
                     bi["device"] = yt["device"]
                 self.config["batch_inference"] = bi
             
-            self._apply_position_settings()
             pos_cfg: dict = {}
             if isinstance(self.config, dict):
                 ycfg = self.config.get("yolo_training", {})
@@ -1545,16 +2003,25 @@ class PictureToolGUI(QMainWindow):
     def stop_pipeline(self):
         if self.worker_thread:
             self.worker_thread.cancel()
+            if hasattr(self, 'task_status_items'):
+                for label, item in self.task_status_items.items():
+                    if '執行中' in item.text():
+                        self._set_task_status(label, '已停止', QColor('#dc3545'))
             self.log_message("⏹️ 正在停止執行...")
+
 
     def update_progress(self, value):
         self.progress_bar.setValue(value)
 
     def on_task_started(self, task_name):
         self.log_message(f"⚡ 開始執行任務: {task_name}")
+        if hasattr(self, 'task_status_items'):
+            self._set_task_status(task_name, '執行中', QColor('#17a2b8'))
 
     def on_task_completed(self, task_name):
         self.log_message(f"✅ 任務完成: {task_name}")
+        if hasattr(self, 'task_status_items'):
+            self._set_task_status(task_name, '完成', QColor('#28a745'))
 
     def on_pipeline_finished(self):
         self.start_btn.setEnabled(True)
@@ -1572,12 +2039,43 @@ class PictureToolGUI(QMainWindow):
                 font-size: 10pt;
             }
         """)
+        if hasattr(self, 'task_status_items'):
+            for label, item in self.task_status_items.items():
+                if '執行中' in item.text():
+                    self._set_task_status(label, '完成', QColor('#28a745'))
+        self.refresh_metrics_dashboard()
         self.log_message("🎉 所有任務執行完成！")
 
     def on_error_occurred(self, error_message):
-        self.log_message(f"❌ 錯誤: {error_message}")
-        QMessageBox.critical(self, "錯誤", f"執行過程中發生錯誤:\n{error_message}")
-        self.on_pipeline_finished()
+        self.log_message(f'❌ 錯誤: {error_message}')
+        detail = f'執行過程中發生錯誤：\n{error_message}'
+        QMessageBox.critical(self, '錯誤', detail)
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.status_label.setText('🛑 發生錯誤')
+        self.status_label.setStyleSheet("""
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #f8d7da, stop:1 #f1b0b7);
+                color: #721c24;
+                padding: 10px;
+                border: 2px solid #f5c6cb;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 10pt;
+            }
+        """)
+        if hasattr(self, 'task_status_items'):
+            error_color = QColor('#e83e8c')
+            for label, item in self.task_status_items.items():
+                if '執行中' in item.text():
+                    self._set_task_status(label, '錯誤', error_color)
+        if self.worker_thread:
+            try:
+                self.worker_thread.wait(100)
+            except Exception:
+                pass
+            self.worker_thread = None
 
     def log_message(self, message):
         from datetime import datetime
