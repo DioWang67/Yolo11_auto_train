@@ -24,255 +24,14 @@ YOLO_TRAIN_LABEL = "YOLO訓練"
 PRESET_CONFIG_PATH = Path(__file__).parent / "preset_config.yaml"
 
 from picture_tool.gui.task_thread import WorkerThread
+from picture_tool.gui.custom_widgets import CompactCheckBox, CompactButton
+from picture_tool.gui.position_settings_dialog import PositionSettingsDialog
+from picture_tool.gui.preset_manager import PresetManagerMixin, DEFAULT_PRESET_CONFIG_PATH
+from picture_tool.gui.pipeline_validation import PipelineValidationMixin
+from picture_tool.gui.metrics_dashboard import MetricsDashboardMixin
 
 
-class CompactCheckBox(QCheckBox):
-    def __init__(self, text, parent=None):
-        super().__init__(text, parent)
-        self.setStyleSheet("""
-            QCheckBox {
-                font-size: 9pt;
-                color: #2c3e50;
-                spacing: 5px;
-                padding: 2px;
-                margin: 1px;
-            }
-            QCheckBox::indicator {
-                width: 14px;
-                height: 14px;
-                border: 1px solid #ced4da;
-                border-radius: 3px;
-                background-color: white;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #007bff;
-                border-color: #0056b3;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #80bdff;
-            }
-        """)
-
-
-class CompactButton(QPushButton):
-    def __init__(self, text, color_theme="primary", parent=None):
-        super().__init__(text, parent)
-        self.color_theme = color_theme
-        self._setup_style()
-
-    def _setup_style(self):
-        base_style = """
-            QPushButton {
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-size: 9pt;
-                font-weight: bold;
-                min-height: 24px;
-                text-align: center;
-            }
-            QPushButton:disabled {
-                background-color: #6c757d;
-                color: #dee2e6;
-            }
-        """
-        color_styles = {
-            "primary": """
-                QPushButton {
-                    background-color: #007bff;
-                    color: white;
-                }
-                QPushButton:hover {
-                    background-color: #0056b3;
-                }
-                QPushButton:pressed {
-                    background-color: #004085;
-                }
-            """,
-            "success": """
-                QPushButton {
-                    background-color: #28a745;
-                    color: white;
-                }
-                QPushButton:hover {
-                    background-color: #218838;
-                }
-                QPushButton:pressed {
-                    background-color: #1e7e34;
-                }
-            """,
-            "danger": """
-                QPushButton {
-                    background-color: #dc3545;
-                    color: white;
-                }
-                QPushButton:hover {
-                    background-color: #c82333;
-                }
-                QPushButton:pressed {
-                    background-color: #bd2130;
-                }
-            """,
-            "secondary": """
-                QPushButton {
-                    background-color: #6c757d;
-                    color: white;
-                }
-                QPushButton:hover {
-                    background-color: #5a6268;
-                }
-                QPushButton:pressed {
-                    background-color: #545b62;
-                }
-            """
-        }
-        self.setStyleSheet(base_style + color_styles.get(self.color_theme, ""))
-
-
-class PositionSettingsDialog(QDialog):
-    def __init__(self, parent, settings: dict):
-        super().__init__(parent)
-        self.setWindowTitle("YOLO 位置檢查設定")
-        self.setMinimumWidth(500)
-        self._settings = settings or {}
-
-        layout = QVBoxLayout(self)
-        form = QGridLayout()
-        form.setSpacing(8)
-
-        # 基本設定
-        self.product_edit = QLineEdit(self._settings.get("product") or "")
-        self.area_edit = QLineEdit(self._settings.get("area") or "")
-        
-        form.addWidget(QLabel("產品:"), 0, 0)
-        form.addWidget(self.product_edit, 0, 1)
-        form.addWidget(QLabel("區域:"), 1, 0)
-        form.addWidget(self.area_edit, 1, 1)
-
-        # 模型參數
-        imgsz_value = self._settings.get("imgsz")
-        self.imgsz_edit = QLineEdit("" if imgsz_value in (None, "") else str(imgsz_value))
-        conf_value = self._settings.get("conf")
-        self.conf_edit = QLineEdit("" if conf_value in (None, "") else str(conf_value))
-        tol_value = self._settings.get("tolerance_override")
-        self.tolerance_edit = QLineEdit("" if tol_value in (None, "") else str(tol_value))
-
-        form.addWidget(QLabel("影像尺寸:"), 2, 0)
-        form.addWidget(self.imgsz_edit, 2, 1)
-        form.addWidget(QLabel("信心閾值:"), 3, 0)
-        form.addWidget(self.conf_edit, 3, 1)
-        form.addWidget(QLabel("容差 (%):"), 4, 0)
-        form.addWidget(self.tolerance_edit, 4, 1)
-
-        # 分隔線
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        form.addWidget(line, 5, 0, 1, 2)
-
-        # 路徑設定
-        self.sample_dir_edit = QLineEdit(self._settings.get("sample_dir") or "")
-        sample_btn = CompactButton("瀏覽", "secondary")
-        sample_btn.clicked.connect(self._browse_sample_dir)
-        sample_layout = QHBoxLayout()
-        sample_layout.addWidget(self.sample_dir_edit)
-        sample_layout.addWidget(sample_btn)
-        form.addWidget(QLabel("樣本資料夾:"), 6, 0)
-        form.addLayout(sample_layout, 6, 1)
-
-        self.config_path_edit = QLineEdit(self._settings.get("config_path") or "")
-        config_btn = CompactButton("瀏覽", "secondary")
-        config_btn.clicked.connect(self._browse_config_path)
-        config_layout = QHBoxLayout()
-        config_layout.addWidget(self.config_path_edit)
-        config_layout.addWidget(config_btn)
-        form.addWidget(QLabel("設定檔:"), 7, 0)
-        form.addLayout(config_layout, 7, 1)
-
-        self.output_dir_edit = QLineEdit(self._settings.get("output_dir") or "")
-        output_btn = CompactButton("瀏覽", "secondary")
-        output_btn.clicked.connect(self._browse_output_dir)
-        output_layout = QHBoxLayout()
-        output_layout.addWidget(self.output_dir_edit)
-        output_layout.addWidget(output_btn)
-        form.addWidget(QLabel("輸出資料夾:"), 8, 0)
-        form.addLayout(output_layout, 8, 1)
-
-        self.weights_path_edit = QLineEdit(self._settings.get("weights") or "")
-        weights_btn = CompactButton("瀏覽", "secondary")
-        weights_btn.clicked.connect(self._browse_weights_path)
-        weights_layout = QHBoxLayout()
-        weights_layout.addWidget(self.weights_path_edit)
-        weights_layout.addWidget(weights_btn)
-        form.addWidget(QLabel("權重檔:"), 9, 0)
-        form.addLayout(weights_layout, 9, 1)
-
-        layout.addLayout(form)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _browse_sample_dir(self):
-        directory = QFileDialog.getExistingDirectory(
-            self, "選擇樣本資料夾", self.sample_dir_edit.text() or ""
-        )
-        if directory:
-            self.sample_dir_edit.setText(directory)
-
-    def _browse_config_path(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "選擇位置設定檔", self.config_path_edit.text() or "",
-            "YAML files (*.yaml *.yml)"
-        )
-        if file_path:
-            self.config_path_edit.setText(file_path)
-
-    def _browse_output_dir(self):
-        directory = QFileDialog.getExistingDirectory(
-            self, "選擇輸出資料夾", self.output_dir_edit.text() or ""
-        )
-        if directory:
-            self.output_dir_edit.setText(directory)
-
-    def _browse_weights_path(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "選擇權重檔", self.weights_path_edit.text() or "",
-            "Model files (*.pt *.onnx *.engine);;All files (*.*)"
-        )
-        if file_path:
-            self.weights_path_edit.setText(file_path)
-
-    def get_settings(self):
-        return {
-            "product": self.product_edit.text().strip() or None,
-            "area": self.area_edit.text().strip() or None,
-            "imgsz": self._parse_int(self.imgsz_edit.text()),
-            "tolerance_override": self._parse_float(self.tolerance_edit.text()),
-            "conf": self._parse_float(self.conf_edit.text()),
-            "sample_dir": self.sample_dir_edit.text().strip() or None,
-            "config_path": self.config_path_edit.text().strip() or None,
-            "output_dir": self.output_dir_edit.text().strip() or None,
-            "weights": self.weights_path_edit.text().strip() or None,
-        }
-
-    @staticmethod
-    def _parse_int(value: str):
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _parse_float(value: str):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-
-class PictureToolGUI(QMainWindow):
+class PictureToolGUI(PresetManagerMixin, PipelineValidationMixin, MetricsDashboardMixin, QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = {}
@@ -283,7 +42,9 @@ class PictureToolGUI(QMainWindow):
         self.preset_storage: dict = {'presets': {}}
         self.task_status_items: dict[str, QListWidgetItem] = {}
         self._status_icon_cache: dict[str, QIcon] = {}
-        self.preset_config_path = PRESET_CONFIG_PATH
+        self.POSITION_TASK_LABEL = POSITION_TASK_LABEL
+        self.YOLO_TRAIN_LABEL = YOLO_TRAIN_LABEL
+        self.preset_config_path = DEFAULT_PRESET_CONFIG_PATH
         self.init_ui()
         self._load_preset_storage()
         self.load_config()
@@ -381,13 +142,24 @@ class PictureToolGUI(QMainWindow):
         main_splitter.addWidget(right_panel)
         main_splitter.setSizes([350, 900])
 
+
     def create_left_panel(self):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setSpacing(10)
         left_layout.setContentsMargins(8, 8, 8, 8)
 
-        # 1. 配置設定
+        left_layout.addWidget(self._build_config_section())
+        left_layout.addWidget(self._build_task_section())
+        left_layout.addWidget(self._build_position_section())
+        left_layout.addWidget(self._build_training_options_section())
+        left_layout.addWidget(self._build_control_section())
+        left_layout.addStretch()
+
+        self._sync_position_controls()
+        return left_widget
+
+    def _build_config_section(self) -> QGroupBox:
         config_group = QGroupBox("⚙️ 配置設定")
         config_layout = QVBoxLayout(config_group)
         config_layout.setSpacing(8)
@@ -411,13 +183,13 @@ class PictureToolGUI(QMainWindow):
 
         config_layout.addWidget(self.config_path_edit)
         config_layout.addLayout(config_btn_layout)
+        return config_group
 
-        # 2. 任務選擇 (單一清單，移除重複)
+    def _build_task_section(self) -> QGroupBox:
         task_group = QGroupBox("📋 任務選擇")
         task_layout = QVBoxLayout(task_group)
         task_layout.setSpacing(6)
 
-        # 任務清單 - 3列佈局更緊湊
         task_grid = QGridLayout()
         task_grid.setSpacing(4)
         task_grid.setHorizontalSpacing(8)
@@ -445,7 +217,7 @@ class PictureToolGUI(QMainWindow):
         for index, (task, icon) in enumerate(tasks):
             checkbox = CompactCheckBox(f"{icon} {task}")
             self.task_checkboxes[task] = checkbox
-            row = index // 3  # 改為 3 列
+            row = index // 3
             col = index % 3
             task_grid.addWidget(checkbox, row, col)
 
@@ -491,6 +263,12 @@ class PictureToolGUI(QMainWindow):
         manage_layout.addStretch()
         task_layout.addLayout(manage_layout)
 
+        self.bind_preset_controls(
+            combo=self.preset_combo,
+            apply_button=self.apply_preset_btn,
+            delete_button=self.delete_preset_btn,
+        )
+
         status_group = QGroupBox('流程狀態')
         status_layout = QVBoxLayout(status_group)
         self.status_list = QListWidget()
@@ -499,10 +277,8 @@ class PictureToolGUI(QMainWindow):
         self.status_list.setFocusPolicy(Qt.NoFocus)
         self.status_list.setMaximumHeight(200)
         status_layout.addWidget(self.status_list)
-        reset_status_btn = CompactButton('重設狀態', 'secondary')
-        reset_status_btn.clicked.connect(self.reset_task_statuses)
-        status_layout.addWidget(reset_status_btn)
         task_layout.addWidget(status_group)
+
         self._populate_status_items()
 
         utility_layout = QHBoxLayout()
@@ -543,7 +319,9 @@ class PictureToolGUI(QMainWindow):
         utility_layout.addStretch()
         task_layout.addLayout(utility_layout)
 
-# 3. 位置檢查設定
+        return task_group
+
+    def _build_position_section(self) -> QGroupBox:
         position_group = QGroupBox("📍 位置檢查")
         position_layout = QVBoxLayout(position_group)
         position_layout.setSpacing(8)
@@ -579,7 +357,9 @@ class PictureToolGUI(QMainWindow):
         btn_row.addWidget(self.position_build_btn)
         position_layout.addLayout(btn_row)
 
-        # 4. 訓練參數
+        return position_group
+
+    def _build_training_options_section(self) -> QGroupBox:
         options_group = QGroupBox("🎛️ 訓練參數")
         options_layout = QVBoxLayout(options_group)
         options_layout.setSpacing(8)
@@ -587,7 +367,6 @@ class PictureToolGUI(QMainWindow):
         self.apply_overrides_cb = CompactCheckBox("✓ 啟用參數覆寫")
         options_layout.addWidget(self.apply_overrides_cb)
 
-        # 參數網格
         param_grid = QGridLayout()
         param_grid.setSpacing(6)
         param_grid.setVerticalSpacing(8)
@@ -612,7 +391,6 @@ class PictureToolGUI(QMainWindow):
 
         options_layout.addLayout(param_grid)
 
-        # 工具按鈕
         tool_btn_layout = QHBoxLayout()
         tool_btn_layout.setSpacing(6)
         detect_gpu_btn = CompactButton("🔍 偵測GPU", "primary")
@@ -623,12 +401,13 @@ class PictureToolGUI(QMainWindow):
         tool_btn_layout.addStretch()
         options_layout.addLayout(tool_btn_layout)
 
-        # 5. 控制面板
+        return options_group
+
+    def _build_control_section(self) -> QGroupBox:
         control_group = QGroupBox("🎮 執行控制")
         control_layout = QVBoxLayout(control_group)
         control_layout.setSpacing(10)
 
-        # 執行按鈕
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
         self.start_btn = CompactButton("▶️ 開始執行", "success")
@@ -640,7 +419,7 @@ class PictureToolGUI(QMainWindow):
         # 放大按鈕
         self.start_btn.setMinimumHeight(36)
         self.stop_btn.setMinimumHeight(36)
-        
+
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
         control_layout.addLayout(btn_layout)
@@ -668,16 +447,8 @@ class PictureToolGUI(QMainWindow):
         """)
         control_layout.addWidget(self.status_label)
 
-        # 組裝左側面板
-        left_layout.addWidget(config_group)
-        left_layout.addWidget(task_group)
-        left_layout.addWidget(position_group)
-        left_layout.addWidget(options_group)
-        left_layout.addWidget(control_group)
-        left_layout.addStretch()
+        return control_group
 
-        self._sync_position_controls()
-        return left_widget
 
     def create_right_panel(self):
         right_widget = QWidget()
@@ -685,8 +456,14 @@ class PictureToolGUI(QMainWindow):
         right_layout.setSpacing(10)
         right_layout.setContentsMargins(8, 8, 8, 8)
 
-        # 標題卡片
+        right_layout.addWidget(self._build_title_card())
+        right_layout.addWidget(self._build_tab_widget())
 
+        self._rebuild_quick_nav_menu()
+        self.refresh_metrics_dashboard()
+        return right_widget
+
+    def _build_title_card(self) -> QFrame:
         title_card = QFrame()
         title_card.setStyleSheet("""
             QFrame {
@@ -718,8 +495,9 @@ class PictureToolGUI(QMainWindow):
         title_layout.addWidget(title_label)
         title_layout.addWidget(subtitle_label)
         title_layout.addStretch()
+        return title_card
 
-        # Tab Widget
+    def _build_tab_widget(self) -> QTabWidget:
         self.tab_widget = QTabWidget()
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
@@ -752,7 +530,18 @@ class PictureToolGUI(QMainWindow):
             }
         """)
 
-        # 日誌頁
+        self.log_tab = self._create_log_tab()
+        self.tab_widget.addTab(self.log_tab, '執行紀錄')
+        self.config_tab = self._create_config_tab()
+        self.tab_widget.addTab(self.config_tab, '設定預覽')
+        self.preset_tab = self._create_preset_tab()
+        self.tab_widget.addTab(self.preset_tab, '流程設定')
+        self.metrics_tab = self._create_metrics_tab()
+        self.tab_widget.addTab(self.metrics_tab, '重要指標')
+
+        return self.tab_widget
+
+    def _create_log_tab(self) -> QWidget:
         log_widget = QWidget()
         log_layout = QVBoxLayout(log_widget)
         log_layout.setSpacing(8)
@@ -761,7 +550,7 @@ class PictureToolGUI(QMainWindow):
         self.log_text.setPlainText(
             "🎉 歡迎使用圖像處理工具！\n"
             "📝 請選擇任務並點擊開始執行。\n"
-            "💡 提示：可使用快速預設按鈕快速選擇常用任務組合。\n"
+            "💡 提示：可使用快速預設按鈕快速套用常用流程。\n"
         )
         self.log_text.setStyleSheet("""
             QTextEdit {
@@ -785,7 +574,9 @@ class PictureToolGUI(QMainWindow):
         log_btn_layout.addWidget(clear_log_btn)
         log_layout.addLayout(log_btn_layout)
 
-        # 配置預覽頁
+        return log_widget
+
+    def _create_config_tab(self) -> QWidget:
         config_widget = QWidget()
         config_layout = QVBoxLayout(config_widget)
         config_layout.setSpacing(8)
@@ -805,7 +596,9 @@ class PictureToolGUI(QMainWindow):
             }
         """)
         config_layout.addWidget(self.config_text)
+        return config_widget
 
+    def _create_preset_tab(self) -> QWidget:
         preset_widget = QWidget()
         preset_layout = QVBoxLayout(preset_widget)
         preset_layout.setSpacing(8)
@@ -825,7 +618,10 @@ class PictureToolGUI(QMainWindow):
             }
         """)
         preset_layout.addWidget(self.preset_text)
+        self.bind_preset_controls(text=self.preset_text)
+        return preset_widget
 
+    def _create_metrics_tab(self) -> QWidget:
         metrics_widget = QWidget()
         metrics_layout = QVBoxLayout(metrics_widget)
         metrics_layout.setSpacing(8)
@@ -844,190 +640,15 @@ class PictureToolGUI(QMainWindow):
             }
         """)
         metrics_layout.addWidget(self.metrics_text)
+        self.bind_metrics_display(self.metrics_text)
         metrics_refresh_btn = CompactButton('重新整理指標', 'primary')
         metrics_refresh_btn.clicked.connect(self.refresh_metrics_dashboard)
         metrics_layout.addWidget(metrics_refresh_btn)
 
-        # Tabs
-        self.log_tab = log_widget
-        self.tab_widget.addTab(self.log_tab, '執行紀錄')
-        self.config_tab = config_widget
-        self.tab_widget.addTab(self.config_tab, '設定預覽')
-        self.preset_tab = preset_widget
-        self.tab_widget.addTab(self.preset_tab, '流程設定')
-        self.metrics_tab = metrics_widget
-        self.tab_widget.addTab(self.metrics_tab, '重要指標')
-
-        right_layout.addWidget(title_card)
-        right_layout.addWidget(self.tab_widget)
-
-        self._rebuild_quick_nav_menu()
-        self.refresh_metrics_dashboard()
-        return right_widget
-
-
-    def _load_preset_storage(self) -> None:
-        storage = {'presets': {}}
-        config_path = getattr(self, 'preset_config_path', PRESET_CONFIG_PATH)
-        try:
-            if config_path.exists():
-                with config_path.open('r', encoding='utf-8') as handle:
-                    loaded = yaml.safe_load(handle) or {}
-                if isinstance(loaded, dict) and isinstance(loaded.get('presets'), dict):
-                    storage['presets'] = loaded['presets']
-            else:
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            self.log_message(f"載入流程設定失敗：{exc}")
-        self.preset_storage = storage
-        self._rebuild_task_presets()
-        self._update_preset_display()
-
-    def _save_preset_storage(self) -> None:
-        config_path = getattr(self, 'preset_config_path', PRESET_CONFIG_PATH)
-        data = {'presets': self.preset_storage.get('presets', {})}
-        try:
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            with config_path.open('w', encoding='utf-8') as handle:
-                yaml.safe_dump(data, handle, allow_unicode=True, sort_keys=True)
-        except Exception as exc:
-            self.log_message(f"寫入流程設定失敗：{exc}")
-
-    def _update_preset_display(self) -> None:
-        if not hasattr(self, 'preset_text'):
-            return
-        try:
-            display = yaml.safe_dump(
-                {'presets': self.preset_storage.get('presets', {})},
-                allow_unicode=True,
-                sort_keys=True,
-            )
-        except Exception:
-            display = '無法顯示流程設定。'
-        self.preset_text.setPlainText(display or '尚無流程。')
-
-    def _rebuild_task_presets(self) -> None:
-        if not hasattr(self, 'preset_combo'):
-            return
-        self.task_presets = {}
-        self.preset_combo.blockSignals(True)
-        self.preset_combo.clear()
-        presets = self.preset_storage.get('presets') if isinstance(self.preset_storage, dict) else {}
-        if not isinstance(presets, dict):
-            presets = {}
-        has_presets = False
-        for name in sorted(presets.keys()):
-            labels = [label for label in presets.get(name, []) if label in self.task_checkboxes]
-            if not labels:
-                continue
-            key = f"custom::{name}"
-            self.task_presets[key] = labels
-            self.preset_combo.addItem(f"{name} ({len(labels)})", key)
-            has_presets = True
-        if not has_presets:
-            self.preset_combo.addItem('尚無流程', None)
-            self.preset_combo.setEnabled(False)
-            self.apply_preset_btn.setEnabled(False)
-            self.delete_preset_btn.setEnabled(False)
-            self.preset_combo.setCurrentIndex(0)
-        else:
-            self.preset_combo.setEnabled(True)
-            self.apply_preset_btn.setEnabled(True)
-            self.delete_preset_btn.setEnabled(False)
-            self.preset_combo.setCurrentIndex(0)
-        self.preset_combo.blockSignals(False)
-        self._on_preset_selection_changed()
-
-    def _on_preset_selection_changed(self) -> None:
-        if not hasattr(self, 'preset_combo') or not hasattr(self, 'delete_preset_btn'):
-            return
-        key = self.preset_combo.currentData()
-        can_delete = isinstance(key, str) and key.startswith('custom::')
-        self.delete_preset_btn.setEnabled(bool(can_delete))
-
-    def apply_selected_preset(self) -> None:
-        if not hasattr(self, 'preset_combo'):
-            return
-        key = self.preset_combo.currentData()
-        labels = self.task_presets.get(key, [])
-        if not labels:
-            if key is not None:
-                self.log_message('流程內容為空或無效。')
-            return
-        for label, checkbox in self.task_checkboxes.items():
-            checkbox.setChecked(label in labels)
-        name = key.split('::', 1)[1] if isinstance(key, str) and '::' in key else str(key)
-        self.log_message(f"已套用流程：{name}")
-
-    def save_selected_as_preset(self) -> None:
-        if not hasattr(self, 'task_checkboxes'):
-            return
-        selected = [label for label, checkbox in self.task_checkboxes.items() if checkbox.isChecked()]
-        if not selected:
-            QMessageBox.warning(self, '警告', '請先勾選至少一個任務再儲存流程。')
-            return
-        name, ok = QInputDialog.getText(self, '儲存流程', '流程名稱：')
-        if not ok:
-            return
-        name = (name or '').strip()
-        if not name:
-            QMessageBox.warning(self, '警告', '流程名稱不可為空。')
-            return
-        if not isinstance(self.preset_storage, dict):
-            self.preset_storage = {'presets': {}}
-        presets = self.preset_storage.setdefault('presets', {})
-        if name in presets:
-            reply = QMessageBox.question(
-                self,
-                '覆寫流程',
-                f"流程「{name}」已存在，是否覆寫？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                return
-        presets[name] = selected
-        self._save_preset_storage()
-        self._rebuild_task_presets()
-        self._update_preset_display()
-        self.update_config_display()
-        target_key = f"custom::{name}"
-        for index in range(self.preset_combo.count()):
-            if self.preset_combo.itemData(index) == target_key:
-                self.preset_combo.setCurrentIndex(index)
-                break
-        self.log_message(f"已儲存流程：{name}")
-
-    def delete_selected_preset(self) -> None:
-        if not hasattr(self, 'preset_combo'):
-            return
-        key = self.preset_combo.currentData()
-        if not isinstance(key, str) or not key.startswith('custom::'):
-            QMessageBox.information(self, '提醒', '請先在下拉選單選擇自訂流程再刪除。')
-            return
-        name = key.split('::', 1)[1]
-        presets = self.preset_storage.get('presets') if isinstance(self.preset_storage, dict) else None
-        if not isinstance(presets, dict) or name not in presets:
-            QMessageBox.information(self, '提醒', '找不到要刪除的流程或已被移除。')
-            return
-        reply = QMessageBox.question(
-            self,
-            '刪除流程',
-            f"確定要刪除流程「{name}」嗎？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-        presets.pop(name, None)
-        self._save_preset_storage()
-        self._rebuild_task_presets()
-        self._update_preset_display()
-        self.update_config_display()
-        self.log_message(f"已刪除流程：{name}")
-
+        return metrics_widget
 
     def reset_task_statuses(self, selected: Optional[list[str]] = None) -> None:
+
         if not hasattr(self, 'status_list') or not self.task_status_items:
             return
         labels = list(self.task_status_items.keys())
@@ -1109,276 +730,6 @@ class PictureToolGUI(QMainWindow):
             "Sample dataset：data/sample_dataset（可自行建立或下載示例資料）。"
         )
         QMessageBox.information(self, '快速導覽', guide_text)
-
-    def _validate_pipeline_configuration(self, selected_tasks: list[str]) -> list[str]:
-        issues: list[str] = []
-
-        config = self.config if isinstance(self.config, dict) else {}
-        yolo_cfg = config.get('yolo_training') if isinstance(config, dict) else None
-        if not isinstance(yolo_cfg, dict):
-            yolo_cfg = {}
-        pos_cfg = yolo_cfg.get('position_validation') if isinstance(yolo_cfg, dict) else None
-        if not isinstance(pos_cfg, dict):
-            pos_cfg = {}
-
-        want_position_validation = POSITION_TASK_LABEL in selected_tasks
-        train_selected = YOLO_TRAIN_LABEL in selected_tasks
-
-        if want_position_validation and not pos_cfg.get('enabled'):
-            issues.append('已選擇位置檢查任務，但未啟用位置檢查設定。請在左側啟用並填寫必填欄位。')
-
-        if pos_cfg.get('enabled') and (want_position_validation or train_selected):
-            missing_fields: list[str] = []
-            if not pos_cfg.get('product'):
-                missing_fields.append('產品')
-            if not pos_cfg.get('area'):
-                missing_fields.append('區域')
-            if not (pos_cfg.get('config_path') or pos_cfg.get('config')):
-                missing_fields.append('位置設定檔')
-            if missing_fields:
-                issues.append('定位檢查缺少必要欄位：' + '、'.join(missing_fields))
-
-            config_path = pos_cfg.get('config_path')
-            if isinstance(config_path, str) and config_path and not Path(config_path).exists():
-                issues.append(f'位置設定檔不存在：{config_path}')
-
-            sample_dir = pos_cfg.get('sample_dir')
-            if isinstance(sample_dir, str) and sample_dir and not Path(sample_dir).exists():
-                issues.append(f'定位樣本資料夾不存在：{sample_dir}')
-
-        if train_selected:
-            dataset_dir = yolo_cfg.get('dataset_dir') if isinstance(yolo_cfg, dict) else None
-            if isinstance(dataset_dir, str) and dataset_dir and not Path(dataset_dir).exists():
-                issues.append(f'YOLO 訓練資料集不存在：{dataset_dir}')
-
-        return issues
-
-    def run_preflight_check(self) -> None:
-        selected_tasks = self.get_selected_tasks()
-        if not selected_tasks:
-            QMessageBox.information(self, '提示', '請先勾選至少一個任務再進行檢查。')
-            return
-        self._apply_position_settings()
-        issues = self._validate_pipeline_configuration(selected_tasks)
-        if issues:
-            QMessageBox.warning(
-                self,
-                '啟動前檢查',
-                '\n'.join(issues),
-            )
-        else:
-            QMessageBox.information(
-                self,
-                '啟動前檢查',
-                '所有檢查項目通過，準備就緒。',
-            )
-
-    def export_presets(self) -> None:
-        if not isinstance(self.preset_storage, dict) or not self.preset_storage.get('presets'):
-            QMessageBox.information(self, '提醒', '目前沒有可匯出的流程。')
-            return
-        file_path, _ = QFileDialog.getSaveFileName(
-            self, '匯出流程設定', str(Path.cwd() / 'preset_export.yaml'), 'YAML Files (*.yaml *.yml)')
-        if not file_path:
-            return
-        try:
-            with open(file_path, 'w', encoding='utf-8') as fh:
-                yaml.safe_dump({'presets': self.preset_storage.get('presets', {})}, fh, allow_unicode=True, sort_keys=True)
-            message = f'流程設定已匯出至：\n{file_path}'
-            QMessageBox.information(
-                self,
-                '匯出成功',
-                message,
-            )
-        except Exception as exc:
-            error_message = f'寫入檔案時發生錯誤：\n{exc}'
-            QMessageBox.critical(
-                self,
-                '匯出失敗',
-                error_message,
-            )
-
-    def import_presets(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(self, '匯入流程設定', '', 'YAML Files (*.yaml *.yml)')
-        if not file_path:
-            return
-        try:
-            with open(file_path, 'r', encoding='utf-8') as fh:
-                data = yaml.safe_load(fh) or {}
-            presets = data.get('presets') if isinstance(data, dict) else None
-            if not isinstance(presets, dict):
-                QMessageBox.warning(self, '匯入失敗', '檔案格式不符合預期。')
-                return
-            self.preset_storage.setdefault('presets', {}).update(presets)
-            self._save_preset_storage()
-            self._rebuild_task_presets()
-            self._update_preset_display()
-            QMessageBox.information(
-                self,
-                '匯入完成',
-                '流程設定已更新。',
-            )
-        except Exception as exc:
-            error_message = f'讀取檔案時發生錯誤：\n{exc}'
-            QMessageBox.critical(
-                self,
-                '匯入失敗',
-                error_message,
-            )
-
-    def refresh_metrics_dashboard(self) -> None:
-        if not hasattr(self, 'metrics_text'):
-            return
-        summary_lines = []
-        summary_lines.append('【YOLO 訓練指標】')
-        yolo_stats = self._load_latest_yolo_metrics()
-        if yolo_stats:
-            summary_lines.extend(yolo_stats)
-        else:
-            summary_lines.append('尚未找到訓練結果 (runs/detect)。')
-        summary_lines.append('')
-        summary_lines.append('【LED QC 統計】')
-        led_stats = self._load_latest_led_metrics()
-        if led_stats:
-            summary_lines.extend(led_stats)
-        else:
-            summary_lines.append('尚未找到 LED QC 報表 (reports/led_qc)。')
-        self.metrics_text.setPlainText("\n".join(summary_lines))
-
-
-    def _load_latest_yolo_metrics(self) -> list[str]:
-        from datetime import datetime
-
-        search_roots: list[Path] = []
-        if isinstance(self.config, dict):
-            project = self.config.get('yolo_training', {}).get('project')
-            if isinstance(project, str) and project:
-                search_roots.append(Path(project))
-        for fallback in ('./runs/train', './runs/detect'):
-            candidate = Path(fallback)
-            if candidate not in search_roots:
-                search_roots.append(candidate)
-
-        candidates: list[Path] = []
-        for root in search_roots:
-            try:
-                if root.exists():
-                    candidates.extend(root.glob('**/results.csv'))
-            except Exception:
-                continue
-        if not candidates:
-            return []
-
-        latest = max(candidates, key=lambda p: p.stat().st_mtime)
-        try:
-            with latest.open('r', encoding='utf-8') as fh:
-                rows = list(csv.DictReader(fh))
-        except Exception:
-            return []
-        if not rows:
-            return []
-
-        last = rows[-1]
-
-        def pick(*keys: str) -> str:
-            for key in keys:
-                value = last.get(key)
-                if value not in (None, '', 'nan'):
-                    return str(value)
-            return 'N/A'
-
-        epoch = pick('epoch', 'Epoch', 'epochs')
-        map50 = pick('metrics/mAP50', 'metrics/mAP_50', 'mAP50', 'map50')
-        map50_95 = pick('metrics/mAP50-95', 'metrics/mAP_50_95', 'mAP50-95', 'map50-95')
-        precision = pick('metrics/precision(B)', 'precision', 'metrics/precision')
-        recall = pick('metrics/recall(B)', 'recall', 'metrics/recall')
-        box_loss = pick('train/box_loss', 'box_loss', 'loss/box')
-        cls_loss = pick('train/cls_loss', 'cls_loss', 'loss/cls')
-
-        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-        metrics = [
-            f"結果目錄：{self._format_relative_path(latest.parent)}",
-            f"最後更新：{last_update}",
-            f"最新 Epoch：{epoch}",
-            f"mAP50：{map50}",
-            f"mAP50-95：{map50_95}",
-            f"Precision：{precision}",
-            f"Recall：{recall}",
-        ]
-        if box_loss != 'N/A' or cls_loss != 'N/A':
-            metrics.append(f"Box/Cls Loss：{box_loss} / {cls_loss}")
-        return metrics
-
-    def _load_latest_led_metrics(self) -> list[str]:
-        from datetime import datetime
-
-        led_config = self.config.get('led_qc_enhanced', {}) if isinstance(self.config, dict) else {}
-        detect_dir_cfg = led_config.get('detect_dir', {}) if isinstance(led_config, dict) else {}
-        led_dir = Path(detect_dir_cfg.get('out_dir') or './reports/led_qc/batch')
-        fallback_dirs = [Path('./reports/led_qc'), Path('./reports/led_qc/batch')]
-
-        search_roots: list[Path] = []
-        for root in [led_dir, *fallback_dirs]:
-            if root not in search_roots:
-                search_roots.append(root)
-
-        candidates: list[Path] = []
-        for root in search_roots:
-            if root and root.exists():
-                candidates.extend(root.glob('**/*.csv'))
-        if not candidates:
-            return []
-
-        latest = max(candidates, key=lambda p: p.stat().st_mtime)
-        try:
-            with latest.open('r', encoding='utf-8') as fh:
-                rows = list(csv.DictReader(fh))
-        except Exception:
-            return []
-        if not rows:
-            return []
-
-        total = len(rows)
-        pass_markers = {'PASS', 'OK', '正常', '合格', '良品'}
-        fail_markers = {'FAIL', 'NG', '異常', '不良', 'FAILURE'}
-
-        anomalies = 0
-        for row in rows:
-            raw_status = None
-            for key in ('color_status', 'status', 'result', 'decision'):
-                if row.get(key):
-                    raw_status = row.get(key)
-                    break
-            status = (raw_status or '').strip()
-            normalized = status.upper()
-            if not status:
-                continue
-            if normalized in pass_markers or status in pass_markers:
-                continue
-            if normalized in fail_markers or status in fail_markers or status:
-                anomalies += 1
-
-        pass_count = total - anomalies
-        pass_rate = (pass_count / total * 100) if total else 0.0
-        anomaly_rate = (anomalies / total * 100) if total else 0.0
-        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
-
-        metrics = [
-            f"統計檔案：{self._format_relative_path(latest)}",
-            f"最後更新：{last_update}",
-            f"樣本總數：{total}",
-        ]
-        if total:
-            metrics.append(f"疑似異常：{anomalies} ({anomaly_rate:.1f}%)")
-            metrics.append(f"良品數：{pass_count}")
-            metrics.append(f"通過率：{pass_rate:.1f}%")
-        return metrics
-
-    def _format_relative_path(self, path: Path) -> str:
-        try:
-            return str(path.resolve().relative_to(Path.cwd()))
-        except Exception:
-            return str(path)
 
     def _detect_gpu(self):
         try:
@@ -2149,3 +1500,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
