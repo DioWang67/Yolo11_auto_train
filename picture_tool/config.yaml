@@ -144,45 +144,45 @@ train_test_split:
   stratified: true
 yolo_augmentation:
   augmentation:
-    num_images: 10
+    num_images: 50
     num_operations:
-    - 1
+    - 2
     - 3
     operations:
       blur:
         kernel:
         - 0
-        - 0
+        - 1
       contrast:
         range:
-        - 1.0
-        - 1.0
+        - 0.92
+        - 1.08
       flip:
         probability: 0.0
       hue:
         range:
-        - 0
-        - 0
+        - 1
+        - 1
       multiply:
         range:
-        - 1.0
-        - 1.0
+        - 0.88
+        - 1.15
       noise:
         scale:
         - 0
-        - 0
+        - 6
       perspective:
         scale:
         - 0.0
         - 0.0
       rotate:
         angle:
-        - 0
-        - 0
+        - -2
+        - 2
       scale:
         range:
-        - 1.0
-        - 1.0
+        - 0.97
+        - 1.03
   input:
     image_dir: ./data/raw/images
     label_dir: ./data/raw/labels
@@ -197,7 +197,7 @@ yolo_training:
   # Split dataset root containing train/val/test
   dataset_dir: ./data/split
   # Class names for your dataset
-  class_names: ["Blue", "Green", "Red", "White"]
+  class_names: ["C22B", "J5-1", "J5-2", "J6", "J7"]
   # Initial weights (local file or model name)
   model: ./models/yolo11n.pt
   # Training hyperparameters
@@ -221,6 +221,43 @@ yolo_training:
     device: null
     conf: 0.25
     tolerance_override: null
+    auto_generate: true
+  export_detection_config:
+    enabled: true
+    output_path: null  # default to run directory when null
+    weights_name: best.pt
+    device: null  # fallback to training device
+    conf_thres: 0.4
+    iou_thres: 0.45
+    imgsz: null  # fallback to training imgsz
+    timeout: 1
+    enable_yolo: true
+    output_dir: Result
+    current_product: "PCBA3"  # fallback to position_validation.product
+    area: null  # fallback to position_validation.area
+    expected_items:
+      PCBA3:
+        A:
+          - C22B
+          - J5-1
+          - J5-2
+          - J6
+          - J7
+
+    tolerance: null
+    tolerance_unit: percent
+    position_config_path: null  # fallback to position_validation.config_path
+    position_config: {}
+    include_all_products: false
+  artifact_bundle:
+    enabled: true
+    dir_name: bundle
+    base_dir: null  # defaults to run directory
+    include_weights: true
+    include_detection_config: true
+    include_position_config: true
+    include_results_csv: true
+    include_args_yaml: true
 
 # YOLO evaluation settings
 yolo_evaluation:

@@ -1,9 +1,10 @@
 # Dataset Lint Summary
 
-- Images scanned: 60
+- Images scanned: 50
 
 ## Class Histogram
-- Blue (0): 90
-- Green (1): 90
-- Red (2): 100
-- White (3): 150
+- C22B (0): 50
+- J5-1 (1): 50
+- J5-2 (2): 50
+- J6 (3): 50
+- J7 (4): 50
