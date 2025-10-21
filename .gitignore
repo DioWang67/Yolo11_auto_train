@@ -57,3 +57,7 @@ target/
 *.zip
 runs/
 reports/
+data/
+models/
+reports/
+*.caches

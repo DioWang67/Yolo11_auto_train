@@ -11,7 +11,10 @@ Package Layout
   - split/: train/val/test dataset splitter
   - pipeline/: pipeline helpers (task selection, execution)
   - utils/: IO and logging helpers
-- GUI: gui.py (uses package APIs)
+- GUI:
+  - Yolo11_Auto_Train_GUI.py (Qt window)
+  - gui/pipeline_controller.py (reusable pipeline mixin for custom frontends)
+  - gui/task_thread.py (worker thread dispatch)
 - Pipeline: main_pipeline.py (uses package APIs)
 - Shims: top-level files import from picture_tool to keep compatibility
 
@@ -23,14 +26,17 @@ Usage (Python)
 - from picture_tool.pipeline import run_pipeline, load_config, setup_logging
 
 CLI Examples
-- python main_pipeline.py --config config.yaml --tasks image_augmentation
-- python yolo_data_augmentor.py  # shim to package implementation
-- python image_format_converter.py  # shim to package implementation
+- python -m picture_tool.main_pipeline --config config.yaml --tasks image_augmentation
+- picture-tool-pipeline --config config.yaml --tasks full
+- python -m picture_tool.gui.app  # launch Qt GUI programmatically
 
 Notes
 - Implementations are centralized in picture_tool to improve maintainability.
 - Top-level files are thin shims for backward compatibility.
 - Albumentations + OpenCV operations use ThreadPool by default for Windows reliability.
+- Pytest smoke suite available under `tests/` (`pytest -q`) to guard core pipeline behaviour.
+- `PipelineControllerMixin` (picture_tool/gui/pipeline_controller.py) exposes the non-UI workflow logic so alternate frontends can reuse the same task orchestration.
+- Detailed configuration reference: `docs/config_reference.md`.
 
 
 ## 公開 API（picture_tool）

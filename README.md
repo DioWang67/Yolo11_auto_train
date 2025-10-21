@@ -55,6 +55,29 @@ batch_inference:
 - `colors` / `color_aliases`：定義可辨識顏色與別名。
 - `color_conf_min_per_color`、`color_hue_range_margin` 等數值可微調顏色判定。
 - `build` / `detect` / `detect_dir` / `analyze` 子節點配置建模、單張檢測、批次檢測與分析輸出的路徑。
+### 位置檢查與部署產物 (`config.yaml` → `yolo_training`)
+
+```yaml
+yolo_training:
+  position_validation:
+    enabled: true
+    product: "PCBA3"
+    area: "A"
+    auto_generate: true         # 若未設定 config_path，會自動以驗證影像推算位置
+  export_detection_config:
+    enabled: true
+    output_path: null           # 預設寫入當次訓練的 run 目錄
+    current_product: "PCBA3"
+    area: "A"
+  artifact_bundle:
+    enabled: true
+    dir_name: bundle            # 集中輸出的資料夾（可填相對或絕對路徑）
+```
+
+- `position_validation.auto_generate` 會在訓練完成後使用最新權重推論驗證影像並產出 `auto_position_config.yaml`，同時更新 `config_path`，方便後續位置檢查或部署。
+- `export_detection_config` 會依據最新 run 的 `args.yaml`／資料集 `data.yaml` 自動生成偵測設定 YAML（包含 `weights`、`expected_items`、`position_config` 等欄位）；`output_path` 為 `null` 時會儲存在該 run 目錄。
+- `artifact_bundle` 會建立 `bundle/` 資料夾，打包 `best.pt`、`last.pt`、偵測／位置設定、`results.csv`、`args.yaml` 等檔案，便於交付與版本管理。
+
 
 ### 自訂流程設定 (`picture_tool/preset_config.yaml`)
 

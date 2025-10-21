@@ -22,8 +22,8 @@ dependencies = [
 ]
 
 [project.scripts]
-picture-tool-pipeline = "main_pipeline:main"
-picture-tool-gui = "gui:main"
+picture-tool-pipeline = "picture_tool.main_pipeline:main"
+picture-tool-gui = "picture_tool.Yolo11_Auto_Train_GUI:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
