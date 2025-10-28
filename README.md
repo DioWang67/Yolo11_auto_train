@@ -161,7 +161,7 @@ python picture_tool/picture_tool/color/led_qc_enhanced.py analyze \
 - **資料切割** 需有影像與標註，產生 `data/split` 供訓練、評估、推論。
 - **LED QC 模組** 可獨立執行，但若要與 YOLO 訓練成果比對，可同步使用報表輸出。
 
-## 完整流程示範（建議交接時演練一次）
+## 完整流程示範
 
 1. `data/raw` 內放入原始影像 (`images/`) 與 YOLO 標註 (`labels/`)。
 2. 啟動 GUI，載入 `config.yaml`，左側勾選：

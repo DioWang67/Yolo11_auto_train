@@ -18,6 +18,7 @@ debug_heatmap.jpg
 *.jpg
 *.png
 *.txt
+!requirements-dev.txt
 *.bmp
 *.zip
 # 日誌檔案
