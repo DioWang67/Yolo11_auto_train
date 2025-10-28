@@ -17,4 +17,3 @@ __all__ = [
     'run_position_validation',
     'validate_detections_against_area',
 ]
-

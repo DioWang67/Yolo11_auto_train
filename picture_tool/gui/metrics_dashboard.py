@@ -1,4 +1,4 @@
-﻿"""Metrics dashboard helpers for the auto-train GUI."""
+"""Metrics dashboard helpers for the auto-train GUI."""
 from __future__ import annotations
 
 import csv

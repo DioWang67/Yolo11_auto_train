@@ -1,4 +1,4 @@
-﻿"""Pipeline validation helpers for the auto-train GUI."""
+"""Pipeline validation helpers for the auto-train GUI."""
 from __future__ import annotations
 
 from pathlib import Path

@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 
 from .custom_widgets import CompactButton
 
+
 class PositionSettingsDialog(QDialog):
     def __init__(self, parent, settings: dict):
         super().__init__(parent)
@@ -24,7 +25,7 @@ class PositionSettingsDialog(QDialog):
         # 基本設定
         self.product_edit = QLineEdit(self._settings.get("product") or "")
         self.area_edit = QLineEdit(self._settings.get("area") or "")
-        
+
         form.addWidget(QLabel("產品:"), 0, 0)
         form.addWidget(self.product_edit, 0, 1)
         form.addWidget(QLabel("區域:"), 1, 0)

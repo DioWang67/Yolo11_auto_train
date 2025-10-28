@@ -245,4 +245,3 @@ def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
     assert controller.start_btn.enabled is False
     assert controller.stop_btn.enabled is True
     assert controller.progress_bar.value == 0
-

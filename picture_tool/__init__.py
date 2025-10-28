@@ -30,9 +30,9 @@ def _load_and_alias(name: str) -> ModuleType:
     globals()[name] = module
     return module
 
+
 for _mod in _SUBMODULES:
     try:
         _load_and_alias(_mod)
     except ModuleNotFoundError as exc:
         print(f"[picture_tool] failed to import submodule {_mod}: {exc}")
-
