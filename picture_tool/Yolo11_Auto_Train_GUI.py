@@ -149,7 +149,6 @@ class PictureToolGUI(
         main_splitter.addWidget(right_panel)
         main_splitter.setSizes([350, 900])
 
-
     def create_left_panel(self):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
@@ -165,8 +164,6 @@ class PictureToolGUI(
 
         self._sync_position_controls()
         return left_widget
-
-
 
     def _build_position_section(self) -> QGroupBox:
         position_group = QGroupBox("📍 位置檢查")
@@ -295,7 +292,6 @@ class PictureToolGUI(
         control_layout.addWidget(self.status_label)
 
         return control_group
-
 
     def create_right_panel(self):
         right_widget = QWidget()
@@ -511,7 +507,6 @@ class PictureToolGUI(
             else:
                 self._set_task_status(label, '略過', skipped_color)
 
-
     def _set_task_status(self, label: str, status: str, color: QColor) -> None:
         item = self.task_status_items.get(label)
         if not item:
@@ -523,7 +518,6 @@ class PictureToolGUI(
         item.setBackground(background)
         item.setForeground(QColor('#212529'))
         item.setToolTip(f"{label} 狀態：{status}")
-
 
     def _rebuild_quick_nav_menu(self) -> None:
         if not hasattr(self, 'quick_nav_menu') or self.quick_nav_menu is None:
@@ -851,6 +845,7 @@ class PictureToolGUI(
             self.position_enable_cb.blockSignals(True)
             self.position_enable_cb.setChecked(is_enabled)
             self.position_enable_cb.blockSignals(False)
+
     def _populate_position_widgets(self):
         if not hasattr(self, "position_enable_cb"):
             return
@@ -939,19 +934,6 @@ class PictureToolGUI(
         if file_path:
             self.config_path_edit.setText(file_path)
             self.load_config()
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     def log_message(self, message):
         from datetime import datetime

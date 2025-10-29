@@ -1,3 +1,4 @@
 -e ./picture_tool
 pytest>=8.3
 flake8>=7.1
+pytest-cov>=5.0
