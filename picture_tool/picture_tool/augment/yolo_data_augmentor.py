@@ -236,7 +236,7 @@ class DataAugmentor:
         result = np.full((target_size, target_size, 3), 128, dtype=np.uint8)
         y_offset = (target_size - new_h) // 2
         x_offset = (target_size - new_w) // 2
-        result[y_offset : y_offset + new_h, x_offset : x_offset + new_w] = resized
+        result[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
         transform_params = {
             "scale": scale,
             "x_offset": x_offset,

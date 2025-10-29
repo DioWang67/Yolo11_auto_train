@@ -194,13 +194,6 @@ def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
             created.cfg = cfg
             created.cfg_path = cfg_path
 
-        def progress_updated(self, *args, **kwargs):
-            pass
-
-        # mimic Qt signal connect interface
-        def progress_updated_connect(self, callback):
-            pass
-
         def start(self):
             created.start_called = True
 
