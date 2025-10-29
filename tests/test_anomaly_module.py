@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-from pathlib import Path
 
 from picture_tool.picture_tool.anomaly import anomaly_mask_generator as anomaly
 

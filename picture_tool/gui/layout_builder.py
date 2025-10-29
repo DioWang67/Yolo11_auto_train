@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QGridLayout,
-    QWidget,
     QComboBox,
     QToolButton,
     QMenu,

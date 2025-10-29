@@ -1,7 +1,5 @@
 import sys
-import os
 from pathlib import Path
-import csv
 import yaml
 from typing import Optional
 
@@ -10,13 +8,12 @@ if __name__ == "__main__" or __package__ in (None, ""):
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget,
-    QPushButton, QLabel, QTextEdit, QProgressBar, QGroupBox,
+    QLabel, QTextEdit, QProgressBar, QGroupBox,
     QCheckBox, QLineEdit, QFileDialog, QSplitter, QTabWidget,
-    QScrollArea, QGridLayout, QMessageBox, QToolButton, QMenu,
-    QComboBox, QInputDialog, QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QFrame
+    QScrollArea, QGridLayout, QMessageBox, QListWidgetItem, QDialog, QFrame
 )
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QColor, QIcon, QPixmap
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QIcon
 
 POSITION_TASK_LABEL = "位置檢查"
 YOLO_TRAIN_LABEL = "YOLO訓練"
@@ -259,7 +256,7 @@ class PictureToolGUI(
         self.stop_btn.setEnabled(False)
         self.start_btn.clicked.connect(self.start_pipeline)
         self.stop_btn.clicked.connect(self.stop_pipeline)
-        
+
         # 放大按鈕
         self.start_btn.setMinimumHeight(36)
         self.stop_btn.setMinimumHeight(36)
@@ -563,7 +560,7 @@ class PictureToolGUI(
         except Exception as e:
             self.override_device_edit.setText("cpu")
             self.log_message(f"⚠️ GPU 偵測失敗: {e}")
-            
+
     def _select_image_source(self, default_dir: str = "") -> tuple[list[Path], str]:
         """
         選擇圖片來源(單張或資料夾)
@@ -578,14 +575,14 @@ class PictureToolGUI(
         folder_button = source_choice.addButton("選擇資料夾", QMessageBox.ActionRole)
         cancel_button = source_choice.addButton(QMessageBox.Cancel)
         source_choice.exec_()
-        
+
         if source_choice.clickedButton() == cancel_button:
             return [], ""
-        
+
         images = []
         selected_dir = ""
         exts = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp')
-        
+
         if source_choice.clickedButton() == image_button:
             files, _ = QFileDialog.getOpenFileNames(
                 self, "選擇參考圖片", default_dir,
@@ -594,16 +591,16 @@ class PictureToolGUI(
             if files:
                 images = [Path(f) for f in files]
                 selected_dir = str(images[0].parent)
-        
+
         elif source_choice.clickedButton() == folder_button:
             folder = QFileDialog.getExistingDirectory(self, "選擇圖片資料夾", default_dir)
             if folder:
                 folder_path = Path(folder)
                 images = [p for p in sorted(folder_path.iterdir()) if p.suffix.lower() in exts]
                 selected_dir = str(folder_path)
-        
+
         return images, selected_dir
-    
+
     def _generate_position_reference(self):
         self._apply_position_settings()
         settings = dict(getattr(self, "position_settings", {}) or {})
@@ -616,7 +613,7 @@ class PictureToolGUI(
         tolerance = settings.get("tolerance_override")
         if tolerance is None:
             tolerance = 0.0
-        
+
         imgsz_value = settings.get("imgsz")
         try:
             imgsz_int = int(imgsz_value) if imgsz_value else 640
@@ -632,18 +629,18 @@ class PictureToolGUI(
         # 選擇圖片來源
         default_sample_dir = settings.get("sample_dir") or settings.get("output_dir") or ""
         images, selected_dir = self._select_image_source(default_sample_dir)
-        
+
         if not images:
             QMessageBox.information(self, "提示", "未選取任何圖片。")
             return
-        
+
         # 更新設定中的樣本目錄
         if selected_dir:
             settings["sample_dir"] = selected_dir
 
         weights_path = settings.get("weights")
         chosen_weights: Optional[str] = None
-        
+
         if weights_path and Path(weights_path).exists():
             reuse = QMessageBox.question(
                 self, "使用既有權重",
@@ -652,7 +649,7 @@ class PictureToolGUI(
             )
             if reuse == QMessageBox.Yes:
                 chosen_weights = weights_path
-        
+
         if not chosen_weights:
             default_weights_dir = str(Path(weights_path).parent) if weights_path else ""
             chosen_weights, _ = QFileDialog.getOpenFileName(
@@ -662,7 +659,7 @@ class PictureToolGUI(
             if not chosen_weights:
                 QMessageBox.information(self, "提示", "未選擇權重檔。")
                 return
-        
+
         settings["weights"] = chosen_weights
         weights_path = chosen_weights
 
@@ -688,7 +685,7 @@ class PictureToolGUI(
             return
 
         self.log_message(f"🔨 使用權重 {weights_path} 生成參考設定...")
-        
+
         try:
             model = YOLO(weights_path)
         except Exception as exc:
@@ -707,7 +704,7 @@ class PictureToolGUI(
             except Exception as exc:
                 self.log_message(f"⚠️ 推論失敗 {img_path.name}: {exc}")
                 continue
-            
+
             for res in results:
                 detections = convert_results_to_detections(res, imgsz_int)
                 for det in detections:
@@ -782,24 +779,24 @@ class PictureToolGUI(
     def _sync_position_controls(self):
         if not hasattr(self, "position_settings_btn"):
             return
-        
+
         settings = getattr(self, "position_settings", {}) if hasattr(self, "position_settings") else {}
         product = settings.get("product")
         area = settings.get("area")
         summary_core = " / ".join([str(v) for v in (product, area) if v]) or "未設定"
         is_enabled = bool(self.position_enable_cb.isChecked()) if hasattr(self, "position_enable_cb") else False
-        
+
         if hasattr(self, "position_summary_label"):
             # 🔧 優化:快取當前狀態,避免重複設置
             if not hasattr(self, '_last_position_state'):
                 self._last_position_state = {}
-            
+
             current_state = (is_enabled, summary_core)
             if self._last_position_state.get('state') == current_state:
                 return  # 狀態未變,跳過更新
-            
+
             self._last_position_state['state'] = current_state
-            
+
             if is_enabled and summary_core != "未設定":
                 display_text = f"✅ {summary_core}"
                 style = """
@@ -849,10 +846,10 @@ class PictureToolGUI(
     def _populate_position_widgets(self):
         if not hasattr(self, "position_enable_cb"):
             return
-        
+
         ycfg = self.config.get("yolo_training", {}) if isinstance(self.config, dict) else {}
         pos_cfg = ycfg.get("position_validation", {}) if isinstance(ycfg, dict) else {}
-        
+
         self.position_settings = {
             "product": pos_cfg.get("product"),
             "area": pos_cfg.get("area"),
@@ -866,14 +863,14 @@ class PictureToolGUI(
             "config": pos_cfg.get("config"),
             "device": pos_cfg.get("device"),
         }
-        
+
         if self.position_settings.get("imgsz") in (None, "", 0):
             self.position_settings["imgsz"] = ycfg.get("imgsz", 640)
         if self.position_settings.get("conf") in (None, ""):
             self.position_settings["conf"] = 0.25
         if self.position_settings.get("tolerance_override") in (None, ""):
             self.position_settings["tolerance_override"] = None
-        
+
         enabled = bool(pos_cfg.get("enabled", False))
         self.position_enable_cb.blockSignals(True)
         self.position_enable_cb.setChecked(enabled)
@@ -883,14 +880,14 @@ class PictureToolGUI(
     def _apply_position_settings(self):
         if not hasattr(self, "position_enable_cb"):
             return
-        
+
         if not isinstance(self.config, dict):
             self.config = {}
-        
+
         ycfg = self.config.get("yolo_training")
         if not isinstance(ycfg, dict):
             ycfg = {}
-        
+
         settings = dict(getattr(self, "position_settings", {}) or {})
 
         def _ensure_int(value):
@@ -939,26 +936,26 @@ class PictureToolGUI(
         from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
         formatted_message = f"[{timestamp}] {message}"
-        
+
         # 🔧 優化:限制日誌行數,避免記憶體無限增長
         max_lines = 1000
         current_text = self.log_text.toPlainText()
         lines = current_text.split('\n')
-        
+
         if len(lines) >= max_lines:
             # 保留最新的 80% 日誌
             keep_lines = int(max_lines * 0.8)
             self.log_text.setPlainText('\n'.join(lines[-keep_lines:]))
-        
+
         self.log_text.append(formatted_message)
-        
+
         # 優化:使用 QTimer 延遲滾動,避免頻繁更新
         if not hasattr(self, '_scroll_timer'):
             self._scroll_timer = None
-        
+
         if self._scroll_timer:
             self._scroll_timer.stop()
-        
+
         from PyQt5.QtCore import QTimer
         self._scroll_timer = QTimer()
         self._scroll_timer.setSingleShot(True)

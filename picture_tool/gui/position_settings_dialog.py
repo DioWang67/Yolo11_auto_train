@@ -1,7 +1,6 @@
 """Dialog for configuring position validation settings."""
 from __future__ import annotations
 
-from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QGridLayout, QLabel, QLineEdit, QHBoxLayout,

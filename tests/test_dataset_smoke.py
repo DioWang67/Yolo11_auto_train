@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
