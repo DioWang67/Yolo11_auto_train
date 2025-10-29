@@ -134,7 +134,9 @@ def test_load_default_config_reads_packaged_file(controller, tmp_path, monkeypat
 
 def test_load_config_missing_file_falls_back(controller, tmp_path, monkeypatch):
     fallback = tmp_path / "fallback.yaml"
-    fallback.write_text("pipeline: {log_file: logs/pipeline.log, tasks: []}\n", encoding="utf-8")
+    fallback.write_text(
+        "pipeline: {log_file: logs/pipeline.log, tasks: []}\n", encoding="utf-8"
+    )
     monkeypatch.setattr(
         pipeline_controller.PipelineControllerMixin,
         "_default_config_path",
@@ -154,7 +156,11 @@ def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
             "log_file": "logs/pipeline.log",
             "tasks": [
                 {"name": "dataset_splitter", "enabled": True, "dependencies": []},
-                {"name": "yolo_train", "enabled": True, "dependencies": ["dataset_splitter"]},
+                {
+                    "name": "yolo_train",
+                    "enabled": True,
+                    "dependencies": ["dataset_splitter"],
+                },
             ],
         },
         "train_test_split": {

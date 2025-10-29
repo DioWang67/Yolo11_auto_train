@@ -116,30 +116,42 @@ def test_should_skip_yolo_augmentation_when_outputs_newer(base_config, temp_dirs
     for out_dir in (temp_dirs["aug_images"], temp_dirs["aug_labels"]):
         _touch(out_dir / "marker.txt")
 
-    reason = pipeline._should_skip("yolo_augmentation", base_config, SimpleNamespace(force=False), None)
+    reason = pipeline._should_skip(
+        "yolo_augmentation", base_config, SimpleNamespace(force=False), None
+    )
     assert reason is not None
 
 
 def test_should_skip_dataset_splitter_when_split_ready(base_config):
-    reason = pipeline._should_skip("dataset_splitter", base_config, SimpleNamespace(force=False), None)
+    reason = pipeline._should_skip(
+        "dataset_splitter", base_config, SimpleNamespace(force=False), None
+    )
     assert reason is not None
 
 
 def test_should_skip_yolo_train_when_weights_fresh(base_config, temp_dirs):
-    reason = pipeline._should_skip("yolo_train", base_config, SimpleNamespace(force=False), None)
+    reason = pipeline._should_skip(
+        "yolo_train", base_config, SimpleNamespace(force=False), None
+    )
     assert reason is not None
 
 
 def test_should_skip_dataset_lint_when_csv_fresh(base_config):
-    reason = pipeline._should_skip("dataset_lint", base_config, SimpleNamespace(force=False), None)
+    reason = pipeline._should_skip(
+        "dataset_lint", base_config, SimpleNamespace(force=False), None
+    )
     assert reason is not None
 
 
 def test_should_skip_aug_preview_when_preview_exists(base_config):
-    reason = pipeline._should_skip("aug_preview", base_config, SimpleNamespace(force=False), None)
+    reason = pipeline._should_skip(
+        "aug_preview", base_config, SimpleNamespace(force=False), None
+    )
     assert reason is not None
 
 
 def test_should_skip_batch_inference_when_predictions_exist(base_config):
-    reason = pipeline._should_skip("batch_inference", base_config, SimpleNamespace(force=False), None)
+    reason = pipeline._should_skip(
+        "batch_inference", base_config, SimpleNamespace(force=False), None
+    )
     assert reason is not None

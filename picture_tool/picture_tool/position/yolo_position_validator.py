@@ -6,7 +6,18 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import yaml
 
@@ -82,7 +93,9 @@ class PositionValidationResult:
         }
 
 
-def load_position_config(source: Optional[Union[str, Path, Mapping[str, Any]]]) -> PositionConfig:
+def load_position_config(
+    source: Optional[Union[str, Path, Mapping[str, Any]]],
+) -> PositionConfig:
     if source is None:
         return {}
     if isinstance(source, (str, Path)):
@@ -167,7 +180,9 @@ def _resolve_class_name(names: Any, class_id: int) -> str:
     return str(class_id)
 
 
-def convert_results_to_detections(result: Any, imgsz: Union[int, Sequence[int]]) -> List[Dict[str, Any]]:
+def convert_results_to_detections(
+    result: Any, imgsz: Union[int, Sequence[int]]
+) -> List[Dict[str, Any]]:
     imgsz_int = _imgsz_value(imgsz)
     boxes = getattr(result, "boxes", None)
     if boxes is None:
@@ -288,7 +303,9 @@ def validate_detections_against_area(
             entry["status"] = "UNKNOWN"
             unknown.append(class_name)
         else:
-            if expected_box.contains(float(cx), float(cy), tolerance_px, float(imgsz_int)):
+            if expected_box.contains(
+                float(cx), float(cy), tolerance_px, float(imgsz_int)
+            ):
                 entry["status"] = "CORRECT"
             else:
                 entry["status"] = "WRONG"
@@ -335,12 +352,15 @@ def validate_detections_against_area(
 
 def _resolve_sample_images(directory: Path) -> List[Path]:
     if not directory.exists():
-        raise FileNotFoundError(f"Position validation sample_dir not found: {directory}")
+        raise FileNotFoundError(
+            f"Position validation sample_dir not found: {directory}"
+        )
     images = [
         p
         for p in sorted(directory.iterdir())
         if p.is_file()
-        and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+        and p.suffix.lower()
+        in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
     ]
     if not images:
         raise FileNotFoundError(f"No images available under {directory}")
@@ -358,9 +378,7 @@ def _resolve_weights(run_dir: Path, override: Optional[Union[str, Path]]) -> Pat
         candidate = weights_dir / name
         if candidate.exists():
             return candidate
-    raise FileNotFoundError(
-        f"Unable to locate trained weights under {weights_dir}"
-    )
+    raise FileNotFoundError(f"Unable to locate trained weights under {weights_dir}")
 
 
 def run_position_validation(
@@ -380,7 +398,9 @@ def run_position_validation(
     product = pv_cfg.get("product")
     area = pv_cfg.get("area")
     if not product or not area:
-        raise ValueError("position_validation requires product and area to be specified")
+        raise ValueError(
+            "position_validation requires product and area to be specified"
+        )
     imgsz_value = pv_cfg.get("imgsz")
     if imgsz_value in (None, "", 0):
         imgsz_value = ycfg.get("imgsz", 640)
@@ -398,7 +418,9 @@ def run_position_validation(
     if not config_source:
         config_source = pv_cfg.get("config_path")
     if not config_source:
-        config_source = config.get("position_config") if isinstance(config, Mapping) else None
+        config_source = (
+            config.get("position_config") if isinstance(config, Mapping) else None
+        )
     if not config_source:
         raise ValueError("position_validation requires a position config source")
     position_config = load_position_config(config_source)

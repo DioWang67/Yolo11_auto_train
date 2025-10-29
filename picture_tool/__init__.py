@@ -1,4 +1,5 @@
 """Top-level package bootstrap to expose nested modules as picture_tool.*"""
+
 from __future__ import annotations
 
 import importlib

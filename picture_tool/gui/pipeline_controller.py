@@ -25,6 +25,7 @@ Expected helper methods (provided by other mixins)
 - ``_set_task_status(task: str, message: str, color: QColor)``
 - ``refresh_metrics_dashboard()``
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -62,13 +63,17 @@ class PipelineControllerMixin:
                 return candidate
         return candidates[-1]
 
-    def _show_warning(self, title: str, message: str) -> None:  # pragma: no cover - UI helper
+    def _show_warning(
+        self, title: str, message: str
+    ) -> None:  # pragma: no cover - UI helper
         try:
             QMessageBox.warning(self, title, message)
         except Exception:
             self.log_message(f"[警告] {title}: {message}")
 
-    def _show_error(self, title: str, message: str) -> None:  # pragma: no cover - UI helper
+    def _show_error(
+        self, title: str, message: str
+    ) -> None:  # pragma: no cover - UI helper
         try:
             QMessageBox.critical(self, title, message)
         except Exception:
@@ -93,7 +98,9 @@ class PipelineControllerMixin:
                     self.update_config_display()
                     self.refresh_metrics_dashboard()
                     return
-            except Exception as exc:  # pragma: no cover - fallback when bundled config invalid
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - fallback when bundled config invalid
                 self.log_message(f" 載入預設設定檔失敗: {exc}")
 
         fallback = {
@@ -233,7 +240,10 @@ class PipelineControllerMixin:
         )
 
         try:
-            if hasattr(self, "apply_overrides_cb") and self.apply_overrides_cb.isChecked():
+            if (
+                hasattr(self, "apply_overrides_cb")
+                and self.apply_overrides_cb.isChecked()
+            ):
                 yt = self.config.get("yolo_training", {}) or {}
                 dev = self.override_device_edit.text().strip()
                 ep = self.override_epochs_edit.text().strip()
@@ -265,11 +275,15 @@ class PipelineControllerMixin:
                 if isinstance(ycfg, dict):
                     pos_cfg = ycfg.get("position_validation", {}) or {}
 
-            want_position_validation = getattr(self, "POSITION_TASK_LABEL", "") in selected_tasks
+            want_position_validation = (
+                getattr(self, "POSITION_TASK_LABEL", "") in selected_tasks
+            )
             train_selected = getattr(self, "YOLO_TRAIN_LABEL", "") in selected_tasks
 
             if want_position_validation and not pos_cfg.get("enabled"):
-                self._show_warning("提醒", "已勾選位置檢查，請先啟用位置設定或取消勾選。")
+                self._show_warning(
+                    "提醒", "已勾選位置檢查，請先啟用位置設定或取消勾選。"
+                )
                 self.on_pipeline_finished()
                 return
 
@@ -282,7 +296,9 @@ class PipelineControllerMixin:
                 if not (pos_cfg.get("config_path") or pos_cfg.get("config")):
                     missing_fields.append("位置設定檔")
                 if missing_fields:
-                    self._show_warning("提醒", "位置檢查需求未滿足：" + "、".join(missing_fields))
+                    self._show_warning(
+                        "提醒", "位置檢查需求未滿足：" + "、".join(missing_fields)
+                    )
                     self.on_pipeline_finished()
                     return
 

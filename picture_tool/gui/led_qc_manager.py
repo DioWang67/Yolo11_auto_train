@@ -101,7 +101,12 @@ class LedQcManager:
         if overrides:
             cfg.update(overrides)
 
-        simple_keys = ("colors", "color_aliases", "color_hue_ranges", "color_conf_min_per_color")
+        simple_keys = (
+            "colors",
+            "color_aliases",
+            "color_hue_ranges",
+            "color_conf_min_per_color",
+        )
         for source in (led_section, sub_cfg):
             if not isinstance(source, dict):
                 continue

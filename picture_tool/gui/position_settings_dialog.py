@@ -1,10 +1,18 @@
 """Dialog for configuring position validation settings."""
+
 from __future__ import annotations
 
 
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QGridLayout, QLabel, QLineEdit, QHBoxLayout,
-    QFileDialog, QDialogButtonBox, QFrame
+    QDialog,
+    QVBoxLayout,
+    QGridLayout,
+    QLabel,
+    QLineEdit,
+    QHBoxLayout,
+    QFileDialog,
+    QDialogButtonBox,
+    QFrame,
 )
 
 from .custom_widgets import CompactButton
@@ -32,11 +40,15 @@ class PositionSettingsDialog(QDialog):
 
         # 模型參數
         imgsz_value = self._settings.get("imgsz")
-        self.imgsz_edit = QLineEdit("" if imgsz_value in (None, "") else str(imgsz_value))
+        self.imgsz_edit = QLineEdit(
+            "" if imgsz_value in (None, "") else str(imgsz_value)
+        )
         conf_value = self._settings.get("conf")
         self.conf_edit = QLineEdit("" if conf_value in (None, "") else str(conf_value))
         tol_value = self._settings.get("tolerance_override")
-        self.tolerance_edit = QLineEdit("" if tol_value in (None, "") else str(tol_value))
+        self.tolerance_edit = QLineEdit(
+            "" if tol_value in (None, "") else str(tol_value)
+        )
 
         form.addWidget(QLabel("影像尺寸:"), 2, 0)
         form.addWidget(self.imgsz_edit, 2, 1)
@@ -104,8 +116,10 @@ class PositionSettingsDialog(QDialog):
 
     def _browse_config_path(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "選擇位置設定檔", self.config_path_edit.text() or "",
-            "YAML files (*.yaml *.yml)"
+            self,
+            "選擇位置設定檔",
+            self.config_path_edit.text() or "",
+            "YAML files (*.yaml *.yml)",
         )
         if file_path:
             self.config_path_edit.setText(file_path)
@@ -119,8 +133,10 @@ class PositionSettingsDialog(QDialog):
 
     def _browse_weights_path(self):
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "選擇權重檔", self.weights_path_edit.text() or "",
-            "Model files (*.pt *.onnx *.engine);;All files (*.*)"
+            self,
+            "選擇權重檔",
+            self.weights_path_edit.text() or "",
+            "Model files (*.pt *.onnx *.engine);;All files (*.*)",
         )
         if file_path:
             self.weights_path_edit.setText(file_path)

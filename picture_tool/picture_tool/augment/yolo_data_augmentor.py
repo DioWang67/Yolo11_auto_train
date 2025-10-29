@@ -1,8 +1,9 @@
 import cv2
+
 try:
     import albumentations as A  # type: ignore[import]
 except ImportError as exc:
-    raise ImportError('Albumentations is required for DataAugmentor.') from exc
+    raise ImportError("Albumentations is required for DataAugmentor.") from exc
 
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
@@ -235,7 +236,7 @@ class DataAugmentor:
         result = np.full((target_size, target_size, 3), 128, dtype=np.uint8)
         y_offset = (target_size - new_h) // 2
         x_offset = (target_size - new_w) // 2
-        result[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+        result[y_offset : y_offset + new_h, x_offset : x_offset + new_w] = resized
         transform_params = {
             "scale": scale,
             "x_offset": x_offset,
@@ -316,7 +317,7 @@ class DataAugmentor:
                 self.augmentations = self._create_augmentations()
             augmentations = self.augmentations
             if augmentations is None:
-                raise RuntimeError('Augmentation pipeline failed to initialize.')
+                raise RuntimeError("Augmentation pipeline failed to initialize.")
             if self.config["processing"].get("debug_mode", False):
                 debug_dir = Path(
                     self.config["output"].get("debug_dir", "debug_visualizations")
@@ -345,7 +346,7 @@ class DataAugmentor:
                         augmented_labels = class_labels.copy()
                     if len(augmented_bboxes) == 0:
                         self.logger.warning(
-                            f"增強後沒有剩餘標註，跳過: {img_file}_aug_{i+1}"
+                            f"增強後沒有剩餘標註，跳過: {img_file}_aug_{i + 1}"
                         )
                         continue
                     final_image, transform_params = self.resize_with_padding(
@@ -369,7 +370,7 @@ class DataAugmentor:
                             valid_labels.append(label)
                     if len(valid_bboxes) == 0:
                         self.logger.warning(
-                            f"沒有有效的最終標註，跳過 {img_file}_aug_{i+1}"
+                            f"沒有有效的最終標註，跳過 {img_file}_aug_{i + 1}"
                         )
                         continue
                     if self.config["processing"].get("debug_mode", False):
@@ -379,14 +380,14 @@ class DataAugmentor:
                             )
                         )
                         debug_viz_path = (
-                            debug_dir / f"{Path(img_file).stem}_aug_{i+1}.png"
+                            debug_dir / f"{Path(img_file).stem}_aug_{i + 1}.png"
                         )
                         self.visualize_bboxes(
                             final_image,
                             valid_bboxes,
                             valid_labels,
                             str(debug_viz_path),
-                            f"Augmented: {img_file}_aug_{i+1}",
+                            f"Augmented: {img_file}_aug_{i + 1}",
                         )
                     aug_img_filename = f"{Path(img_file).stem}_aug_{i + 1}.png"
                     aug_img_path = (
@@ -407,7 +408,7 @@ class DataAugmentor:
                         f"輸出: {aug_img_filename} (含 {len(valid_bboxes)} 個框)"
                     )
                 except Exception as e:
-                    self.logger.error(f"套用增強發生錯誤 {img_file}_aug_{i+1}: {e}")
+                    self.logger.error(f"套用增強發生錯誤 {img_file}_aug_{i + 1}: {e}")
                     continue
         except Exception as e:
             self.logger.error(f"處理單張影像出錯 {img_file}: {e}")

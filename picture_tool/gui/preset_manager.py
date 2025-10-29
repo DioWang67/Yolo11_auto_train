@@ -1,4 +1,5 @@
 """Preset management helpers for the auto-train GUI."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +8,9 @@ from typing import Any
 import yaml
 from PyQt5.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-DEFAULT_PRESET_CONFIG_PATH = (Path(__file__).resolve().parent.parent / "preset_config.yaml").resolve()
+DEFAULT_PRESET_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "preset_config.yaml"
+).resolve()
 
 
 class PresetManagerMixin:
@@ -32,16 +35,24 @@ class PresetManagerMixin:
             self._preset_delete_button = delete_button
 
     def _get_preset_text_widget(self) -> Any | None:
-        return getattr(self, "_preset_text_widget", None) or getattr(self, "preset_text", None)
+        return getattr(self, "_preset_text_widget", None) or getattr(
+            self, "preset_text", None
+        )
 
     def _get_preset_combo(self) -> Any | None:
-        return getattr(self, "_preset_combo_widget", None) or getattr(self, "preset_combo", None)
+        return getattr(self, "_preset_combo_widget", None) or getattr(
+            self, "preset_combo", None
+        )
 
     def _get_preset_apply_button(self) -> Any | None:
-        return getattr(self, "_preset_apply_button", None) or getattr(self, "apply_preset_btn", None)
+        return getattr(self, "_preset_apply_button", None) or getattr(
+            self, "apply_preset_btn", None
+        )
 
     def _get_preset_delete_button(self) -> Any | None:
-        return getattr(self, "_preset_delete_button", None) or getattr(self, "delete_preset_btn", None)
+        return getattr(self, "_preset_delete_button", None) or getattr(
+            self, "delete_preset_btn", None
+        )
 
     def _load_preset_storage(self) -> None:
         storage: dict[str, Any] = {"presets": {}}
@@ -94,12 +105,20 @@ class PresetManagerMixin:
         self.task_presets = {}
         preset_combo.blockSignals(True)
         preset_combo.clear()
-        presets = self.preset_storage.get("presets") if isinstance(self.preset_storage, dict) else {}
+        presets = (
+            self.preset_storage.get("presets")
+            if isinstance(self.preset_storage, dict)
+            else {}
+        )
         if not isinstance(presets, dict):
             presets = {}
         has_presets = False
         for name in sorted(presets.keys()):
-            labels = [label for label in presets.get(name, []) if label in self.task_checkboxes]
+            labels = [
+                label
+                for label in presets.get(name, [])
+                if label in self.task_checkboxes
+            ]
             if not labels:
                 continue
             key = f"custom::{name}"
@@ -145,13 +164,19 @@ class PresetManagerMixin:
             return
         for label, checkbox in self.task_checkboxes.items():
             checkbox.setChecked(label in labels)
-        name = key.split("::", 1)[1] if isinstance(key, str) and "::" in key else str(key)
+        name = (
+            key.split("::", 1)[1] if isinstance(key, str) and "::" in key else str(key)
+        )
         self.log_message(f"✅ 已套用流程：{name}")
 
     def save_selected_as_preset(self) -> None:
         if not hasattr(self, "task_checkboxes"):
             return
-        selected = [label for label, checkbox in self.task_checkboxes.items() if checkbox.isChecked()]
+        selected = [
+            label
+            for label, checkbox in self.task_checkboxes.items()
+            if checkbox.isChecked()
+        ]
         if not selected:
             QMessageBox.warning(self, "警示", "請先選擇至少一個任務後再儲存流程")
             return
@@ -185,7 +210,11 @@ class PresetManagerMixin:
             QMessageBox.information(self, "提示", "請先選擇自訂流程後再刪除")
             return
         name = key.split("::", 1)[1]
-        presets = self.preset_storage.get("presets") if isinstance(self.preset_storage, dict) else None
+        presets = (
+            self.preset_storage.get("presets")
+            if isinstance(self.preset_storage, dict)
+            else None
+        )
         if not isinstance(presets, dict) or name not in presets:
             QMessageBox.information(self, "提示", "流程已不存在或無法刪除")
             return
@@ -206,7 +235,9 @@ class PresetManagerMixin:
         self.log_message(f"已刪除流程：{name}")
 
     def export_presets(self) -> None:
-        if not isinstance(self.preset_storage, dict) or not self.preset_storage.get("presets"):
+        if not isinstance(self.preset_storage, dict) or not self.preset_storage.get(
+            "presets"
+        ):
             QMessageBox.information(self, "提示", "目前沒有可匯出的流程設定")
             return
         file_path, _ = QFileDialog.getSaveFileName(
@@ -219,8 +250,15 @@ class PresetManagerMixin:
             return
         try:
             with open(file_path, "w", encoding="utf-8") as fh:
-                yaml.safe_dump({"presets": self.preset_storage.get("presets", {})}, fh, allow_unicode=True, sort_keys=True)
-            QMessageBox.information(self, "匯出成功", f"流程設定已匯出至：\n{file_path}")
+                yaml.safe_dump(
+                    {"presets": self.preset_storage.get("presets", {})},
+                    fh,
+                    allow_unicode=True,
+                    sort_keys=True,
+                )
+            QMessageBox.information(
+                self, "匯出成功", f"流程設定已匯出至：\n{file_path}"
+            )
         except Exception as exc:  # pragma: no cover - UI feedback only
             QMessageBox.critical(self, "匯出失敗", f"寫入檔案時發生錯誤：\n{exc}")
 

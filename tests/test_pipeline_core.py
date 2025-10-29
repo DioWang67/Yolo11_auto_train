@@ -64,7 +64,10 @@ def minimal_config(tmp_path):
             "task_groups": {"train": ["dataset_splitter", "yolo_train"]},
         },
         "train_test_split": {
-            "input": {"image_dir": str(tmp_path / "images"), "label_dir": str(tmp_path / "labels")},
+            "input": {
+                "image_dir": str(tmp_path / "images"),
+                "label_dir": str(tmp_path / "labels"),
+            },
             "output": {"output_dir": str(tmp_path / "split")},
         },
         "yolo_training": {
@@ -98,7 +101,9 @@ def test_run_pipeline_executes_in_declared_order(monkeypatch, minimal_config):
     logger = DummyLogger()
     calls = []
 
-    monkeypatch.setattr(pipeline, "load_config_if_updated", lambda path, config, lg: config)
+    monkeypatch.setattr(
+        pipeline, "load_config_if_updated", lambda path, config, lg: config
+    )
     monkeypatch.setattr(pipeline, "_apply_cli_overrides", lambda config, args, lg: None)
     monkeypatch.setattr(pipeline, "_auto_device", lambda config, lg: None)
     monkeypatch.setattr(pipeline, "_should_skip", lambda task, config, args, lg: None)
@@ -109,8 +114,12 @@ def test_run_pipeline_executes_in_declared_order(monkeypatch, minimal_config):
 
         return _handler
 
-    monkeypatch.setitem(pipeline.TASK_HANDLERS, "dataset_splitter", handler_factory("dataset_splitter"))
-    monkeypatch.setitem(pipeline.TASK_HANDLERS, "yolo_train", handler_factory("yolo_train"))
+    monkeypatch.setitem(
+        pipeline.TASK_HANDLERS, "dataset_splitter", handler_factory("dataset_splitter")
+    )
+    monkeypatch.setitem(
+        pipeline.TASK_HANDLERS, "yolo_train", handler_factory("yolo_train")
+    )
 
     pipeline.run_pipeline(["yolo_train"], cfg, logger, args)
 
@@ -133,7 +142,9 @@ def test_run_pipeline_honours_stop_event(monkeypatch, minimal_config):
 
     stop_event = StopEvent()
 
-    monkeypatch.setattr(pipeline, "load_config_if_updated", lambda path, config, lg: config)
+    monkeypatch.setattr(
+        pipeline, "load_config_if_updated", lambda path, config, lg: config
+    )
     monkeypatch.setattr(pipeline, "_apply_cli_overrides", lambda config, args, lg: None)
     monkeypatch.setattr(pipeline, "_auto_device", lambda config, lg: None)
     monkeypatch.setattr(pipeline, "_should_skip", lambda task, config, args, lg: None)
@@ -159,7 +170,9 @@ def test_get_tasks_from_groups_union(minimal_config):
 
 
 def test_train_yolo_requires_class_names(tmp_path):
-    bad_config = {"yolo_training": {"dataset_dir": str(tmp_path / "dataset"), "class_names": []}}
+    bad_config = {
+        "yolo_training": {"dataset_dir": str(tmp_path / "dataset"), "class_names": []}
+    }
     logger = logging.getLogger("test")
     with pytest.raises(ValueError):
         yolo_trainer.train_yolo(bad_config, logger=logger)

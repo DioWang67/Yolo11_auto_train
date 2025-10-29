@@ -52,7 +52,9 @@ def test_lint_and_preview(tmp_path, dataset):
     }
 
     lint_dir = dataset_linter.lint_dataset(config, logger=logging.getLogger("test"))
-    preview_path = dataset_linter.preview_dataset(config, logger=logging.getLogger("test"))
+    preview_path = dataset_linter.preview_dataset(
+        config, logger=logging.getLogger("test")
+    )
 
     assert (Path(lint_dir) / "lint.csv").exists()
     assert preview_path.exists()

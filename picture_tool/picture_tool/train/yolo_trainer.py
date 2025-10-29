@@ -95,7 +95,9 @@ def _load_class_names_from_run(
         try:
             args_data = yaml.safe_load(args_path.read_text(encoding="utf-8")) or {}
         except Exception as exc:  # pragma: no cover - defensive logging
-            logger.warning("Detection config export: failed to read %s (%s)", args_path, exc)
+            logger.warning(
+                "Detection config export: failed to read %s (%s)", args_path, exc
+            )
             args_data = {}
         if isinstance(args_data, Mapping):
             names = _normalize_name_sequence(args_data.get("names"))
@@ -108,7 +110,9 @@ def _load_class_names_from_run(
                     data_path = (run_dir / data_path).resolve()
                 if data_path.exists():
                     try:
-                        data_yaml = yaml.safe_load(data_path.read_text(encoding="utf-8")) or {}
+                        data_yaml = (
+                            yaml.safe_load(data_path.read_text(encoding="utf-8")) or {}
+                        )
                     except Exception as exc:  # pragma: no cover
                         logger.warning(
                             "Detection config export: failed to read dataset yaml %s (%s)",
@@ -139,16 +143,22 @@ def _load_mapping_from_source(source: Any, logger: logging.Logger) -> Dict[str, 
     except Exception:
         return {}
     if not path.exists():
-        logger.warning("Detection config export skipped: config file not found at %s", path)
+        logger.warning(
+            "Detection config export skipped: config file not found at %s", path
+        )
         return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:  # pragma: no cover - defensive logging around YAML errors
-        logger.error("Detection config export skipped: failed to read %s (%s)", path, exc)
+        logger.error(
+            "Detection config export skipped: failed to read %s (%s)", path, exc
+        )
         return {}
     if isinstance(data, Mapping):
         return {str(k): v for k, v in data.items()}
-    logger.warning("Detection config export skipped: %s did not contain a mapping", path)
+    logger.warning(
+        "Detection config export skipped: %s did not contain a mapping", path
+    )
     return {}
 
 
@@ -175,7 +185,9 @@ def _apply_area_overrides(
     if tol_unit:
         area_dict["tolerance_unit"] = str(tol_unit)
     if imgsz:
-        area_dict["imgsz"] = imgsz[0] if len(imgsz) == 2 and imgsz[0] == imgsz[1] else imgsz
+        area_dict["imgsz"] = (
+            imgsz[0] if len(imgsz) == 2 and imgsz[0] == imgsz[1] else imgsz
+        )
     return area_dict
 
 
@@ -199,7 +211,9 @@ def _prepare_position_config(
             if isinstance(area_block, Mapping):
                 return {
                     product_key: {
-                        area_key: _apply_area_overrides(area_block, export_cfg, imgsz, logger, warned)
+                        area_key: _apply_area_overrides(
+                            area_block, export_cfg, imgsz, logger, warned
+                        )
                     }
                 }
             logger.warning(
@@ -244,7 +258,9 @@ def _normalize_expected_items(
             and area
         ):
             return {
-                str(product): {str(area): [str(item) for item in value if item is not None]}
+                str(product): {
+                    str(area): [str(item) for item in value if item is not None]
+                }
             }
         return {}
     normalized: Dict[str, Dict[str, List[str]]] = {}
@@ -264,9 +280,13 @@ def _normalize_expected_items(
 
 def _resolve_sample_images(directory: Path) -> List[Path]:
     if not directory.exists():
-        raise FileNotFoundError(f"Position validation sample_dir not found: {directory}")
+        raise FileNotFoundError(
+            f"Position validation sample_dir not found: {directory}"
+        )
     images = [
-        p for p in sorted(directory.iterdir()) if p.is_file() and p.suffix.lower() in ImageSuffixes
+        p
+        for p in sorted(directory.iterdir())
+        if p.is_file() and p.suffix.lower() in ImageSuffixes
     ]
     if not images:
         raise FileNotFoundError(f"No images available under {directory}")
@@ -280,7 +300,9 @@ def _auto_generate_position_config(
 ) -> Optional[Path]:
     """Automatically derive a position config from latest training results."""
     if YOLO is None:
-        logger.info("Skipping auto position config generation: ultralytics not available.")
+        logger.info(
+            "Skipping auto position config generation: ultralytics not available."
+        )
         return None
     ycfg = config.get("yolo_training")
     if not isinstance(ycfg, MutableMapping):
@@ -305,7 +327,11 @@ def _auto_generate_position_config(
 
     imgsz_value = pos_cfg.get("imgsz") or ycfg.get("imgsz") or 640
     imgsz_norm = _normalize_imgsz(imgsz_value) or [640, 640]
-    imgsz_int = imgsz_norm[0] if len(imgsz_norm) == 2 and imgsz_norm[0] == imgsz_norm[1] else imgsz_norm[0]
+    imgsz_int = (
+        imgsz_norm[0]
+        if len(imgsz_norm) == 2 and imgsz_norm[0] == imgsz_norm[1]
+        else imgsz_norm[0]
+    )
 
     dataset_dir = Path(str(ycfg.get("dataset_dir", "./data/split")))
     sample_dir_value = pos_cfg.get("sample_dir") or (dataset_dir / "val" / "images")
@@ -321,7 +347,8 @@ def _auto_generate_position_config(
         weights_path = run_dir / "weights" / "last.pt"
     if not weights_path.exists():
         logger.warning(
-            "Auto position config generation skipped: unable to locate weights under %s", run_dir
+            "Auto position config generation skipped: unable to locate weights under %s",
+            run_dir,
         )
         return None
 
@@ -340,17 +367,24 @@ def _auto_generate_position_config(
     try:
         model = YOLO(str(weights_path))
     except Exception as exc:  # pragma: no cover
-        logger.warning("Auto position config generation skipped: failed to load weights (%s)", exc)
+        logger.warning(
+            "Auto position config generation skipped: failed to load weights (%s)", exc
+        )
         return None
 
     boxes_by_class: Dict[str, List[List[int]]] = {}
     for img_path in images:
         try:
             results = model(
-                str(img_path), imgsz=imgsz_norm if len(imgsz_norm) > 1 else imgsz_norm[0], device=str(device_value), conf=float(conf_value)
+                str(img_path),
+                imgsz=imgsz_norm if len(imgsz_norm) > 1 else imgsz_norm[0],
+                device=str(device_value),
+                conf=float(conf_value),
             )
         except Exception as exc:  # pragma: no cover
-            logger.warning("Auto position config: inference failed for %s (%s)", img_path.name, exc)
+            logger.warning(
+                "Auto position config: inference failed for %s (%s)", img_path.name, exc
+            )
             continue
         for res in results:
             detections = convert_results_to_detections(res, imgsz_int)
@@ -368,7 +402,9 @@ def _auto_generate_position_config(
                 boxes_by_class.setdefault(cls, []).append(box_vals)
 
     if not boxes_by_class:
-        logger.warning("Auto position config generation skipped: no detections collected from sample images.")
+        logger.warning(
+            "Auto position config generation skipped: no detections collected from sample images."
+        )
         return None
 
     def aggregate(boxes: List[List[int]]) -> Dict[str, int]:
@@ -380,12 +416,16 @@ def _auto_generate_position_config(
 
     expected_boxes = {cls: aggregate(bxs) for cls, bxs in boxes_by_class.items()}
     if not expected_boxes:
-        logger.warning("Auto position config generation skipped: expected boxes could not be computed.")
+        logger.warning(
+            "Auto position config generation skipped: expected boxes could not be computed."
+        )
         return None
 
     tolerance_value = pos_cfg.get("tolerance_override")
     if tolerance_value is None:
-        tolerance_value = float(pos_cfg.get("tolerance", 0.0)) if "tolerance" in pos_cfg else 0.0
+        tolerance_value = (
+            float(pos_cfg.get("tolerance", 0.0)) if "tolerance" in pos_cfg else 0.0
+        )
 
     area_block: Dict[str, Any] = {
         "enabled": True,
@@ -393,7 +433,11 @@ def _auto_generate_position_config(
         "tolerance": float(tolerance_value),
         "expected_boxes": expected_boxes,
     }
-    area_block["imgsz"] = imgsz_norm[0] if len(imgsz_norm) == 2 and imgsz_norm[0] == imgsz_norm[1] else imgsz_norm
+    area_block["imgsz"] = (
+        imgsz_norm[0]
+        if len(imgsz_norm) == 2 and imgsz_norm[0] == imgsz_norm[1]
+        else imgsz_norm
+    )
 
     position_config = {str(product): {str(area): area_block}}
     out_path = (run_dir / "auto_position_config.yaml").resolve()
@@ -435,7 +479,8 @@ def _maybe_export_detection_config(
     weights_path = (run_dir / "weights" / weights_name).resolve()
     if not weights_path.exists():
         logger.warning(
-            "Detection config export skipped: unable to find weights at %s", weights_path
+            "Detection config export skipped: unable to find weights at %s",
+            weights_path,
         )
         return None
 
@@ -723,7 +768,9 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     position_cfg = ycfg.get("position_validation", {})
     if isinstance(position_cfg, Mapping) and position_cfg.get("enabled"):
         try:
-            from picture_tool.position.yolo_position_validator import run_position_validation
+            from picture_tool.position.yolo_position_validator import (
+                run_position_validation,
+            )
 
             run_position_validation(config, run_dir, logger=logger)
         except Exception as exc:

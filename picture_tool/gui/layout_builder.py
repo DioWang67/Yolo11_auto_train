@@ -1,4 +1,5 @@
 """Layout helper mixin for Picture Tool GUI."""
+
 from __future__ import annotations
 
 from typing import Dict
@@ -91,13 +92,13 @@ class LayoutBuilderMixin:
 
         select_layout = QHBoxLayout()
         select_layout.setSpacing(6)
-        select_all_btn = CompactButton(' 全部勾選', 'success')
-        deselect_all_btn = CompactButton(' 全部取消', 'danger')
+        select_all_btn = CompactButton(" 全部勾選", "success")
+        deselect_all_btn = CompactButton(" 全部取消", "danger")
         self.preset_combo = QComboBox()
         self.preset_combo.setEditable(False)
         self.preset_combo.setMinimumContentsLength(10)
-        self.preset_combo.setPlaceholderText('載入預設')
-        self.apply_preset_btn = CompactButton(' 套用預設', 'primary')
+        self.preset_combo.setPlaceholderText("載入預設")
+        self.apply_preset_btn = CompactButton(" 套用預設", "primary")
 
         select_all_btn.clicked.connect(self.select_all_tasks)
         deselect_all_btn.clicked.connect(self.deselect_all_tasks)
@@ -113,10 +114,10 @@ class LayoutBuilderMixin:
 
         manage_layout = QHBoxLayout()
         manage_layout.setSpacing(6)
-        self.save_preset_btn = CompactButton(' 儲存預設', 'secondary')
-        self.delete_preset_btn = CompactButton(' 刪除預設', 'danger')
-        export_preset_btn = CompactButton(' 匯出預設', 'secondary')
-        import_preset_btn = CompactButton(' 匯入預設', 'secondary')
+        self.save_preset_btn = CompactButton(" 儲存預設", "secondary")
+        self.delete_preset_btn = CompactButton(" 刪除預設", "danger")
+        export_preset_btn = CompactButton(" 匯出預設", "secondary")
+        import_preset_btn = CompactButton(" 匯入預設", "secondary")
         self.save_preset_btn.clicked.connect(self.save_selected_as_preset)
         self.delete_preset_btn.clicked.connect(self.delete_selected_preset)
         self.delete_preset_btn.setEnabled(False)
@@ -135,7 +136,7 @@ class LayoutBuilderMixin:
             delete_button=self.delete_preset_btn,
         )
 
-        status_group = QGroupBox(' 任務狀態')
+        status_group = QGroupBox(" 任務狀態")
         status_layout = QVBoxLayout(status_group)
         self.status_list = QListWidget()
         self.status_list.setIconSize(QSize(14, 14))
@@ -150,7 +151,7 @@ class LayoutBuilderMixin:
         utility_layout = QHBoxLayout()
         utility_layout.setSpacing(6)
         self.quick_nav_btn = QToolButton()
-        self.quick_nav_btn.setText(' 快速導覽')
+        self.quick_nav_btn.setText(" 快速導覽")
         self.quick_nav_btn.setPopupMode(QToolButton.InstantPopup)
         self.quick_nav_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.quick_nav_btn.setCursor(Qt.PointingHandCursor)
@@ -175,11 +176,11 @@ class LayoutBuilderMixin:
             }
         """)
         self.quick_nav_menu = QMenu(self.quick_nav_btn)
-        self.quick_nav_menu.addAction('操作說明', self.show_quick_guide)
+        self.quick_nav_menu.addAction("操作說明", self.show_quick_guide)
         self.quick_nav_btn.setMenu(self.quick_nav_menu)
         utility_layout.addWidget(self.quick_nav_btn)
 
-        self.preflight_btn = CompactButton(' 預檢', 'primary')
+        self.preflight_btn = CompactButton(" 預檢", "primary")
         self.preflight_btn.clicked.connect(self.run_preflight_check)
         utility_layout.addWidget(self.preflight_btn)
         utility_layout.addStretch()

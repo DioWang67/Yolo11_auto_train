@@ -1,4 +1,5 @@
 """Metrics dashboard helpers for the auto-train GUI."""
+
 from __future__ import annotations
 
 import csv
@@ -12,7 +13,9 @@ class MetricsDashboardMixin:
         self._metrics_text_widget = widget
 
     def _get_metrics_text_widget(self) -> Any | None:
-        return getattr(self, "_metrics_text_widget", None) or getattr(self, "metrics_text", None)
+        return getattr(self, "_metrics_text_widget", None) or getattr(
+            self, "metrics_text", None
+        )
 
     def refresh_metrics_dashboard(self) -> None:
         metrics_text = self._get_metrics_text_widget()
@@ -81,7 +84,9 @@ class MetricsDashboardMixin:
         box_loss = pick("train/box_loss", "box_loss", "loss/box")
         cls_loss = pick("train/cls_loss", "cls_loss", "loss/cls")
 
-        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime(
+            "%Y-%m-%d %H:%M"
+        )
         metrics = [
             f"結案資料夾：{self._format_relative_path(latest.parent)}",
             f"最後更新：{last_update}",
@@ -96,8 +101,14 @@ class MetricsDashboardMixin:
         return metrics
 
     def _load_latest_led_metrics(self) -> List[str]:
-        led_config = self.config.get("led_qc_enhanced", {}) if isinstance(self.config, dict) else {}
-        detect_dir_cfg = led_config.get("detect_dir", {}) if isinstance(led_config, dict) else {}
+        led_config = (
+            self.config.get("led_qc_enhanced", {})
+            if isinstance(self.config, dict)
+            else {}
+        )
+        detect_dir_cfg = (
+            led_config.get("detect_dir", {}) if isinstance(led_config, dict) else {}
+        )
         led_dir = Path(detect_dir_cfg.get("out_dir") or "./reports/led_qc/batch")
         fallback_dirs = [Path("./reports/led_qc"), Path("./reports/led_qc/batch")]
 
@@ -145,7 +156,9 @@ class MetricsDashboardMixin:
         pass_count = total - anomalies
         pass_rate = (pass_count / total * 100) if total else 0.0
         anomaly_rate = (anomalies / total * 100) if total else 0.0
-        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        last_update = datetime.fromtimestamp(latest.stat().st_mtime).strftime(
+            "%Y-%m-%d %H:%M"
+        )
 
         metrics = [
             f"統計檔案：{self._format_relative_path(latest)}",

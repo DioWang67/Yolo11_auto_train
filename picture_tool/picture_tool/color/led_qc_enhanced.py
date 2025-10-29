@@ -534,7 +534,7 @@ def robust_imread(path: str) -> Optional[np.ndarray]:
             logger.error(f"檔案為空：{path}")
             return None
         if size > 50 * 1024 * 1024:
-            logger.error(f"檔案過大：{size/1024/1024:.1f}MB {path}")
+            logger.error(f"檔案過大：{size / 1024 / 1024:.1f}MB {path}")
             return None
         img = cv2.imread(path, cv2.IMREAD_COLOR)
         if img is None:
@@ -772,8 +772,12 @@ def _blackhat_holes(v: np.ndarray, mask: np.ndarray, cfg: dict) -> np.ndarray:
     hole_bool = (bh > thr) & mask_active
     hole = np.zeros_like(v_u8, dtype=np.uint8)
     hole[hole_bool] = 255
-    hole = np.asarray(cv2.morphologyEx(hole, cv2.MORPH_OPEN, k, iterations=1), dtype=np.uint8)
-    hole = np.asarray(cv2.morphologyEx(hole, cv2.MORPH_CLOSE, k, iterations=1), dtype=np.uint8)
+    hole = np.asarray(
+        cv2.morphologyEx(hole, cv2.MORPH_OPEN, k, iterations=1), dtype=np.uint8
+    )
+    hole = np.asarray(
+        cv2.morphologyEx(hole, cv2.MORPH_CLOSE, k, iterations=1), dtype=np.uint8
+    )
     return hole
 
 
@@ -1121,10 +1125,14 @@ def _decide_color_robust(
     bins = config.get("hist_bins", [12, 12, 12])
     hist = cv2.calcHist([hsv], [0, 1, 2], mask, bins, [0, 180, 0, 256, 0, 256])
     hist_norm = cv2.normalize(hist, dst=np.empty_like(hist))
-    hist_vec = np.asarray(hist_norm if hist_norm is not None else hist, dtype=np.float32).flatten()
+    hist_vec = np.asarray(
+        hist_norm if hist_norm is not None else hist, dtype=np.float32
+    ).flatten()
 
     distances = {
-        color: bhattacharyya_dist(hist_vec, np.array(cm.avg_color_hist, dtype=np.float32))
+        color: bhattacharyya_dist(
+            hist_vec, np.array(cm.avg_color_hist, dtype=np.float32)
+        )
         for color, cm in model.colors.items()
     }
     if not distances:
@@ -1261,11 +1269,15 @@ def _build_color_model_statistics(
     }
 
 
-def _maybe_update_auto_hue_ranges(cfg: dict, color_models: Dict[str, "EnhancedColorModel"]) -> List[str]:
+def _maybe_update_auto_hue_ranges(
+    cfg: dict, color_models: Dict[str, "EnhancedColorModel"]
+) -> List[str]:
     """Derive hue ranges for colors that do not have explicit config."""
     ranges = dict(cfg.get("color_hue_ranges") or {})
     updated: List[str] = []
-    auto_sigma = float(cfg.get("color_hue_auto_sigma", cfg.get("sigma_multiplier", 2.0)))
+    auto_sigma = float(
+        cfg.get("color_hue_auto_sigma", cfg.get("sigma_multiplier", 2.0))
+    )
     min_width = float(cfg.get("color_hue_auto_min_width", 20.0))
     std_fallback = float(cfg.get("color_hue_auto_std_fallback", 6.0))
     min_width = max(min_width, 1.0)
@@ -1794,7 +1806,7 @@ def cmd_detect(args: argparse.Namespace) -> None:
     print(
         f"🎨 顏色：{res.color_used} (conf={res.color_confidence:.2f}, hue_cov={res.color_hue_coverage.get(res.color_used, 0.0):.2f})"
     )
-    print(f"⚡ 時間：{res.processing_time*1000:.1f}ms")
+    print(f"⚡ 時間：{res.processing_time * 1000:.1f}ms")
     if res.reasons:
         print("📋 原因：")
         [print("  -", r) for r in res.reasons]
@@ -2022,7 +2034,9 @@ def _visualize_color_analysis(
     ymax = max(plt.ylim()[1], 1e-3)
     for (start, end), rgba, label in hue_regions:
         plt.axvspan(start, end, color=rgba, label=label)
-        region_percent = safe_ratio((h_values >= start) & (h_values <= end), len(h_values))
+        region_percent = safe_ratio(
+            (h_values >= start) & (h_values <= end), len(h_values)
+        )
         rp = float(region_percent) if region_percent is not None else float("nan")
         if not math.isnan(rp) and rp > 5:
             text_y = ymax * 0.9 if ymax > 0 else 0.1
@@ -2050,7 +2064,9 @@ def _visualize_color_analysis(
         (171, 255, "Bright"),
     ]
     for start, end, label in brightness_ranges:
-        range_percent = safe_ratio((v_values >= start) & (v_values <= end), len(v_values))
+        range_percent = safe_ratio(
+            (v_values >= start) & (v_values <= end), len(v_values)
+        )
         rp = float(range_percent) if range_percent is not None else float("nan")
         if not math.isnan(rp) and rp > 5:
             plt.axvspan(start, end, alpha=0.2, label=f"{label}: {rp:.1f}%")
@@ -2065,13 +2081,17 @@ def _visualize_color_analysis(
     # Panel 4: mask visualization
     plt.subplot(234)
     plt.imshow(mask, cmap="gray")
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
     if contours:
         max_contour = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(max_contour)
         area = cv2.contourArea(max_contour)
         perimeter = cv2.arcLength(max_contour, True)
-        circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0.0
+        circularity = (
+            4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0.0
+        )
 
         plt.text(
             0.02,
@@ -2098,8 +2118,12 @@ def _visualize_color_analysis(
     s_high = safe_percentile(s_values, 75)
     s_median = float(np.median(s_values)) if s_values.size else float("nan")
     if s_values.size:
-        plt.axvline(s_median, color="r", linestyle="--", label=f"Median: {s_median:.1f}")
-        plt.axvspan(s_low, s_high, alpha=0.2, color="y", label=f"IQR: {s_high - s_low:.1f}")
+        plt.axvline(
+            s_median, color="r", linestyle="--", label=f"Median: {s_median:.1f}"
+        )
+        plt.axvspan(
+            s_low, s_high, alpha=0.2, color="y", label=f"IQR: {s_high - s_low:.1f}"
+        )
 
     plt.title("Saturation distribution", fontproperties=font, fontsize=12)
     plt.xlabel("Saturation (S)", fontproperties=font)
@@ -2116,7 +2140,9 @@ def _visualize_color_analysis(
     s_mean = float(np.mean(s_values)) if s_values.size else 0.0
     s_median_display = s_median if not math.isnan(s_median) else 0.0
     v_mean = float(np.mean(v_values)) if v_values.size else 0.0
-    v_uniformity = 1 - (float(np.std(v_values)) / 255.0) if v_values.size else float("nan")
+    v_uniformity = (
+        1 - (float(np.std(v_values)) / 255.0) if v_values.size else float("nan")
+    )
     color_purity = s_mean * (v_mean / 255.0) if v_values.size else 0.0
 
     main_hue_range = {"Red": (0, 20), "Green": (35, 85), "Blue": (85, 130)}
@@ -2201,7 +2227,9 @@ def _analyze_single(args: argparse.Namespace, model: "EnhancedReferenceModel") -
 
     res = enhanced_detect_one(img, model)
     hue_cov = float(res.color_hue_coverage.get(res.color_used, 0.0))
-    status = "PASS" if not res.is_anomaly else f"FAIL (severity={res.severity_score:.2f})"
+    status = (
+        "PASS" if not res.is_anomaly else f"FAIL (severity={res.severity_score:.2f})"
+    )
     print(f"[analyze] {status}")
     print(
         f"[analyze] color={res.color_used} (conf={res.color_confidence:.3f}, "
@@ -2230,10 +2258,14 @@ def _analyze_single(args: argparse.Namespace, model: "EnhancedReferenceModel") -
             ensure_dir(out_dir)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_path = out_dir / f"{image_path.stem}_analysis_{timestamp}.png"
-        _visualize_color_analysis(image_path, img, model, res, font, save_path, show_plot)
+        _visualize_color_analysis(
+            image_path, img, model, res, font, save_path, show_plot
+        )
 
 
-def _analyze_directory(args: argparse.Namespace, model: "EnhancedReferenceModel") -> None:
+def _analyze_directory(
+    args: argparse.Namespace, model: "EnhancedReferenceModel"
+) -> None:
     dir_arg = getattr(args, "dir", None)
     if not dir_arg:
         print("[analyze] --dir is required when image is not provided")
@@ -2245,7 +2277,9 @@ def _analyze_directory(args: argparse.Namespace, model: "EnhancedReferenceModel"
         return
 
     valid_suffixes = {s.lower() for s in SUPPORTED_FORMATS}
-    image_paths = sorted(p for p in root.rglob("*") if p.suffix.lower() in valid_suffixes)
+    image_paths = sorted(
+        p for p in root.rglob("*") if p.suffix.lower() in valid_suffixes
+    )
     if not image_paths:
         print(f"[analyze] no images found under {root}")
         return
@@ -2290,7 +2324,9 @@ def _analyze_directory(args: argparse.Namespace, model: "EnhancedReferenceModel"
             ensure_dir(target_dir)
             save_name = f"{img_path.stem}_{hash_suffix}_analysis.png"
             save_path = target_dir / save_name
-            _visualize_color_analysis(img_path, img, model, res, font, save_path, show_plot=False)
+            _visualize_color_analysis(
+                img_path, img, model, res, font, save_path, show_plot=False
+            )
 
         rows.append(
             {
@@ -2469,7 +2505,9 @@ def make_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("analyze", help="分析工具")
     a.add_argument("--model", required=True, help="模型檔案路徑")
     a.add_argument("--image", help="Single image path")
-    a.add_argument("--dir", help="Root directory containing paired folders for analysis")
+    a.add_argument(
+        "--dir", help="Root directory containing paired folders for analysis"
+    )
     a.add_argument("--visualize", action="store_true", help="執行可視化分析")
     a.add_argument("--stability", action="store_true", help="執行穩定性測試")
     a.add_argument("--out-dir", help="輸出目錄")

@@ -1,6 +1,6 @@
 {
   "file": "data\\led_qc\\samples\\sample.png",
-  "timestamp": "2025-10-21 10:31:34",
+  "timestamp": "2025-10-29 16:01:49",
   "result": {
     "is_anomaly": false,
     "severity_score": 0.0,
@@ -9,7 +9,7 @@
     "color_used": "Red",
     "color_confidence": 0.9466244842283941,
     "feature_anomalies": {},
-    "processing_time": 0.003215789794921875,
+    "processing_time": 0.0025053024291992188,
     "anomaly_regions": [],
     "color_diagnostics": {
       "distances": {
@@ -3499,7 +3499,7 @@
     "mask_area": 2106,
     "valid_mask": true,
     "confidence_score": 1.0,
-    "processing_time": 0.0022084712982177734,
+    "processing_time": 0.0010554790496826172,
     "mean_hsv": [
       4.643888044599802,
       244.8698955365622,

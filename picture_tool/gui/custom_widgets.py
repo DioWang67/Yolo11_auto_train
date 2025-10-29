@@ -1,4 +1,5 @@
 """Reusable custom widgets for the YOLO auto-train GUI."""
+
 from PyQt5.QtWidgets import QCheckBox, QPushButton
 
 

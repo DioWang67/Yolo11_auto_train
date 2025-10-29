@@ -1,4 +1,5 @@
 """Pipeline validation helpers for the auto-train GUI."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,7 +16,9 @@ class PipelineValidationMixin:
         yolo_cfg = config.get("yolo_training") if isinstance(config, dict) else None
         if not isinstance(yolo_cfg, dict):
             yolo_cfg = {}
-        pos_cfg = yolo_cfg.get("position_validation") if isinstance(yolo_cfg, dict) else None
+        pos_cfg = (
+            yolo_cfg.get("position_validation") if isinstance(yolo_cfg, dict) else None
+        )
         if not isinstance(pos_cfg, dict):
             pos_cfg = {}
 
@@ -26,7 +29,9 @@ class PipelineValidationMixin:
         train_selected = train_label in selected_tasks
 
         if want_position_validation and not pos_cfg.get("enabled"):
-            issues.append("已選擇位置檢查任務但未啟用位置檢查設定，請在左側啟用並填寫必填欄位")
+            issues.append(
+                "已選擇位置檢查任務但未啟用位置檢查設定，請在左側啟用並填寫必填欄位"
+            )
 
         if pos_cfg.get("enabled") and (want_position_validation or train_selected):
             missing_fields: List[str] = []
@@ -40,16 +45,30 @@ class PipelineValidationMixin:
                 issues.append("定位檢查缺少必填欄位：" + "、".join(missing_fields))
 
             config_path = pos_cfg.get("config_path")
-            if isinstance(config_path, str) and config_path and not Path(config_path).exists():
+            if (
+                isinstance(config_path, str)
+                and config_path
+                and not Path(config_path).exists()
+            ):
                 issues.append(f"位置設定檔不存在：{config_path}")
 
             sample_dir = pos_cfg.get("sample_dir")
-            if isinstance(sample_dir, str) and sample_dir and not Path(sample_dir).exists():
+            if (
+                isinstance(sample_dir, str)
+                and sample_dir
+                and not Path(sample_dir).exists()
+            ):
                 issues.append(f"定位檢查樣本資料夾不存在：{sample_dir}")
 
         if train_selected:
-            dataset_dir = yolo_cfg.get("dataset_dir") if isinstance(yolo_cfg, dict) else None
-            if isinstance(dataset_dir, str) and dataset_dir and not Path(dataset_dir).exists():
+            dataset_dir = (
+                yolo_cfg.get("dataset_dir") if isinstance(yolo_cfg, dict) else None
+            )
+            if (
+                isinstance(dataset_dir, str)
+                and dataset_dir
+                and not Path(dataset_dir).exists()
+            ):
                 issues.append(f"YOLO 訓練資料夾不存在：{dataset_dir}")
 
         return issues
