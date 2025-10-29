@@ -11,16 +11,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-and-test:
+  lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
@@ -28,22 +24,38 @@ jobs:
             requirements.txt
             requirements-dev.txt
             picture_tool/pyproject.toml
+      - name: Install dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Lint
+        run: flake8 picture_tool tests
 
-      - name: Install dependencies
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: []   # 與 lint 平行執行；若想在 lint 後再跑，改成 needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            picture_tool/pyproject.toml
+      - name: Install dev deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
           # 若測試需匯入專案，取消下一行註解
           # pip install -e .
-
-      - name: Lint
-        run: flake8 picture_tool tests
-
       - name: Run tests with coverage
         run: |
           mkdir -p reports
+          # 這裡同樣輸出到根目錄 coverage.xml + reports/junit.xml
           pytest --cov=picture_tool --cov-report=xml --cov-report=term --junitxml=reports/junit.xml
-
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
