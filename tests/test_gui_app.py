@@ -1,6 +1,10 @@
+import os
 import pytest
 
 pytest.importorskip("pytestqt")
+
+if os.environ.get("DISPLAY", "") == "" and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+    pytest.skip("Qt GUI tests require DISPLAY or QT_QPA_PLATFORM=offscreen", allow_module_level=True)
 
 from picture_tool.gui import pipeline_controller
 from picture_tool.gui.app import PictureToolGUI
