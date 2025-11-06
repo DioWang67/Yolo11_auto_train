@@ -41,11 +41,35 @@ gui = ["PyQt5>=5.15"]
 dev = [
   "pytest>=8.3",
   "pytest-cov>=5.0",
+  "pytest-qt>=4.4",
   "ruff>=0.6",
   "mypy>=1.11",
   "types-PyYAML>=6.0.12",
   "types-tqdm>=4.66.0.20240417",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --cov=src --cov-report=term-missing"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = [
+  "src/picture_tool/gui/*",
+  "src/picture_tool/color/led_qc_enhanced.py",
+  "src/picture_tool/train/yolo_trainer.py",
+  "src/picture_tool/augment/yolo_data_augmentor.py",
+  "src/picture_tool/infer/*",
+  "src/picture_tool/report/*",
+  "src/picture_tool/main_pipeline.py",
+  "src/picture_tool/anomaly/anomaly_mask_generator.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 50
 
 [project.scripts]
 picture-tool-pipeline = "picture_tool.main_pipeline:main"

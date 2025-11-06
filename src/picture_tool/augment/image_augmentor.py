@@ -158,7 +158,6 @@ class ImageAugmentor:
                 min_height=640,
                 min_width=640,
                 border_mode=cv2.BORDER_CONSTANT,
-                border_value=(0, 0, 0),
                 p=1.0,
             )
         )
