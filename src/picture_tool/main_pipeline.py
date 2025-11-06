@@ -1,8 +1,10 @@
-import argparse
-import yaml
+﻿import argparse
 import logging
+from importlib import resources
 from pathlib import Path
 from typing import Iterable, Optional
+
+import yaml
 from picture_tool.format import convert_format
 from picture_tool.anomaly import process_anomaly_detection
 from picture_tool.augment import YoloDataAugmentor, ImageAugmentor
@@ -14,8 +16,11 @@ from picture_tool.quality.dataset_linter import lint_dataset, preview_dataset
 from picture_tool.infer.batch_infer import run_batch_inference
 
 
+_DEFAULT_CONFIG_RESOURCE = "default_pipeline.yaml"
+
+
 def setup_logging(log_file):
-    """設置日誌系統"""
+    """Initialise logging targets for the pipeline run."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
@@ -24,15 +29,33 @@ def setup_logging(log_file):
     return logging.getLogger(__name__)
 
 
-def load_config(config_path="config.yaml"):
-    """讀取 config.yaml 檔案"""
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+def _load_packaged_default() -> dict:
+    """Load the bundled sample config shipped with the package."""
+    package_resources = resources.files("picture_tool.resources")
+    default_file = package_resources / _DEFAULT_CONFIG_RESOURCE
+    with default_file.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
+def load_config(config_path: str | Path = "config.yaml"):
+    """Load a pipeline configuration file, falling back to the packaged template."""
+    path = Path(config_path)
+    if path.exists():
+        with path.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}
+    try:
+        return _load_packaged_default()
+    except FileNotFoundError as exc:  # pragma: no cover - packaging error guard
+        raise FileNotFoundError(
+            f"Config file '{config_path}' not found and packaged default is missing."
+        ) from exc
 
 
 def load_config_if_updated(config_path, config, logger):
-    """檢查配置檔案是否更新，必要時重新載入"""
+    """Reload the configuration if the on-disk file changed."""
     config_file = Path(config_path)
+    if not config_file.exists():
+        return config
     current_mtime = config_file.stat().st_mtime
     last_mtime = getattr(load_config_if_updated, "last_mtime", None)
 
@@ -41,7 +64,7 @@ def load_config_if_updated(config_path, config, logger):
         return config
 
     if current_mtime > last_mtime:
-        logger.info("檢測到配置檔案更新，重新載入")
+        logger.info("Detected configuration change; reloading.")
         load_config_if_updated.last_mtime = current_mtime
         return load_config(config_path)
 
@@ -106,7 +129,10 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
     config["batch_inference"] = bi
 
     if changed:
-        logger.info("套用 CLI 覆蓋: " + ", ".join([f"{k}={v}" for k, v in changed]))
+        logger.info(
+            "Applied CLI overrides: %s",
+            ", ".join([f"{key}={value}" for key, value in changed]),
+        )
 
 
 def _auto_device(config: dict, logger: logging.Logger) -> None:
@@ -119,7 +145,7 @@ def _auto_device(config: dict, logger: logging.Logger) -> None:
             yt["device"] = "0" if torch.cuda.is_available() else "cpu"
         except Exception:
             yt["device"] = "cpu"
-        logger.info(f"自動選擇裝置: {yt['device']}")
+        logger.info(f"Auto-selected device: {yt['device']}")
         config["yolo_training"] = yt
 
 
@@ -137,10 +163,10 @@ def _should_skip(
         in_dirs = [Path(ic["image_dir"]), Path(ic["label_dir"])]
         out_dirs = [Path(oc["image_dir"]), Path(oc["label_dir"])]
         if not all(p.exists() for p in in_dirs):
-            raise FileNotFoundError(f"增強輸入不存在: {in_dirs}")
+            raise FileNotFoundError(f"Augmentation inputs missing: {in_dirs}")
         if all(_exists_and_nonempty(p) for p in out_dirs):
             if _mtime_latest(out_dirs) >= _mtime_latest(in_dirs):
-                return "輸出較新，已跳過"
+                return "Outputs are newer than inputs; skipping."
     if task == "dataset_splitter":
         sc = config["train_test_split"]
         in_dirs = [Path(sc["input"]["image_dir"]), Path(sc["input"]["label_dir"])]
@@ -152,7 +178,7 @@ def _should_skip(
         ]
         if all(p.exists() for p in in_dirs) and all(p.exists() for p in out_dirs):
             if _mtime_latest(out_dirs) >= _mtime_latest(in_dirs):
-                return "分割結果較新，已跳過"
+                return "Split dataset is up-to-date; skipping."
     if task == "yolo_train":
         y = config["yolo_training"]
         run_dir = Path(y.get("project", "./runs/detect")) / y.get("name", "train")
@@ -160,53 +186,51 @@ def _should_skip(
         dataset_dir = Path(y.get("dataset_dir", "./data/split"))
         if weights.exists():
             if weights.stat().st_mtime >= _mtime_latest([dataset_dir]):
-                return "已有最新 best.pt，已跳過"
+                return "Found latest best.pt; skipping training."
     if task == "dataset_lint":
         lint_cfg = config.get("dataset_lint", {})
         img_dir = Path(lint_cfg.get("image_dir", "./data/augmented/images"))
         out_dir = Path(lint_cfg.get("output_dir", "./reports/lint"))
         csv = out_dir / "lint.csv"
         if csv.exists() and csv.stat().st_mtime >= _mtime_latest([img_dir]):
-            return "Lint 輸出較新，已跳過"
+            return "Lint outputs are newer; skipping."
     if task == "aug_preview":
         p = config.get("aug_preview", {})
         img_dir = Path(p.get("image_dir", "./data/augmented/images"))
         out = Path(p.get("output_dir", "./reports/preview")) / "preview.png"
         if out.exists() and out.stat().st_mtime >= _mtime_latest([img_dir]):
-            return "預覽較新，已跳過"
+            return "Preview output is newer; skipping."
     if task == "batch_inference":
         bi = config.get("batch_inference", {})
         in_dir = Path(bi.get("input_dir", "./data/raw/images"))
         out_dir = Path(bi.get("output_dir", "./reports/infer"))
         csv = out_dir / "predictions.csv"
         if csv.exists() and csv.stat().st_mtime >= _mtime_latest([in_dir]):
-            return "推論結果較新，已跳過"
+            return "Batch inference output is newer; skipping."
     return None
 
 
 def validate_dependencies(tasks, config, logger):
-    """驗證任務依賴關係，並保持原始任務順序"""
+    """Ensure each selected task honours dependency ordering and availability."""
     task_dict = {t["name"]: t for t in config["pipeline"]["tasks"]}
-    selected_tasks = tasks.copy()  # 複製原始任務列表以保持順序
-    required_tasks = []
+    selected_tasks = tasks.copy()
+    required_tasks: list[str] = []
 
-    # 檢查每個任務的依賴
     for task in tasks:
         if task not in task_dict:
-            logger.warning(f"未知任務: {task}")
+            logger.warning(f"Unknown task: {task}")
             continue
         if not task_dict[task].get("enabled", True):
-            logger.info(f"任務 {task} 在配置文件中被禁用，跳過")
+            logger.info(f"Task {task} disabled in config; skipping.")
             selected_tasks.remove(task)
             continue
         dependencies = task_dict[task].get("dependencies", [])
         for dep in dependencies:
             if dep not in selected_tasks and dep not in required_tasks:
-                logger.info(f"任務 {task} 依賴 {dep}，自動添加")
+                logger.info(f"Task {task} depends on {dep}; adding dependency.")
                 required_tasks.append(dep)
 
-    # 將依賴任務插入到列表中，確保依賴任務在主任務之前
-    final_tasks = []
+    final_tasks: list[str] = []
     for task in selected_tasks:
         dependencies = task_dict.get(task, {}).get("dependencies", [])
         for dep in dependencies:
@@ -219,27 +243,25 @@ def validate_dependencies(tasks, config, logger):
 
 
 def get_tasks_from_groups(groups, config):
-    """從任務組獲取任務清單"""
+    """Expand named task groups into a deduplicated task list."""
     tasks = set()
     for group in groups:
         if group in config["pipeline"]["task_groups"]:
             tasks.update(config["pipeline"]["task_groups"][group])
         else:
-            logging.warning(f"未知任務組: {group}")
+            logging.warning("Unknown task group: %s", group)
     return list(tasks)
 
 
 def interactive_task_selection(config):
-    """互動式任務選擇"""
-    print("\n可用任務：")
+    """Prompt the user to pick tasks interactively."""
+    print("\nAvailable tasks:")
     task_dict = {t["name"]: t for t in config["pipeline"]["tasks"]}
     for i, task in enumerate(task_dict.keys(), 1):
-        status = "啟用" if task_dict[task].get("enabled", True) else "禁用"
+        status = "enabled" if task_dict[task].get("enabled", True) else "disabled"
         print(f"{i}. {task} ({status})")
 
-    print(
-        "\n輸入要執行的任務編號（多選用空格分隔，輸入 0 選擇全部啟用任務，輸入空行使用配置文件預設）："
-    )
+    print("\nEnter task numbers separated by spaces. Enter 0 to run all enabled tasks, or press Enter to accept defaults.")
     user_input = input("> ").strip()
 
     if not user_input:
@@ -330,77 +352,103 @@ TASK_HANDLERS = {
 
 
 def run_pipeline(tasks, config, logger, args, stop_event=None):
-    """執行指定的任務流程"""
+    """Execute each task handler with dependency checks and skipping logic."""
     tasks = validate_dependencies(tasks, config, logger)
 
     for task in tasks:
         if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
-            logger.info("收到停止請求，中止剩餘任務")
+            logger.info("Stop requested; aborting remaining tasks.")
             break
         config = load_config_if_updated(args.config, config, logger)
-        logger.info(f"開始執行任務: {task}")
+        logger.info(f"Running task: {task}")
         _apply_cli_overrides(config, args, logger)
         _auto_device(config, logger)
         skip_reason = _should_skip(task, config, args, logger)
         if skip_reason:
-            logger.info(f"跳過 {task}: {skip_reason}")
+            logger.info(f"Skipping task {task}: {skip_reason}")
             continue
         handler = TASK_HANDLERS.get(task)
         if not handler:
-            logger.warning(f"未知任務: {task}")
+            logger.warning(f"Unknown task: {task}")
             continue
         try:
             handler(config, args)
-            logger.info(f"任務 {task} 完成")
-        except Exception as e:
-            logger.error(f"任務 {task} 執行失敗: {e}")
+            logger.info(f"Task {task} completed.")
+        except Exception as exc:
+            logger.error(f"Task {task} failed: {exc}")
             raise
 
 
 def main():
-    parser = argparse.ArgumentParser(description="圖像處理和數據增強流水線")
+    parser = argparse.ArgumentParser(
+        description="YOLO auto-train pipeline orchestration tools."
+    )
     parser.add_argument(
-        "--config", type=str, default="config.yaml", help="配置文件路徑"
+        "--config", type=str, default="config.yaml", help="Path to the pipeline config."
     )
     parser.add_argument(
         "--tasks",
         nargs="+",
-        help="要執行的任務列表，選項: format_conversion, anomaly_detection, yolo_augmentation, image_augmentation, dataset_splitter",
+        help=(
+            "Specific tasks to run (e.g. format_conversion, anomaly_detection, "
+            "yolo_augmentation, image_augmentation, dataset_splitter)."
+        ),
     )
-    parser.add_argument("--exclude-tasks", nargs="+", help="要排除的任務列表")
+    parser.add_argument(
+        "--exclude-tasks", nargs="+", help="Tasks to exclude from execution."
+    )
     parser.add_argument(
         "--task-groups",
         nargs="+",
-        help="要執行的任務組，選項: preprocess, augmentation, split",
-    )
-    parser.add_argument("--interactive", action="store_true", help="啟動互動式任務選擇")
-    parser.add_argument(
-        "--input-format", type=str, help="覆蓋輸入檔案格式（例如 .bmp）"
+        help="Named task groups to run (e.g. preprocess, augmentation, split).",
     )
     parser.add_argument(
-        "--output-format", type=str, help="覆蓋輸出檔案格式（例如 .png）"
+        "--interactive",
+        action="store_true",
+        help="Interactively select tasks before running.",
+    )
+    parser.add_argument(
+        "--input-format",
+        type=str,
+        help="Override the expected input format (e.g. .bmp).",
+    )
+    parser.add_argument(
+        "--output-format",
+        type=str,
+        help="Override the output format (e.g. .png).",
     )
 
     # Cache/force and overrides
-    parser.add_argument("--force", action="store_true", help="忽略快取並強制重跑任務")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore cache heuristics and force all tasks to run.",
+    )
     # Training overrides
-    parser.add_argument("--device", type=str, help="覆寫訓練/驗證裝置，例如 0 或 cpu")
-    parser.add_argument("--epochs", type=int, help="覆寫訓練 epochs")
-    parser.add_argument("--imgsz", type=int, help="覆寫訓練影像尺寸")
-    parser.add_argument("--batch", type=int, help="覆寫訓練 batch 大小")
-    parser.add_argument("--model", type=str, help="覆寫初始權重路徑/名稱")
-    parser.add_argument("--project", type=str, help="覆寫 Ultralytics 專案輸出資料夾")
-    parser.add_argument("--name", type=str, help="覆寫實驗名稱")
-    parser.add_argument("--weights", type=str, help="覆寫驗證/推論時的權重路徑")
+    parser.add_argument(
+        "--device", type=str, help="Override train/eval device, e.g. 0 or cpu."
+    )
+    parser.add_argument("--epochs", type=int, help="Override training epochs.")
+    parser.add_argument("--imgsz", type=int, help="Override training image size.")
+    parser.add_argument("--batch", type=int, help="Override training batch size.")
+    parser.add_argument("--model", type=str, help="Override model weight path/name.")
+    parser.add_argument(
+        "--project", type=str, help="Override Ultralytics project output directory."
+    )
+    parser.add_argument("--name", type=str, help="Override Ultralytics run name.")
+    parser.add_argument("--weights", type=str, help="Override eval/infer weights path.")
     # Inference overrides
-    parser.add_argument("--infer-input", type=str, help="批次推論輸入資料夾")
-    parser.add_argument("--infer-output", type=str, help="批次推論輸出資料夾")
+    parser.add_argument(
+        "--infer-input", type=str, help="Override batch inference input directory."
+    )
+    parser.add_argument(
+        "--infer-output", type=str, help="Override batch inference output directory."
+    )
 
     args = parser.parse_args()
     config = load_config(args.config)
     logger = setup_logging(config["pipeline"]["log_file"])
 
-    # 確定任務清單
     if args.interactive:
         tasks = interactive_task_selection(config)
     elif args.task_groups:
@@ -412,13 +460,12 @@ def main():
             t["name"] for t in config["pipeline"]["tasks"] if t.get("enabled", True)
         ]
 
-    # 排除指定的任務
     if args.exclude_tasks:
         tasks = [t for t in tasks if t not in args.exclude_tasks]
 
-    logger.info(f"最終任務清單: {tasks}")
+    logger.info(f"Final task sequence: {tasks}")
     run_pipeline(tasks, config, logger, args)
-    logger.info("流水線執行完成")
+    logger.info("Pipeline finished successfully.")
 
 
 if __name__ == "__main__":

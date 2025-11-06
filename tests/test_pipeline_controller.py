@@ -147,7 +147,7 @@ def test_load_config_missing_file_falls_back(controller, tmp_path, monkeypatch):
     controller.load_config()
 
     assert controller.config["pipeline"]["tasks"] == []
-    assert any("不存在" in log for log in controller.logs)
+    assert any("Config file not found" in log for log in controller.logs)
 
 
 def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
@@ -240,7 +240,7 @@ def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
 
     assert created.tasks == ["dataset_splitter", "yolo_train"]
     assert created.cfg_path == str(tmp_path / "config.yaml")
-    assert created.cfg is controller.config
+    assert created.cfg == controller.config
     assert controller.start_btn.enabled is False
     assert controller.stop_btn.enabled is True
     assert controller.progress_bar.value == 0

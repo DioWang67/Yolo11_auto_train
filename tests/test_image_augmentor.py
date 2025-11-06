@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import yaml
 
-from picture_tool.picture_tool.augment.image_augmentor import ImageAugmentor
+from picture_tool.augment.image_augmentor import ImageAugmentor
 
 
 def test_image_augmentor_process_dataset(tmp_path, monkeypatch):
@@ -42,7 +42,7 @@ def test_image_augmentor_process_dataset(tmp_path, monkeypatch):
         return logger
 
     monkeypatch.setattr(
-        "picture_tool.picture_tool.augment.image_augmentor.setup_module_logger",
+        "picture_tool.augment.image_augmentor.setup_module_logger",
         _setup_logger,
     )
 

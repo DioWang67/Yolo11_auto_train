@@ -3,11 +3,11 @@ import time
 
 import pytest
 
-from picture_tool.picture_tool.eval.yolo_evaluator import (
+from picture_tool.eval.yolo_evaluator import (
     _candidate_runs,
     _resolve_weights,
 )
-from picture_tool.picture_tool.train.yolo_trainer import (
+from picture_tool.train.yolo_trainer import (
     _ensure_data_yaml,
     _normalize_imgsz,
     _normalize_name_sequence,

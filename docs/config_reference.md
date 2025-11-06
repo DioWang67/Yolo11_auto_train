@@ -1,6 +1,6 @@
-# Configuration Reference
+﻿# Configuration Reference
 
-This document summarises the keys expected in `picture_tool/config.yaml`, the
+This document summarises the keys expected in `picture_tool/resources/default_pipeline.yaml`, the
 default values, and typical usage patterns so new frontends or automation can
 build valid configs without reading the entire YAML manually.
 
@@ -136,7 +136,7 @@ This block is only required when using the LED QC sidebar. Important keys:
 
 ## Console entry points
 
-Once installed (`pip install -e picture_tool`), the following interfaces are
+Once installed (`pip install -e .`), the following interfaces are
 available:
 
 | Command | Description |
@@ -152,5 +152,5 @@ available:
 - Keep `yolo_training.workers` at `0` on Windows/GUI to avoid multiprocessing
   crashes.
 - Use `pipeline.task_groups` to define higher-level presets for GUI/CLI reuse.
-- After editing `config.yaml`, the GUI can reload the file via the **重新載入**
+- After editing your config file, the GUI can reload the file via the **?頛**
   button; CLI will re-read before each task execution via `load_config_if_updated`.

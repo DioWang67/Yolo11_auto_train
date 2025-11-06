@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from picture_tool.picture_tool.color import led_qc_enhanced as led
+from picture_tool.color import led_qc_enhanced as led
 
 
 @pytest.fixture()
@@ -57,7 +57,6 @@ def test_cmd_info(monkeypatch, tmp_path, capsys, dummy_model):
     led.cmd_info(SimpleNamespace(model=str(model_path)))
     out = capsys.readouterr().out
     assert "總樣本" in out or "total_samples" in out
-
 
 def test_cmd_analyze_selects_directory(monkeypatch, tmp_path, dummy_model):
     called = {}

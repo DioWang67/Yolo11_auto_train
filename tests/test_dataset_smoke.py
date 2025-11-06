@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import pytest
 
-from picture_tool.picture_tool.quality import dataset_linter
+from picture_tool.quality import dataset_linter
 
 
 @pytest.fixture(autouse=True)

@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from picture_tool.picture_tool.anomaly import anomaly_mask_generator as anomaly
+from picture_tool.anomaly import anomaly_mask_generator as anomaly
 
 
 def test_generate_anomaly_mask_detects_difference():

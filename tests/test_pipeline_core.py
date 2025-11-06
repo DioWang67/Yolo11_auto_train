@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 import picture_tool.main_pipeline as pipeline
-from picture_tool.picture_tool.train import yolo_trainer
+from picture_tool.train import yolo_trainer
 
 
 class DummyLogger:

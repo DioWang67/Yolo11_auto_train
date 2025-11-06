@@ -1,4 +1,4 @@
-from picture_tool.main_pipeline import (
+from ..main_pipeline import (
     setup_logging,
     load_config,
     load_config_if_updated,

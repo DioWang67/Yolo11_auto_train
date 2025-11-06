@@ -1,4 +1,4 @@
-Picture Tool
+﻿Picture Tool
 
 Overview
 - A structured toolkit for image pipelines: format conversion, augmentation (image/YOLO), anomaly masks, dataset splitting, and a Qt GUI orchestrator.
@@ -12,7 +12,7 @@ Package Layout
   - pipeline/: pipeline helpers (task selection, execution)
   - utils/: IO and logging helpers
 - GUI:
-  - Yolo11_Auto_Train_GUI.py (Qt window)
+  - picture_tool/gui/app.py (Qt window)
   - gui/pipeline_controller.py (reusable pipeline mixin for custom frontends)
   - gui/task_thread.py (worker thread dispatch)
 - Pipeline: main_pipeline.py (uses package APIs)
@@ -26,8 +26,8 @@ Usage (Python)
 - from picture_tool.pipeline import run_pipeline, load_config, setup_logging
 
 CLI Examples
-- python -m picture_tool.main_pipeline --config config.yaml --tasks image_augmentation
-- picture-tool-pipeline --config config.yaml --tasks full
+- python -m picture_tool.main_pipeline --config configs/default_pipeline.yaml --tasks image_augmentation
+- picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full
 - python -m picture_tool.gui.app  # launch Qt GUI programmatically
 
 Notes
@@ -39,27 +39,27 @@ Notes
 - Detailed configuration reference: `docs/config_reference.md`.
 
 
-## 公開 API（picture_tool）
+## ?祇? API嚗icture_tool嚗?
 
-常用功能可直接從 `picture_tool` 匯入，或使用子模組：
+撣貊??舐?亙? `picture_tool` ?臬嚗?雿輻摮芋蝯?
 
-- 增強（Augment）
+- 憓撥嚗ugment嚗?
   - `from picture_tool import ImageAugmentor, YoloDataAugmentor`
   - `from picture_tool.augment import ImageAugmentor, YoloDataAugmentor`
-- 異常遮罩（Anomaly）
+- ?啣虜?桃蔗嚗nomaly嚗?
   - `from picture_tool import process_anomaly_detection`
   - `from picture_tool.anomaly import process_anomaly_detection`
-- 格式轉換（Format）
+- ?澆?頧?嚗ormat嚗?
   - `from picture_tool import convert_format`
   - `from picture_tool.format import convert_format`
-- 資料切分（Split）
+- 鞈???嚗plit嚗?
   - `from picture_tool import split_dataset`
   - `from picture_tool.split import split_dataset`
-- 流水線（Pipeline）
+- 瘚偌蝺?Pipeline嚗?
   - `from picture_tool import run_pipeline, load_config, setup_logging`
   - `from picture_tool.pipeline import run_pipeline, load_config, setup_logging`
 
-### Console scripts（需 `pip install -e .`）
-- `picture-tool-gui`：啟動 GUI
-- `picture-tool-pipeline --config config.yaml --tasks image_augmentation`：執行指定任務
+### Console scripts嚗? `pip install -e .`嚗?
+- `picture-tool-gui`嚗???GUI
+- `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks image_augmentation`嚗銵?摰遙??
 

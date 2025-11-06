@@ -1,4 +1,4 @@
-from picture_tool.picture_tool.utils.io_utils import list_images
+from picture_tool.utils.io_utils import list_images
 
 
 def test_list_images_returns_sorted_names(tmp_path):

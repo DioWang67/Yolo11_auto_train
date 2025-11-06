@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import pytest
 
-from picture_tool.picture_tool.format.image_format_converter import convert_format
+from picture_tool.format.image_format_converter import convert_format
 
 
 def _write_image(path):

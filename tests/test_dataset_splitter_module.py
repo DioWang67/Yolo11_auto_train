@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from picture_tool.picture_tool.split.dataset_splitter import split_dataset
+from picture_tool.split.dataset_splitter import split_dataset
 
 
 def _write_sample_pair(image_path, label_path, cls_id=0):

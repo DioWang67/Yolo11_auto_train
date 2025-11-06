@@ -1,0 +1,338 @@
+anomaly_detection:
+  input_formats:
+  - .png
+  - .jpg
+  - .jpeg
+  output_folder: ./data/anomaly/ground_truth/Reversed_Connection
+  reference_folder: ./data/anomaly/train/good
+  test_folder: ./data/anomaly/test/Reversed_Connection
+  threshold: 50
+format_conversion:
+  input_dir: ./data/raw/images
+  input_formats:
+  - .bmp
+  output_dir: ./data/converter_output
+  output_format: .png
+  quality: 95
+image_augmentation:
+  augmentation:
+    num_images: 50
+    num_operations:
+    - 2
+    - 4
+    operations:
+      blur:
+        kernel:
+        - 1
+        - 3
+      contrast:
+        range:
+        - 0.95
+        - 1.05
+      flip:
+        probability: 0
+      hue:
+        range:
+        - -5
+        - 5
+      multiply:
+        range:
+        - 0.95
+        - 1.05
+      noise:
+        scale:
+        - 1
+        - 3
+      perspective:
+        scale:
+        - 0.01
+        - 0.02
+      rotate:
+        angle:
+        - 0
+        - 1
+      scale:
+        range:
+        - 0.95
+        - 1.05
+  input:
+    image_dir: ./data/raw/images
+  output:
+    image_dir: ./data/anomaly/train/good
+  processing:
+    num_workers: 2
+pipeline:
+  log_file: logs/pipeline.log
+  task_groups:
+    augmentation:
+    - yolo_augmentation
+    - image_augmentation
+    quality:
+    - dataset_lint
+    - aug_preview
+    preprocess:
+    - format_conversion
+    - anomaly_detection
+    split:
+    - dataset_splitter
+    train:
+    - yolo_train
+    - yolo_evaluation
+    - generate_report
+    inference:
+    - batch_inference
+    full:
+    - format_conversion
+    - yolo_augmentation
+    - image_augmentation
+    - dataset_splitter
+    - yolo_train
+    - yolo_evaluation
+    - generate_report
+  tasks:
+  - dependencies: []
+    enabled: true
+    name: format_conversion
+  - dependencies: []
+    enabled: true
+    name: image_augmentation
+  - dependencies: []
+    enabled: true
+    name: anomaly_detection
+  - dependencies: []
+    enabled: true
+    name: yolo_augmentation
+  - dependencies: []
+    enabled: true
+    name: dataset_splitter
+  - dependencies: []
+    enabled: true
+    name: dataset_lint
+  - dependencies: []
+    enabled: true
+    name: aug_preview
+  - dependencies:
+    - dataset_splitter
+    enabled: true
+    name: yolo_train
+  - dependencies:
+    - yolo_train
+    enabled: true
+    name: yolo_evaluation
+  - dependencies:
+    - yolo_evaluation
+    enabled: true
+    name: generate_report
+  - dependencies: []
+    enabled: true
+    name: batch_inference
+train_test_split:
+  input:
+    image_dir: ./data/augmented/images
+    label_dir: ./data/augmented/labels
+  input_formats:
+  - .png
+  - .jpg
+  - .jpeg
+  label_format: .txt
+  output:
+    output_dir: ./data/split
+  split_ratios:
+    test: 0.15
+    train: 0.7
+    val: 0.15
+  stratified: true
+yolo_augmentation:
+  augmentation:
+    num_images: 50
+    num_operations:
+    - 2
+    - 3
+    operations:
+      blur:
+        kernel:
+        - 0
+        - 1
+      contrast:
+        range:
+        - 0.92
+        - 1.08
+      flip:
+        probability: 0.0
+      hue:
+        range:
+        - 1
+        - 1
+      multiply:
+        range:
+        - 0.88
+        - 1.15
+      noise:
+        scale:
+        - 0
+        - 6
+      perspective:
+        scale:
+        - 0.0
+        - 0.0
+      rotate:
+        angle:
+        - -2
+        - 2
+      scale:
+        range:
+        - 0.97
+        - 1.03
+  input:
+    image_dir: ./data/raw/images
+    label_dir: ./data/raw/labels
+  output:
+    image_dir: ./data/augmented/images
+    label_dir: ./data/augmented/labels
+  processing:
+    num_workers: 2
+
+# YOLO training settings
+yolo_training:
+  # Split dataset root containing train/val/test
+  dataset_dir: ./data/split
+  # Class names for your dataset
+  class_names: ["C22B", "J5-1", "J5-2", "J6", "J7"]
+  # Initial weights (local file or model name)
+  model: ./models/yolo11n.pt
+  # Training hyperparameters
+  epochs: 20
+  imgsz: 640
+  batch: 16
+  device: cpu
+  # Ultralytics outputs
+  project: ./runs/detect
+  name: train
+  position_validation:
+    enabled: false
+    product: null
+    area: null
+    imgsz: 640
+    sample_dir: null
+    config_path: ./models/yolo/position_config.yaml
+    config: {}
+    output_dir: ./reports/position
+    weights: null
+    device: null
+    conf: 0.25
+    tolerance_override: null
+    auto_generate: true
+  export_detection_config:
+    enabled: true
+    output_path: null  # default to run directory when null
+    weights_name: best.pt
+    device: null  # fallback to training device
+    conf_thres: 0.4
+    iou_thres: 0.45
+    imgsz: null  # fallback to training imgsz
+    timeout: 1
+    enable_yolo: true
+    output_dir: Result
+    current_product: "PCBA3"  # fallback to position_validation.product
+    area: null  # fallback to position_validation.area
+    expected_items:
+      PCBA3:
+        A:
+          - C22B
+          - J5-1
+          - J5-2
+          - J6
+          - J7
+
+    tolerance: null
+    tolerance_unit: percent
+    position_config_path: null  # fallback to position_validation.config_path
+    position_config: {}
+    include_all_products: false
+  artifact_bundle:
+    enabled: true
+    dir_name: bundle
+    base_dir: null  # defaults to run directory
+    include_weights: true
+    include_detection_config: true
+    include_position_config: true
+    include_results_csv: true
+    include_args_yaml: true
+
+# YOLO evaluation settings
+yolo_evaluation:
+  # If null, uses best.pt from training run
+  weights: null
+  imgsz: 640
+  device: cpu
+
+# Batch inference settings
+batch_inference:
+  input_dir: ./data/augmented/images
+  output_dir: ./reports/infer
+  weights: null
+  imgsz: 640
+  device: cpu
+  conf: 0.25
+
+# Report generation
+report:
+  output_dir: ./reports
+  include_artifacts: true
+
+# Dataset lint and preview settings
+dataset_lint:
+  image_dir: ./data/augmented/images
+  label_dir: ./data/augmented/labels
+  output_dir: ./reports/lint
+  num_preview: 20
+  preview_cols: 5
+  seed: 42
+
+aug_preview:
+  image_dir: ./data/augmented/images
+  label_dir: ./data/augmented/labels
+  output_dir: ./reports/preview
+  num_samples: 16
+  cols: 4
+  seed: 42
+
+led_qc_enhanced:
+  config_path: null
+  config_overrides: {}
+  colors:
+    - Red
+    - Green
+    - Blue
+    - White
+  color_conf_min_per_color: {}
+  color_hue_range_margin: 8.0
+  color_hue_range_weight: 0.35
+  color_conf_hue_balance: 0.4
+  build:
+    ref_dir: ./data/led_qc/reference
+    model_out: ./models/led_qc/enhanced_model.json
+    save_config: ./models/led_qc/default_config.json
+  analyze:
+    model: ./models/led_qc/enhanced_model.json
+    image: ./data/led_qc/samples
+    out_dir: ./reports/led_qc/analyze
+    visualize: true
+    stability: false
+  detect:
+    model: ./models/led_qc/enhanced_model.json
+    image: ./data/led_qc/samples/sample.png
+    out_dir: ./reports/led_qc/single
+    label: null
+    sensitivity: 1.0
+    save_annotated: true
+    save_json: true
+  detect_dir:
+    model: ./models/led_qc/enhanced_model.json
+    dir: ./data/led_qc/batch
+    out_dir: ./reports/led_qc/batch
+    sensitivity: 0.85
+    save_annotated: true
+    save_json: false
+    csv_name: enhanced_summary.csv
+
