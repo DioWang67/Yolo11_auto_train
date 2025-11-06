@@ -4,7 +4,7 @@ import os
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, cast
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 
@@ -78,16 +78,17 @@ def _align_ecc(
     warp = np.eye(2, 3, dtype=np.float32)
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-6)
     try:
-        _cc, warp = cv2.findTransformECC(
+        _cc, warp_result = cv2.findTransformECC(
             ref32,
             src32,
             warp,
             motionType=cv2.MOTION_AFFINE,
             criteria=criteria,
-            gaussFiltSize=5,
         )
     except cv2.error as e:
-        raise RuntimeError(f"ECC 對齊失敗: {e}")
+        raise RuntimeError(f"ECC alignment failed: {e}")
+    warp = cast(np.ndarray, warp_result)
+    warp = np.asarray(warp, dtype=np.float32)
     aligned = cv2.warpAffine(
         src_gray, warp, (ref_gray.shape[1], ref_gray.shape[0]), flags=cv2.INTER_LINEAR
     )
@@ -97,7 +98,10 @@ def _align_ecc(
 def _align_orb(
     src_gray: np.ndarray, ref_gray: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
-    orb = cv2.ORB_create(2000)
+    orb_factory = getattr(cv2, "ORB_create", None)
+    if not callable(orb_factory):
+        raise RuntimeError("ORB detector is not available in this OpenCV build")
+    orb = orb_factory(2000)
     kp1, des1 = orb.detectAndCompute(src_gray, None)
     kp2, des2 = orb.detectAndCompute(ref_gray, None)
     if des1 is None or des2 is None:
@@ -107,8 +111,12 @@ def _align_orb(
     good = [m for m, n in matches if m.distance < 0.75 * n.distance]
     if len(good) < 8:
         raise RuntimeError("ORB 匹配不足")
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+    src_pts = np.array([kp1[m.queryIdx].pt for m in good], dtype=np.float32).reshape(
+        -1, 1, 2
+    )
+    dst_pts = np.array([kp2[m.trainIdx].pt for m in good], dtype=np.float32).reshape(
+        -1, 1, 2
+    )
     H, _mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 3.0)
     if H is None:
         raise RuntimeError("無法估計單應矩陣")

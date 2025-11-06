@@ -22,7 +22,7 @@ from typing import (
 import yaml
 
 try:
-    from ultralytics import YOLO
+    from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
     YOLO = None  # type: ignore
 
@@ -138,8 +138,10 @@ def load_position_config(
     return parsed
 
 
-def _imgsz_value(imgsz: Union[int, Sequence[int]]) -> int:
-    if isinstance(imgsz, Sequence):
+def _imgsz_value(imgsz: Any) -> int:
+    if imgsz in (None, "", 0):
+        raise ValueError("imgsz must be a positive integer or sequence of integers")
+    if isinstance(imgsz, Sequence) and not isinstance(imgsz, (str, bytes, bytearray)):
         for item in imgsz:
             try:
                 return int(item)

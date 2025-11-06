@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-from PyQt5.QtCore import Qt
+from PyQt5 import QtCore
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -55,7 +55,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         self.task_checkboxes: Dict[str, QCheckBox] = {}
         self.task_status_items: Dict[str, QListWidgetItem] = {}
 
-        self.setWindowTitle("Picture Tool – Pipeline Orchestrator")
+        self.setWindowTitle("Picture Tool - Pipeline Orchestrator")
         self.resize(1080, 720)
 
         self._build_ui()
@@ -85,7 +85,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         self.config_path_edit = QLineEdit()
         self.config_path_edit.setPlaceholderText("Path to pipeline configuration")
 
-        browse_btn = QPushButton("Browse…")
+        browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self.browse_config_file)
 
         reload_btn = QPushButton("Load")
@@ -152,7 +152,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         return group
 
     def _build_log_panel(self) -> QWidget:
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(QtCore.Qt.Orientation.Horizontal)
 
         self.config_text = QTextEdit()
         self.config_text.setReadOnly(True)
@@ -186,9 +186,9 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
     def log_message(self, message: str) -> None:
         self._log_history.append(message)
         self.log_text.append(message)
-        self.log_text.verticalScrollBar().setValue(
-            self.log_text.verticalScrollBar().maximum()
-        )
+        scrollbar = self.log_text.verticalScrollBar()
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
 
     def reset_task_statuses(self, tasks):
         self._rebuild_status_items(default_state="pending", only=tasks)
@@ -196,7 +196,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
     def _set_task_status(self, task: str, message: str, color=None) -> None:
         item = self.task_status_items.get(task)
         if item is not None:
-            item.setText(f"{task} – {message}")
+            item.setText(f"{task} -> {message}")
 
     def _validate_pipeline_configuration(self, tasks):
         missing_sections: List[str] = []
@@ -219,7 +219,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
             return
         self.status_list.clear()
         for task in self.task_checkboxes.keys():
-            item = QListWidgetItem(f"{task} – {default_state}")
+            item = QListWidgetItem(f"{task} -> {default_state}")
             self.task_status_items[task] = item
             self.status_list.addItem(item)
 

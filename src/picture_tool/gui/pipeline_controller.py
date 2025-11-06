@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable, List, Sequence
 
 import yaml
-from PyQt5.QtWidgets import QMessageBox
+from PyQt5.QtWidgets import QMessageBox, QWidget
 
 from picture_tool.gui.task_thread import WorkerThread
 
@@ -45,13 +45,15 @@ class PipelineControllerMixin:
 
     def _show_warning(self, title: str, message: str) -> None:
         try:  # pragma: no cover - UI specific path
-            QMessageBox.warning(self, title, message)
+            parent: QWidget | None = self if isinstance(self, QWidget) else None
+            QMessageBox.warning(parent, title, message)
         except Exception:
             self.log_message(f"[warning] {title}: {message}")
 
     def _show_error(self, title: str, message: str) -> None:
         try:  # pragma: no cover - UI specific path
-            QMessageBox.critical(self, title, message)
+            parent: QWidget | None = self if isinstance(self, QWidget) else None
+            QMessageBox.critical(parent, title, message)
         except Exception:
             self.log_message(f"[error] {title}: {message}")
 

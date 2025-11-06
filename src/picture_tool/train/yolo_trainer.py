@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 import yaml
 
 try:
-    from ultralytics import YOLO
+    from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
     YOLO = None  # type: ignore
 

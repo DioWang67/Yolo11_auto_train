@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional, List
 
 try:
-    from ultralytics import YOLO
+    from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
     YOLO = None  # type: ignore
 

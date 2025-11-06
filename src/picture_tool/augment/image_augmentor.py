@@ -1,30 +1,33 @@
-import cv2
-import albumentations as A
+from __future__ import annotations
+
+import time
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 from pathlib import Path
-from tqdm import tqdm
-import time
-import yaml
-from typing import List
+from typing import Any, List, Optional
+
+import albumentations as A  # type: ignore[import-untyped]
+import cv2
+import yaml  # type: ignore[import-untyped]
+from tqdm import tqdm  # type: ignore[import-untyped]
 
 from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger
 
 
 class ImageAugmentor:
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str | None = None) -> None:
         self._setup_logging()
-        self.config = (
+        self.config: dict[str, Any] = (
             self._load_config(config_path) if config_path else self._default_config()
         )
-        self._set_seed(self.config.get("processing", {}).get("seed", None))
+        self._set_seed(self.config.get("processing", {}).get("seed"))
         self._setup_output_dirs()
         self.augmentations = self._create_augmentations()
 
-    def _setup_logging(self):
+    def _setup_logging(self) -> None:
         self.logger = setup_module_logger(__name__, "image_augmentation.log")
 
-    def _set_seed(self, seed):
+    def _set_seed(self, seed: Any) -> None:
         if seed is None:
             return
         try:
@@ -37,7 +40,7 @@ class ImageAugmentor:
         except Exception as e:
             self.logger.warning(f"設定隨機種子失敗: {e}")
 
-    def _setup_output_dirs(self):
+    def _setup_output_dirs(self) -> None:
         try:
             output_img_dir = Path(self.config["output"]["image_dir"])
             output_img_dir.mkdir(parents=True, exist_ok=True)
@@ -46,7 +49,7 @@ class ImageAugmentor:
             self.logger.error(f"建立輸出目錄失敗: {e}")
             raise
 
-    def _load_config(self, config_path: str) -> dict:
+    def _load_config(self, config_path: Optional[str]) -> dict[str, Any]:
         try:
             if config_path and Path(config_path).exists():
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -60,7 +63,7 @@ class ImageAugmentor:
             self.logger.error(f"讀取設定檔失敗: {e}")
             return self._default_config()
 
-    def _default_config(self) -> dict:
+    def _default_config(self) -> dict[str, Any]:
         return {
             "input": {"image_dir": "A/img"},
             "output": {"image_dir": "output/images"},
@@ -81,7 +84,7 @@ class ImageAugmentor:
             "processing": {"batch_size": 10, "num_workers": None},
         }
 
-    def _create_augmentations(self) -> A.Compose:
+    def _create_augmentations(self) -> Any:
         aug_config = self.config["augmentation"]
         ops_config = aug_config["operations"]
 
@@ -199,7 +202,7 @@ class ImageAugmentor:
             return False
         return saved_any
 
-    def process_dataset(self):
+    def process_dataset(self) -> None:
         start_time = time.time()
 
         input_img_dir = Path(self.config["input"]["image_dir"])
@@ -215,7 +218,11 @@ class ImageAugmentor:
 
         self.logger.info(f"待處理 {len(img_files)} 張影像")
 
-        num_workers = self.config["processing"].get("num_workers", None) or cpu_count()
+        workers_value = self.config["processing"].get("num_workers")
+        if isinstance(workers_value, (int, float)):
+            num_workers = int(workers_value) if int(workers_value) > 0 else cpu_count()
+        else:
+            num_workers = cpu_count()
 
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             results = list(

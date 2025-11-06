@@ -2,7 +2,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import List
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split  # type: ignore[import-untyped]
 
 try:
     # Optional: iterative stratification for multi-label balance
