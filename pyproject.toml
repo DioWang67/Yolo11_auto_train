@@ -57,7 +57,7 @@ branch = true
 source = ["src"]
 omit = [
   "src/picture_tool/gui/*",
-  "src/picture_tool/color/led_qc_enhanced.py",
+  "src/picture_tool/color/color_inspection.py",
   "src/picture_tool/train/yolo_trainer.py",
   "src/picture_tool/augment/yolo_data_augmentor.py",
   "src/picture_tool/infer/*",
@@ -74,6 +74,7 @@ fail_under = 50
 [project.scripts]
 picture-tool-pipeline = "picture_tool.main_pipeline:main"
 picture-tool-gui = "picture_tool.gui.app:main"
+picture-tool-color-verify = "picture_tool.color.color_verifier:main"
 
 [project.urls]
 Homepage = "https://github.com/robotlearning/Yolo11_auto_train"

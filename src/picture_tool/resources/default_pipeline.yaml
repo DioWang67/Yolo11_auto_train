@@ -65,30 +65,33 @@ pipeline:
   log_file: logs/pipeline.log
   task_groups:
     augmentation:
-    - yolo_augmentation
-    - image_augmentation
+      - yolo_augmentation
+      - image_augmentation
     quality:
-    - dataset_lint
-    - aug_preview
+      - dataset_lint
+      - aug_preview
+      - color_verification
+      - color_inspection
     preprocess:
-    - format_conversion
-    - anomaly_detection
+      - format_conversion
+      - anomaly_detection
     split:
-    - dataset_splitter
+      - dataset_splitter
     train:
-    - yolo_train
-    - yolo_evaluation
-    - generate_report
+      - yolo_train
+      - yolo_evaluation
+      - generate_report
     inference:
-    - batch_inference
+      - batch_inference
     full:
-    - format_conversion
-    - yolo_augmentation
-    - image_augmentation
-    - dataset_splitter
-    - yolo_train
-    - yolo_evaluation
-    - generate_report
+      - format_conversion
+      - yolo_augmentation
+      - image_augmentation
+      - dataset_splitter
+      - yolo_train
+      - yolo_evaluation
+      - generate_report
+      - batch_inference
   tasks:
   - dependencies: []
     enabled: true
@@ -111,6 +114,9 @@ pipeline:
   - dependencies: []
     enabled: true
     name: aug_preview
+  - dependencies: []
+    enabled: true
+    name: color_verification
   - dependencies:
     - dataset_splitter
     enabled: true
@@ -123,6 +129,9 @@ pipeline:
     - yolo_evaluation
     enabled: true
     name: generate_report
+  - dependencies: []
+    enabled: true
+    name: color_inspection
   - dependencies: []
     enabled: true
     name: batch_inference
@@ -197,7 +206,7 @@ yolo_training:
   # Split dataset root containing train/val/test
   dataset_dir: ./data/split
   # Class names for your dataset
-  class_names: ["C22B", "J5-1", "J5-2", "J6", "J7"]
+  class_names: ["Black", "Green", "Orange","Red", "Yellow"]
   # Initial weights (local file or model name)
   model: ./models/yolo11n.pt
   # Training hyperparameters
@@ -233,16 +242,16 @@ yolo_training:
     timeout: 1
     enable_yolo: true
     output_dir: Result
-    current_product: "PCBA3"  # fallback to position_validation.product
+    current_product: "Cable1"  # fallback to position_validation.product
     area: null  # fallback to position_validation.area
     expected_items:
-      PCBA3:
+      Cable1:
         A:
-          - C22B
-          - J5-1
-          - J5-2
-          - J6
-          - J7
+          - Black
+          - Green
+          - Orange
+          - Red
+          - Yellow
 
     tolerance: null
     tolerance_unit: percent
@@ -297,42 +306,97 @@ aug_preview:
   cols: 4
   seed: 42
 
-led_qc_enhanced:
-  config_path: null
-  config_overrides: {}
-  colors:
-    - Red
-    - Green
-    - Blue
-    - White
-  color_conf_min_per_color: {}
-  color_hue_range_margin: 8.0
-  color_hue_range_weight: 0.35
-  color_conf_hue_balance: 0.4
-  build:
-    ref_dir: ./data/led_qc/reference
-    model_out: ./models/led_qc/enhanced_model.json
-    save_config: ./models/led_qc/default_config.json
-  analyze:
-    model: ./models/led_qc/enhanced_model.json
-    image: ./data/led_qc/samples
-    out_dir: ./reports/led_qc/analyze
-    visualize: true
-    stability: false
-  detect:
-    model: ./models/led_qc/enhanced_model.json
-    image: ./data/led_qc/samples/sample.png
-    out_dir: ./reports/led_qc/single
-    label: null
-    sensitivity: 1.0
-    save_annotated: true
-    save_json: true
-  detect_dir:
-    model: ./models/led_qc/enhanced_model.json
-    dir: ./data/led_qc/batch
-    out_dir: ./reports/led_qc/batch
-    sensitivity: 0.85
-    save_annotated: true
-    save_json: false
-    csv_name: enhanced_summary.csv
 
+color_inspection:
+  enabled: true
+  input_dir: ./data/led_qc/samples
+  output_json: ./reports/led_qc/color_stats.json
+  colors:
+    - Black
+    - Green
+    - Orange
+    - Red
+    - Yellow
+    - White
+    - Blue
+  sam:
+    checkpoint: ./models/sam/sam_vit_h_4b8939.pth
+    model_type: vit_h
+    device: auto
+
+# 改進版顏色驗證配置
+color_verification:
+  enabled: true
+  input_dir: ./data/led_qc/samples
+  color_stats: ./reports/led_qc/color_stats.json
+  output_json: ./reports/led_qc/color_verification_improved.json
+  output_csv: ./reports/led_qc/color_verification_improved.csv
+  recursive: true
+  expected_from_name: true
+  expected_map: null  # 可選: 指定 CSV/JSON 映射檔案
+
+  hsv_margin: [5, 25, 25]
+  lab_margin: [8, 6, 8]
+
+  # 視覺化除錯
+  debug_plot: true
+  debug_dir: ./reports/led_qc/debug_improved
+  
+  # 條帶採樣配置 (Strip Sampling)
+  strip_sampling:
+    enabled: true
+    segments: 10           # 分割成 10 個條帶
+    orientation: vertical  # vertical 或 horizontal
+    min_width_ratio: 0.06  # 最小條帶寬度比例
+    
+    # 核心參數調整
+    threshold: 0.30        # 降低信心度閾值 (原 0.35)
+    edge_margin: 0.15      # 增加邊緣裁切 (原 0.08)
+    
+    # 飽和度/明度過濾
+    sat_threshold: 30      # 降低飽和度閾值 (原 25)
+    val_threshold: 200     # 略提高明度閾值 (原 245)
+    
+    # 中心加權
+    center_bias: true
+    center_sigma: 0.25     # 更強的中心偏重 (原 0.35)
+    
+    # 條帶品質控制
+    min_valid_pixels: 60   # 降低最小像素要求 (原 60)
+    top_k: 1               # 取前 5 個最佳條帶 (原 3)
+    min_sat_ratio: 0.15    # 最小飽和度覆蓋率 (原 0.18)
+    max_edge_ratio: 0.25   # 最大邊緣比例 (原 0.2)
+
+# 顏色特殊檢測參數 (程式內部使用)
+# 這些參數已內建於改進版程式中:
+# 
+# Black 檢測:
+#   - S < 50, V < 80
+#   - 覆蓋率 > 60%
+#
+# Yellow 檢測:
+#   - H: 20-35 度
+#   - S > 80
+#   - V > 150
+#
+# Orange/Red 分離:
+#   - Orange: H 在 5-20 度
+#   - Red: H 在 0-5 或 170-180 度
+
+# 執行範例:
+# python color_verifier.py \
+#   --input-dir ./data/led_qc/samples \
+#   --color-stats ./reports/led_qc/color_stats.json \
+#   --output-json ./reports/led_qc/color_verification_improved.json \
+#   --output-csv ./reports/led_qc/color_verification_improved.csv \
+#   --recursive \
+#   --hsv-margin 10 40 45 \
+#   --lab-margin 15 10 15 \
+#   --segments 10 \
+#   --ratio-threshold 0.30 \
+#   --edge-margin 0.15 \
+#   --sat-threshold 20 \
+#   --center-sigma 0.25 \
+#   --top-k 5 \
+#   --debug-plot \
+#   --debug-dir ./reports/led_qc/debug_improved

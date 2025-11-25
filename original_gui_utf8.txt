@@ -1305,7 +1305,7 @@ class PictureToolGUI(QMainWindow):
     def _load_latest_led_metrics(self) -> list[str]:
         from datetime import datetime
 
-        led_config = self.config.get('led_qc_enhanced', {}) if isinstance(self.config, dict) else {}
+        led_config = self.config.get('color_inspection', {}) if isinstance(self.config, dict) else {}
         detect_dir_cfg = led_config.get('detect_dir', {}) if isinstance(led_config, dict) else {}
         led_dir = Path(detect_dir_cfg.get('out_dir') or './reports/led_qc/batch')
         fallback_dirs = [Path('./reports/led_qc'), Path('./reports/led_qc/batch')]
@@ -2139,3 +2139,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -16,7 +16,7 @@ yolo_training:           # Ultralytics YOLO training / export
 batch_inference:         # Bulk inference after training
 dataset_lint (optional)  # Dataset lint/preview helpers
 aug_preview (optional)   # Augmentation preview output
-led_qc_enhanced (opt.)   # LED QC workflow configuration
+color_inspection (opt.)   # Colour inspection workflow configuration
 ```
 
 Below sections outline the most frequently adjusted blocks. All paths are
@@ -121,9 +121,9 @@ Controls the optional `bundle/` directory created after training. Keys include
 
 ---
 
-## LED QC (`led_qc_enhanced`)
+## 顏色檢測 (`color_inspection`)
 
-This block is only required when using the LED QC sidebar. Important keys:
+This block controls the LED/顏色檢測 workflow. Important keys:
 
 - `colors`, `color_aliases`: Define colour mapping and alternative names.
 - `color_conf_min_per_color`: Per-colour minimum confidence thresholds.

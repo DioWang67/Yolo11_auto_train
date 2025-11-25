@@ -3,8 +3,8 @@ train: train/images
 val: val/images
 test: test/images
 names:
-- C22B
-- J5-1
-- J5-2
-- J6
-- J7
+- Black
+- Green
+- Orange
+- Red
+- Yellow

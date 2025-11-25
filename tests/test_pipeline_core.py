@@ -95,6 +95,28 @@ def test_validate_dependencies_injects_missing(minimal_config):
     assert any(level == "info" for level, _ in logger.records)
 
 
+def test_validate_dependencies_auto_registers_new_section(minimal_config):
+    cfg, _ = minimal_config
+    cfg["color_verification"] = {"enabled": True}
+    logger = DummyLogger()
+    ordered = pipeline.validate_dependencies(["color_verification"], cfg, logger)
+    assert ordered == ["color_verification"]
+    assert any(
+        "Auto-registered task color_verification" in message
+        for level, message in logger.records
+        if level == "info"
+    )
+
+
+def test_validate_dependencies_creates_section_for_known_task(minimal_config):
+    cfg, _ = minimal_config
+    logger = DummyLogger()
+    ordered = pipeline.validate_dependencies(["color_verification"], cfg, logger)
+    assert ordered == ["color_verification"]
+    assert "color_verification" in cfg
+    assert cfg["color_verification"]["enabled"] is True
+
+
 def test_run_pipeline_executes_in_declared_order(monkeypatch, minimal_config):
     cfg, cfg_path = minimal_config
     args = _make_args(cfg_path)

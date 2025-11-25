@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from picture_tool.color import led_qc_enhanced as led
+from picture_tool.color import color_inspection as color_mod
 
 
 @pytest.fixture()
 def dummy_model():
-    color = led.EnhancedColorModel(
+    color_model = color_mod.EnhancedColorModel(
         avg_color_hist=[0.1] * 10,
         avg_rotation_hist=[0.1] * 10,
         hist_thr=0.5,
@@ -34,10 +34,10 @@ def dummy_model():
         avg_confidence=0.98,
         last_updated="2025-01-01T00:00:00Z",
     )
-    model = led.EnhancedReferenceModel(
+    model = color_mod.EnhancedReferenceModel(
         version=2,
         config={"sigma_multiplier": 2.0},
-        colors={"RED": color},
+        colors={"RED": color_model},
         creation_time="2025-01-01T00:00:00Z",
         total_samples=10,
     )
@@ -49,14 +49,14 @@ def test_cmd_info(monkeypatch, tmp_path, capsys, dummy_model):
     model_path.write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(
-        led.EnhancedReferenceModel,
+        color_mod.EnhancedReferenceModel,
         "from_json",
         staticmethod(lambda path: dummy_model),
     )
 
-    led.cmd_info(SimpleNamespace(model=str(model_path)))
+    color_mod.cmd_info(SimpleNamespace(model=str(model_path)))
     out = capsys.readouterr().out
-    assert "總樣本" in out or "total_samples" in out
+    assert "total_samples" in out
 
 def test_cmd_analyze_selects_directory(monkeypatch, tmp_path, dummy_model):
     called = {}
@@ -65,7 +65,7 @@ def test_cmd_analyze_selects_directory(monkeypatch, tmp_path, dummy_model):
     model_path.write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(
-        led.EnhancedReferenceModel,
+        color_mod.EnhancedReferenceModel,
         "from_json",
         staticmethod(lambda path: dummy_model),
     )
@@ -73,8 +73,8 @@ def test_cmd_analyze_selects_directory(monkeypatch, tmp_path, dummy_model):
     def fake_analyze_directory(args, model):
         called["dir"] = args.dir
 
-    monkeypatch.setattr(led, "_analyze_directory", fake_analyze_directory)
-    monkeypatch.setattr(led, "_analyze_single", lambda args, model: None)
+    monkeypatch.setattr(color_mod, "_analyze_directory", fake_analyze_directory)
+    monkeypatch.setattr(color_mod, "_analyze_single", lambda args, model: None)
 
     args = SimpleNamespace(
         model=str(model_path),
@@ -84,5 +84,5 @@ def test_cmd_analyze_selects_directory(monkeypatch, tmp_path, dummy_model):
         visualize=False,
         stability=False,
     )
-    led.cmd_analyze(args)
+    color_mod.cmd_analyze(args)
     assert called["dir"] == str(tmp_path)

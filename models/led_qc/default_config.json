@@ -25,9 +25,36 @@
   "color_hue_range_margin": 8.0,
   "color_hue_range_weight": 0.35,
   "color_conf_hue_balance": 0.4,
+  "color_hint_conf_floor": 0.45,
   "color_hue_auto_sigma": 2.5,
   "color_hue_auto_min_width": 20.0,
   "color_hue_auto_std_fallback": 6.0,
+  "wire_like_colors": [
+    "DarkGreen",
+    "Black"
+  ],
+  "wire_mask_min_area_ratio": 0.002,
+  "wire_mask_max_area_ratio": 0.5,
+  "wire_mask_min_pixels": 80,
+  "wire_mask_target_ratio": 0.08,
+  "wire_mask_dilate_iter": 1,
+  "wire_hue_focus_margin": 4.0,
+  "wire_mask_shrink_target": 0.15,
+  "wire_keep_largest_component": true,
+  "wire_largest_min_area": 20,
+  "wire_drop_border_components": true,
+  "wire_border_margin": 6,
+  "wire_border_area_ratio": 0.18,
+  "wire_border_touch_min_edges": 2,
+  "wire_s_min": 18.0,
+  "wire_hole_ratio_relax": 1.6,
+  "wire_aspect_relax": 1.4,
+  "wire_compactness_relax": 0.8,
+  "dark_value_targets": [
+    "Black"
+  ],
+  "dark_mask_target_ratio": 0.05,
+  "dark_v_max": 140.0,
   "blackhat_kernel": 7,
   "hole_k": 2.5,
   "hole_min_area": 15,
@@ -43,13 +70,31 @@
     "Red",
     "Green",
     "Blue",
-    "White"
+    "White",
+    "DarkGreen",
+    "Black"
   ],
   "color_aliases": {
     "red": "Red",
     "green": "Green",
     "blue": "Blue",
-    "white": "White"
+    "white": "White",
+    "darkgreen": "DarkGreen",
+    "black": "Black",
+    "dark_green": "DarkGreen",
+    "deepgreen": "DarkGreen",
+    "deep_green": "DarkGreen",
+    "darkgreenwire": "DarkGreen",
+    "wiregreen": "DarkGreen",
+    "greenwire": "DarkGreen",
+    "darkgrn": "DarkGreen",
+    "dg": "DarkGreen",
+    "深綠": "DarkGreen",
+    "blackwire": "Black",
+    "black_wire": "Black",
+    "blk": "Black",
+    "黑色": "Black",
+    "黑": "Black"
   },
   "color_hue_ranges": {
     "Red": [
@@ -67,6 +112,14 @@
     "White": [
       0.0,
       360.0
+    ],
+    "DarkGreen": [
+      40.0,
+      75.0
+    ],
+    "Black": [
+      0.0,
+      360.0
     ]
   },
   "white_s_p90_max": 80,
@@ -78,6 +131,12 @@
     0.2
   ],
   "white_ring_erode_px": 6,
+  "auto_region_from_name": false,
+  "auto_region_exclude_colors": [
+    "Green"
+  ],
+  "auto_region_fallback_colors": [],
+  "auto_region_min_area": 50,
   "mask_shrink_when_large": true,
   "mask_shrink_target": 0.85,
   "mask_shrink_iter_max": 2,

@@ -65,30 +65,33 @@ pipeline:
   log_file: logs/pipeline.log
   task_groups:
     augmentation:
-    - yolo_augmentation
-    - image_augmentation
+      - yolo_augmentation
+      - image_augmentation
     quality:
-    - dataset_lint
-    - aug_preview
+      - dataset_lint
+      - aug_preview
+      - color_verification
+      - color_inspection
     preprocess:
-    - format_conversion
-    - anomaly_detection
+      - format_conversion
+      - anomaly_detection
     split:
-    - dataset_splitter
+      - dataset_splitter
     train:
-    - yolo_train
-    - yolo_evaluation
-    - generate_report
+      - yolo_train
+      - yolo_evaluation
+      - generate_report
     inference:
-    - batch_inference
+      - batch_inference
     full:
-    - format_conversion
-    - yolo_augmentation
-    - image_augmentation
-    - dataset_splitter
-    - yolo_train
-    - yolo_evaluation
-    - generate_report
+      - format_conversion
+      - yolo_augmentation
+      - image_augmentation
+      - dataset_splitter
+      - yolo_train
+      - yolo_evaluation
+      - generate_report
+      - batch_inference
   tasks:
   - dependencies: []
     enabled: true
@@ -111,6 +114,9 @@ pipeline:
   - dependencies: []
     enabled: true
     name: aug_preview
+  - dependencies: []
+    enabled: true
+    name: color_verification
   - dependencies:
     - dataset_splitter
     enabled: true
@@ -197,7 +203,7 @@ yolo_training:
   # Split dataset root containing train/val/test
   dataset_dir: ./data/split
   # Class names for your dataset
-  class_names: ["C22B", "J5-1", "J5-2", "J6", "J7"]
+  class_names: ["Black", "Green", "Orange","Red", "Yellow"]
   # Initial weights (local file or model name)
   model: ./models/yolo11n.pt
   # Training hyperparameters
@@ -233,16 +239,16 @@ yolo_training:
     timeout: 1
     enable_yolo: true
     output_dir: Result
-    current_product: "PCBA3"  # fallback to position_validation.product
+    current_product: "Cable1"  # fallback to position_validation.product
     area: null  # fallback to position_validation.area
     expected_items:
-      PCBA3:
+      Cable1:
         A:
-          - C22B
-          - J5-1
-          - J5-2
-          - J6
-          - J7
+          - Black
+          - Green
+          - Orange
+          - Red
+          - Yellow
 
     tolerance: null
     tolerance_unit: percent
@@ -297,42 +303,53 @@ aug_preview:
   cols: 4
   seed: 42
 
-led_qc_enhanced:
-  config_path: null
-  config_overrides: {}
+color_inspection:
+  enabled: true
+  input_dir: ./data/led_qc/samples
+  output_json: ./reports/led_qc/color_stats.json
   colors:
-    - Red
+    - Black
     - Green
-    - Blue
-    - White
-  color_conf_min_per_color: {}
-  color_hue_range_margin: 8.0
-  color_hue_range_weight: 0.35
-  color_conf_hue_balance: 0.4
-  build:
-    ref_dir: ./data/led_qc/reference
-    model_out: ./models/led_qc/enhanced_model.json
-    save_config: ./models/led_qc/default_config.json
-  analyze:
-    model: ./models/led_qc/enhanced_model.json
-    image: ./data/led_qc/samples
-    out_dir: ./reports/led_qc/analyze
-    visualize: true
-    stability: false
-  detect:
-    model: ./models/led_qc/enhanced_model.json
-    image: ./data/led_qc/samples/sample.png
-    out_dir: ./reports/led_qc/single
-    label: null
-    sensitivity: 1.0
-    save_annotated: true
-    save_json: true
-  detect_dir:
-    model: ./models/led_qc/enhanced_model.json
-    dir: ./data/led_qc/batch
-    out_dir: ./reports/led_qc/batch
-    sensitivity: 0.85
-    save_annotated: true
-    save_json: false
-    csv_name: enhanced_summary.csv
+    - Orange
+    - Red
+    - Yellow
+  sam:
+    checkpoint: ./models/sam/sam_vit_h_4b8939.pth
+    model_type: vit_h
+    device: auto
 
+color_verification:
+  enabled: true
+  input_dir: ./data/led_qc/samples
+  color_stats: ./reports/led_qc/color_stats.json
+  output_json: ./reports/led_qc/color_verification.json
+  output_csv: ./reports/led_qc/color_verification.csv
+  recursive: true
+  expected_from_name: true
+  expected_map:
+  min_area_ratio: 0.02
+  max_area_ratio: 0.7
+  hsv_margin:
+    - 8
+    - 35
+    - 40
+  lab_margin:
+    - 12
+    - 8
+    - 12
+  debug_plot: true
+  debug_dir: ./reports/led_qc/color_verification_debug
+  mask_strategy: full
+  strip_sampling:
+    enabled: true
+    segments: 8
+    threshold: 0.35
+    orientation: vertical
+    min_width_ratio: 0.05
+    edge_margin: 0.08
+    sat_threshold: 25
+    val_threshold: 245
+    center_bias: true
+    center_sigma: 0.35
+    min_valid_pixels: 50
+    top_k: 3
