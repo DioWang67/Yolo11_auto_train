@@ -2,6 +2,8 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 
+from picture_tool.utils.experiment import write_experiment
+
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
@@ -70,3 +72,16 @@ def evaluate_yolo(config: dict, logger: Optional[logging.Logger] = None) -> None
     model = YOLO(str(weights_path))
     _ = model.val(data=str(data_yaml), imgsz=imgsz, device=device)
     logger.info("Evaluation completed.")
+    run_dir = weights_path.parent.parent
+    artifacts = {
+        "weights": weights_path,
+        "data_yaml": data_yaml,
+    }
+    write_experiment(
+        run_type="eval",
+        config=config,
+        run_dir=run_dir,
+        metrics={},
+        artifacts=artifacts,
+        extra={"imgsz": imgsz, "device": device},
+    )

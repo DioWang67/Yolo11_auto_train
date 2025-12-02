@@ -1,15 +1,14 @@
 presets:
   YOLO訓練:
-  - YOLO數據增強
-  - 數據分割
-  - YOLO訓練
-  - YOLO評估
-  - 生成報告
-  - 數據檢查
-  - 增強預覽
-  - 批次推論
+    - yolo_augmentation
+    - dataset_splitter
+    - yolo_train
+    - yolo_evaluation
+    - generate_report
+    - dataset_lint
+    - aug_preview
+    - batch_inference
+
   顏色檢測:
-  - LED QC 建模
-  - LED QC 單張檢測
-  - LED QC 批次檢測
-  - LED QC 分析
+    - color_inspection
+    - color_verification

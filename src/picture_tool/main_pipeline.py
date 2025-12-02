@@ -15,9 +15,12 @@ from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.format import convert_format
 from picture_tool.infer.batch_infer import run_batch_inference
 from picture_tool.quality.dataset_linter import lint_dataset, preview_dataset
+from picture_tool.report.qc_summary import generate_qc_summary
 from picture_tool.report.report_generator import generate_report
+from picture_tool.pipeline.core import Pipeline, Task
 from picture_tool.split import split_dataset
 from picture_tool.train.yolo_trainer import train_yolo
+from picture_tool.position import run_position_validation
 
 
 _DEFAULT_CONFIG_RESOURCE = "default_pipeline.yaml"
@@ -153,9 +156,7 @@ def _auto_device(config: dict, logger: logging.Logger) -> None:
         config["yolo_training"] = yt
 
 
-def _should_skip(
-    task: str, config: dict, args, logger: logging.Logger
-) -> Optional[str]:
+def _should_skip(task: str, config: dict, args, logger: Optional[logging.Logger] = None) -> Optional[str]:
     force = getattr(args, "force", False) or config.get("pipeline", {}).get(
         "force", False
     )
@@ -367,6 +368,19 @@ def run_aug_preview(config, args):
 def run_batch_infer(config, args):
     run_batch_inference(config)
 
+
+def run_position_validation_task(config, args):
+    """Run offline position validation using trained weights and sample images."""
+    ycfg = config.get("yolo_training", {}) if isinstance(config, dict) else {}
+    run_root = Path(str(ycfg.get("project", "./runs/detect")))
+    run_name = str(ycfg.get("name", "train"))
+    run_dir = run_root / run_name
+    if not run_dir.exists():
+        raise FileNotFoundError(
+            f"Run directory not found for position validation: {run_dir}"
+        )
+    return run_position_validation(config, run_dir, logger=logging.getLogger(__name__))
+
 def _section_enabled(section: Optional[dict]) -> bool:
     return bool(section) and section.get("enabled", True)
 
@@ -498,6 +512,11 @@ def run_color_verification(config, args):
 
 
 
+def run_qc_summary(config, args):
+    """Aggregate QC outputs into one concise summary report."""
+    generate_qc_summary(config, logger=logging.getLogger(__name__))
+
+
 TASK_HANDLERS = {
     "format_conversion": run_format_conversion,
     "anomaly_detection": run_anomaly_detection,
@@ -512,35 +531,48 @@ TASK_HANDLERS = {
     "color_inspection": run_color_inspection,
     "color_verification": run_color_verification,
     "batch_inference": run_batch_infer,
+    "position_validation": run_position_validation_task,
+    "qc_summary": run_qc_summary,
 }
+
+
+def _config_dependencies(config: dict) -> dict[str, list[str]]:
+    deps: dict[str, list[str]] = {}
+    pipeline_cfg = config.get("pipeline", {})
+    for entry in pipeline_cfg.get("tasks", []):
+        if isinstance(entry, dict) and entry.get("name"):
+            deps[str(entry["name"])] = list(entry.get("dependencies", []))
+    return deps
+
+
+def build_task_registry(config: dict) -> dict[str, Task]:
+    deps_map = _config_dependencies(config)
+    registry: dict[str, Task] = {}
+    for name, handler in TASK_HANDLERS.items():
+        registry[name] = Task(
+            name=name,
+            run=handler,
+            dependencies=deps_map.get(name, []),
+            skip_fn=lambda cfg, a, n=name: _should_skip(n, cfg, a),
+            description="",
+        )
+    return registry
 
 
 def run_pipeline(tasks, config, logger, args, stop_event=None):
     """Execute each task handler with dependency checks and skipping logic."""
     tasks = validate_dependencies(tasks, config, logger)
+    setattr(args, "stop_event", stop_event)
 
-    for task in tasks:
-        if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
-            logger.info("Stop requested; aborting remaining tasks.")
-            break
-        config = load_config_if_updated(args.config, config, logger)
-        logger.info(f"Running task: {task}")
-        _apply_cli_overrides(config, args, logger)
-        _auto_device(config, logger)
-        skip_reason = _should_skip(task, config, args, logger)
-        if skip_reason:
-            logger.info(f"Skipping task {task}: {skip_reason}")
-            continue
-        handler = TASK_HANDLERS.get(task)
-        if not handler:
-            logger.warning(f"Unknown task: {task}")
-            continue
-        try:
-            handler(config, args)
-            logger.info(f"Task {task} completed.")
-        except Exception as exc:
-            logger.error(f"Task {task} failed: {exc}")
-            raise
+    def _before_task(task_obj: Task, cfg: dict) -> dict:
+        fresh_cfg = load_config_if_updated(args.config, cfg, logger)
+        _apply_cli_overrides(fresh_cfg, args, logger)
+        _auto_device(fresh_cfg, logger)
+        return fresh_cfg
+
+    registry = build_task_registry(config)
+    pipeline = Pipeline(registry, logger=logger)
+    pipeline.run(tasks, config, args, before_task=_before_task)
 
 
 def main():
@@ -634,5 +666,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    mask_strategy = str(color_cfg.get("mask_strategy", "auto"))

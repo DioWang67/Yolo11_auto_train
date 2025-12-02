@@ -1,92 +1,155 @@
-﻿# picture-tool
+# picture-tool
 
-picture-tool 提供一套可封裝至 PyPI 的影像處理 / YOLO 自動化工具鏈，涵蓋資料前處理、增強、資料切分、YOLO11 訓練與評估，以及 PyQt GUI 介面。所有模組共享同一個管線核心，CLI 與 GUI 可交互使用。
+影像處理與 YOLO 自動化訓練/驗證工具，提供 CLI 與 PyQt GUI。涵蓋：格式轉換、資料增強、資料分割、資料檢查、YOLO 訓練/評估、批次推論、顏色檢測、位置驗證、報告產生等。
 
-## 功能特色
-- 任務導向的資料管線：支援資料轉檔、增強、異常遮罩、資料切分、訓練、推論與報告生成。
-- YOLO11 訓練輔助：自動判斷 GPU/CPU、批次推論、評估與結果彙整。
-- LED 品質檢驗模組：可自定義顏色映射與檢測容忍度，產出 CSV / JSON 報表；支援 `picture-tool-color-verify` 以既有 color_stats 自動判斷線材顏色。
-- PyQt5 GUI：以 mixin 形式重複利用管線邏輯，適合客製化前端。
-- src/ 佈局與型別標記 (py.typed)，利於發佈至 PyPI 並保持 IDE 體驗。
+## 功能總覽（任務 key）
+- `format_conversion`：影像格式轉換（含批次、品質設定）。
+- `yolo_augmentation` / `image_augmentation`：YOLO/一般影像增強。
+- `dataset_splitter`：切分 train/val/test。
+- `dataset_lint` / `aug_preview`：資料品質檢查、增強預覽。
+- `yolo_train`：YOLO 訓練（自動選 GPU/CPU）。
+- `yolo_evaluation`：訓練後評估。
+- `generate_report`：匯總報告。
+- `batch_inference`：批次推論。
+- `anomaly_detection`：簡易異常檢測流程。
+- `color_inspection`：SAM 建模顏色範本（產生 color_stats）。
+- `color_verification`：顏色批次檢測/比對，輸出 JSON/CSV。
+- `position_validation`：離線位置驗證（使用已訓練權重 + sample images）。
+
+## 任務步驟與資料需求（速查）
+- `format_conversion`：輸入資料夾 + 原格式/目標格式；輸出轉檔影像（品質可調）。
+- `yolo_augmentation`：需影像/標註資料夾（input.image_dir/label_dir），設定增強操作與輸出路徑；產生增強後影像/標註。
+- `image_augmentation`：僅影像輸入目錄，設定增強操作與輸出路徑；產生增強影像。
+- `dataset_splitter`：需原始影像/標註目錄與分割合數；輸出 train/val/test 影像與標註。
+- `dataset_lint`：需影像/標註目錄；輸出 lint 報告（CSV/圖示）。
+- `aug_preview`：需增強後影像/標註目錄；輸出增強預覽圖。
+- `yolo_train`：需 split 資料集、class_names、初始權重；輸出 runs/detect/<name>/weights/{best,last}.pt 及 log/metrics。
+- `yolo_evaluation`：需權重與驗證集；輸出評估結果與指標。
+- `generate_report`：依訓練/評估結果產生報告；輸出 reports/*。
+- `batch_inference`：需輸入影像資料夾與權重；輸出推論結果（影像/CSV）。
+- `anomaly_detection`：需 anomaly 資料夾設定（reference/test 等）；輸出 anomaly 結果/報告。
+- `color_inspection`：需 SAM checkpoint、輸入影像資料夾；輸出 color_stats.json（顏色範本）。
+- `color_verification`：需 color_stats.json、輸入影像資料夾（可 expected_map）；輸出 JSON/CSV（可選 debug_plot 圖）。
+- `position_validation`：需位置設定 expected_boxes、sample 圖片、訓練權重；輸出 position_validation.json。
+
+## 常用操作範例（交接速用）
+- 完整訓練→評估→報告（依預設任務）：
+  ```bash
+  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full
+  ```
+- 只訓練 YOLO（跳過增強/分割）：
+  ```bash
+  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
+  ```
+- 批次推論（指定輸入/輸出、權重）：
+  ```bash
+  picture-tool-pipeline --config configs/default_pipeline.yaml \
+    --tasks batch_inference --weights runs/detect/train/weights/best.pt \
+    --infer-input data/raw/images --infer-output reports/infer
+  ```
+- 顏色範本建立 + 批次顏色檢測：
+  ```bash
+  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks color_inspection
+  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks color_verification
+  ```
+  或直接用 CLI：
+  ```bash
+  picture-tool-color-verify --input-dir data/led_qc/infer \
+    --color-stats reports/led_qc/color_stats.json --output-json reports/led_qc/verify.json
+  ```
+- 位置驗證（需先訓練產出 weights、設定 product/area/position config）：
+  ```bash
+  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks position_validation
+  ```
+  輸出：`runs/detect/<name>/position_validation/position_validation.json`（或自訂 output_dir）。
 
 ## 專案結構
-`
+```
 Yolo11_auto_train/
-├─ src/picture_tool/              # 發佈套件主體
-│  ├─ anomaly/                    # 異常遮罩工具
-│  ├─ augment/                    # 影像與 YOLO 增強
-│  ├─ color/                      # LED 品質檢驗
-│  ├─ format/                     # 影像格式轉換
-│  ├─ gui/                        # PyQt GUI
-│  ├─ pipeline/                   # 管線流程 helpers
-│  ├─ split/, train/, utils/, …   # 其他模組
-│  ├─ main_pipeline.py            # CLI 管線入口
-│  └─ preset_config.yaml          # 預設 GUI 流程設定
-├─ configs/                       # 範例設定檔 (不隨套件安裝)
-├─ docs/                          # 詳細文件
-├─ tests/                         # Pytest 測試
-└─ pyproject.toml                 # 打包與中繼資料
-`
+├─ src/picture_tool/           # 主程式碼
+│  ├─ gui/                     # PyQt GUI
+│  ├─ pipeline/                # 任務管線與註冊
+│  ├─ position/                # 位置驗證
+│  ├─ color/, augment/, split/, train/, ... 等子模組
+│  └─ resources/               # 內建範例設定
+├─ configs/                    # 可覆蓋的設定 (default_pipeline.yaml, gui_presets.yaml)
+├─ models/, data/, reports/, runs/ ...
+├─ pyproject.toml, requirements-dev.txt, README.md
+```
 
 ## 安裝
-`ash
-python -m pip install .             # 安裝基礎套件
-python -m pip install .[gui]        # 加上 PyQt5 GUI 依賴
-`
-
-開發環境建議：
-`ash
+```bash
+python -m pip install .
+python -m pip install .[gui]      # 需要 PyQt5 GUI 時
+```
+開發環境：
+```bash
 python -m venv .venv
-. .venv/Scripts/activate   # Windows PowerShell
+. .venv/Scripts/activate          # PowerShell
 pip install -r requirements-dev.txt
 pip install -e .[dev,gui]
-`
+```
 
 ## 快速開始
-`ash
-# CLI：執行整合管線
+CLI：
+```bash
 picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full
-
-# GUI：啟動圖形介面
+```
+GUI：
+```bash
 picture-tool-gui --config configs/gui_presets.yaml
+```
+顏色檢測（LED）：
+```bash
+picture-tool-color-verify \
+  --input-dir data/led_qc/infer \
+  --color-stats reports/led_qc/color_stats.json \
+  --expected-map reports/led_qc/expected.csv
+```
+## ?s?W??O
+- ?i???/CLI ???G????????????u?@?B???j???k?w????A?????A??u CLI/GUI ?h?q?????C
+- ??l?p??G train/eval ?????|?b `reports/experiments/*.yaml|json` ?]?m???? config?B??A???B????|?C
+- `qc_summary` ?????`picture-tool-pipeline --tasks qc_summary`?y?O color verification/position validation/batch inference ????G??@?X?@??? JSON???i?C
+- `picture-tool-doctor --create-demo` ?i?_??????J??L?]ffmpeg/torch/onnxruntime?^?A????p demo ??????`data/demo_doctor`?^?C
 
-# LED 顏色批次檢測
-picture-tool-color-verify --input-dir data/led_qc/infer --color-stats reports/led_qc/color_stats.json --expected-map reports/led_qc/expected.csv
-`
 
-執行流程建議：先透過 `color_inspection.collect` (或 pipeline 的 `color_inspection` 任務) 建立 color_stats，之後在任意資料夾上執行 `picture-tool-color-verify`。工具會自動去除背景、取得主體平均色，並將結果寫入 JSON/CSV；若檔名含標準顏色或提供 `--expected-map` 對照表，即可直接標記出色差/誤判的樣本。
-若需要除錯，可加上 `--debug-plot`（或在 pipeline 的 `color_verification.debug_plot` 設為 true）輸出每張圖的遮罩、色彩分佈與統計摘要。
-若輸入圖已是 YOLO/ROI，可：
-- 將 `mask_strategy` 設為 `full`（或 CLI `--mask-strategy full`）直接以整個 ROI 作為遮罩，避免自動遮罩蓋掉細線。
-- 若輸入圖已是 YOLO/ROI，可開啟 `strip_sampling`（或 CLI `--strip-enabled`）沿線材寬度切成窄條逐一檢測 HSV/LAB 範圍，並可透過 `edge_margin`、`sat_threshold`、`val_threshold`、`min_sat_ratio`、`max_edge_ratio`、`center_sigma`、`top_k` 等參數排除邊緣雜訊、金屬高亮或低飽和區域，同時搭配 `--debug-plot` 產生 ROI/strip 視覺化圖，進一步降低誤判。
-- `color_inspection.collect` 會為每次標註紀錄 HSV/LAB 的 10/90 百分位與遮罩覆蓋率，並寫入 `reports/led_qc/color_stats.json`。`picture-tool-color-verify` 會依據這些統計自動調整各顏色的信心門檻，若要檢查調整結果，可加上 `--threshold-report reports/led_qc/thresholds.json` 保存動態門檻。
-- GUI 版 color inspection 會在下方顯示 `SAM: Idle / Running / Queued` 狀態，長時間推論時仍可持續操作，不必等候主執行緒回應。
+## 任務設定與預設
+- `configs/default_pipeline.yaml`：預設任務清單 (`pipeline.tasks`)、分組、各任務參數。
+- `configs/gui_presets.yaml`：GUI 預設組合（可自行修改）。
+- 任務名稱需與 `src/picture_tool/main_pipeline.py` 的 `TASK_HANDLERS` 一致（見「功能總覽」）。
 
-也可以程式化呼叫核心 API：
-`python
-from picture_tool import ImageAugmentor, run_pipeline
-from picture_tool.pipeline import load_config
+## Position Validation 使用說明
+檢查偵測中心是否落在預期框內，輸出 `position_validation.json`：
+1. 設定檔（config.yaml 或 configs/default_pipeline.yaml）填寫：
+```yaml
+yolo_training:
+  position_validation:
+    enabled: true
+    product: Cable1          # 必填
+    area: A                  # 必填
+    config_path: ./models/yolo/position_config.yaml   # 或直接填 config: {...}
+    sample_dir: ./data/split/val/images               # 選填，預設 dataset_dir/val/images
+    weights: null            # 選填，預設 runs/detect/<name>/weights/best.pt
+    output_dir: ./reports/position_validation         # 選填
+    conf: 0.25               # 選填
+    device: auto             # 選填
+    tolerance_override: null # 選填，百分比
+```
+2. 確認 `yolo_training.project/name` 指向已有訓練結果（預設 `runs/detect/train`）。
+3. 執行：GUI 勾選「Position Validation」，或 CLI `--tasks position_validation`。
+4. 輸出：`runs/detect/<name>/position_validation/position_validation.json`（或自訂 `output_dir`）。
+> `enabled: false` 會直接跳過且不產出檔案。
 
-config = load_config("configs/default_pipeline.yaml")
-run_pipeline(config, tasks=["image_augmentation", "yolo_training"])
-`
+## 顏色檢測流程
+- `color_inspection`：啟動 SAM 範本建立，生成 `color_stats.json`。
+- `color_verification`：使用 `color_stats.json` 對資料夾做批次顏色檢測，產出 JSON/CSV，可啟用 `debug_plot` 生成可視化。
 
-## 測試與品質
-`ash
+## 測試與建置
+```bash
 ruff check src tests
 pytest --cov=picture_tool
 python -m build
-`
-
-- 測試涵蓋關鍵模組（augment、split、pipeline 等）。
-- pyproject.toml 提供 dev 與 gui extras，方便在 CI/CD 中安裝。
-- picture_tool/__init__.py 對外釋出常用 API，__version__ 由套件版本自動帶入。
-
-## 發佈提示
-1. 更新 pyproject.toml 內的 ersion 與 CHANGELOG。
-2. 執行 python -m build 產生 sdist / wheel。
-3. 使用 	wine upload dist/* 上傳至 PyPI（或 TestPyPI）。
-4. GUI 預設讀取 preset_config.yaml（隨套件一併打包）。範例設定則維持在 configs/ 供使用者修改。
+```
 
 ## 授權
-此專案預設為專有授權（License :: Other/Proprietary License），若需開源釋出請更新 pyproject.toml 與 LICENSE。
+預設為專案內標示的 Proprietary License；若需開源，請同步更新 pyproject.toml 與 LICENSE。

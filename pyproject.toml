@@ -75,6 +75,7 @@ fail_under = 50
 picture-tool-pipeline = "picture_tool.main_pipeline:main"
 picture-tool-gui = "picture_tool.gui.app:main"
 picture-tool-color-verify = "picture_tool.color.color_verifier:main"
+picture-tool-doctor = "picture_tool.doctor:main"
 
 [project.urls]
 Homepage = "https://github.com/robotlearning/Yolo11_auto_train"

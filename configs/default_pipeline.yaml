@@ -72,6 +72,7 @@ pipeline:
       - aug_preview
       - color_verification
       - color_inspection
+      - qc_summary
     preprocess:
       - format_conversion
       - anomaly_detection
@@ -79,6 +80,7 @@ pipeline:
       - dataset_splitter
     train:
       - yolo_train
+      - position_validation
       - yolo_evaluation
       - generate_report
     inference:
@@ -89,9 +91,11 @@ pipeline:
       - image_augmentation
       - dataset_splitter
       - yolo_train
+      - position_validation
       - yolo_evaluation
       - generate_report
       - batch_inference
+      - qc_summary
   tasks:
   - dependencies: []
     enabled: true
@@ -124,6 +128,10 @@ pipeline:
   - dependencies:
     - yolo_train
     enabled: true
+    name: position_validation
+  - dependencies:
+    - yolo_train
+    enabled: true
     name: yolo_evaluation
   - dependencies:
     - yolo_evaluation
@@ -132,6 +140,12 @@ pipeline:
   - dependencies: []
     enabled: true
     name: batch_inference
+  - dependencies:
+    - color_verification
+    - position_validation
+    - batch_inference
+    enabled: true
+    name: qc_summary
 train_test_split:
   input:
     image_dir: ./data/augmented/images

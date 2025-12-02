@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 import yaml
+from picture_tool.utils.experiment import write_experiment
 
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
@@ -783,5 +784,21 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
         detection_cfg_path,
         generated_cfg,
         logger,
+    )
+    artifacts = {
+        "weights_best": (run_dir / "weights" / "best.pt"),
+        "weights_last": (run_dir / "weights" / "last.pt"),
+        "results_csv": (run_dir / "results.csv"),
+    }
+    if detection_cfg_path:
+        artifacts["detection_config"] = detection_cfg_path
+    if generated_cfg:
+        artifacts["position_config"] = generated_cfg
+    write_experiment(
+        run_type="train",
+        config=config,
+        run_dir=run_dir,
+        metrics={},
+        artifacts=artifacts,
     )
     return run_dir

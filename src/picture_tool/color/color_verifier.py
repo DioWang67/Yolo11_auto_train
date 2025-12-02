@@ -366,12 +366,30 @@ def _evaluate_image_improved(
         all_debug[color_name] = color_debug
     
     debug_info['color_details'] = all_debug
-    
-    # 生成遮罩 (簡化版)
+    # ????B?n (??????X???O)
     masks = {}
-    for color in color_ranges.keys():
-        masks[color] = np.ones(hsv_img.shape[:2], dtype=bool)
-    
+    sat_mask_full = hsv_img[:, :, 1] >= DEFAULT_SAT_THRESHOLD
+    for color_name, color_range in color_ranges.items():
+        hsv_cond = (
+            (hsv_img[:, :, 0] >= color_range.hsv_min[0])
+            & (hsv_img[:, :, 0] <= color_range.hsv_max[0])
+            & (hsv_img[:, :, 1] >= color_range.hsv_min[1])
+            & (hsv_img[:, :, 1] <= color_range.hsv_max[1])
+            & (hsv_img[:, :, 2] >= color_range.hsv_min[2])
+            & (hsv_img[:, :, 2] <= color_range.hsv_max[2])
+        )
+        lab_cond = (
+            (lab_img[:, :, 0] >= color_range.lab_min[0])
+            & (lab_img[:, :, 0] <= color_range.lab_max[0])
+            & (lab_img[:, :, 1] >= color_range.lab_min[1])
+            & (lab_img[:, :, 1] <= color_range.lab_max[1])
+            & (lab_img[:, :, 2] >= color_range.lab_min[2])
+            & (lab_img[:, :, 2] <= color_range.lab_max[2])
+        )
+        mask = hsv_cond & lab_cond & sat_mask_full
+        masks[color_name] = mask
+
+    return ratios, masks, debug_info
     return ratios, masks, debug_info
 
 
@@ -564,7 +582,9 @@ _COLOR_RULES: List[DecisionRule] = [
 
 
 def _confidence_threshold_for(color: str, default_threshold: float) -> float:
-    return COLOR_CONF_THRESHOLDS.get(color, default_threshold)
+    """Choose the stricter threshold between global and per-color defaults."""
+    per_color = COLOR_CONF_THRESHOLDS.get(color, default_threshold)
+    return max(per_color, float(default_threshold))
 
 
 # ============= 載入與驗證函數 =============
@@ -688,6 +708,9 @@ def verify_directory(
     if not input_dir.exists():
         raise FileNotFoundError(input_dir)
 
+    sat_threshold = float(kwargs.get("sat_threshold", DEFAULT_SAT_THRESHOLD))
+    edge_margin = float(kwargs.get("edge_margin", DEFAULT_EDGE_MARGIN))
+
     ranges = load_color_ranges(color_stats.resolve(), hsv_margin, lab_margin)
     expected_lookup = _load_expected_map(expected_map)
 
@@ -719,6 +742,13 @@ def verify_directory(
 
         hsv_img = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
         lab_img = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        if edge_margin > 0:
+            margin_px = int(min(hsv_img.shape[:2]) * edge_margin)
+            if margin_px > 0 and hsv_img.shape[0] > 2 * margin_px and hsv_img.shape[1] > 2 * margin_px:
+                hsv_img = hsv_img[margin_px:-margin_px, margin_px:-margin_px]
+                lab_img = lab_img[margin_px:-margin_px, margin_px:-margin_px]
+                image = image[margin_px:-margin_px, margin_px:-margin_px]
+        sat_mask = hsv_img[:, :, 1] >= sat_threshold
 
         # 使用改進的評估函數
         ratios, masks, debug_info = _evaluate_image_improved(
@@ -748,10 +778,23 @@ def verify_directory(
         else:
             counters["matched"] += 1
 
-        # 動態閾值調整
+        # Low-confidence check using saturation mask to avoid background inflation
+        mask = masks.get(predicted_color)
+        if mask is None:
+            mask = np.ones(hsv_img.shape[:2], dtype=bool)
+        coverage_pixels = np.logical_and(mask, sat_mask)
+        coverage_ratio = float(np.count_nonzero(coverage_pixels)) / coverage_pixels.size if coverage_pixels.size else 0.0
+        if coverage_ratio == 0.0:
+            confidence = 0.0
+        coverage_threshold = float(ratio_threshold)
         base_threshold = _confidence_threshold_for(predicted_color, ratio_threshold)
-
+        low_conf = False
+        if coverage_ratio < coverage_threshold:
+            low_conf = True
         if confidence < base_threshold:
+            low_conf = True
+
+        if low_conf:
             status = "low_confidence" if status == "match" else f"{status}_low_conf"
             counters["low_confidence"] += 1
 

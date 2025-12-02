@@ -1,3 +1,4 @@
+from picture_tool.pipeline.core import Pipeline, Task
 from ..main_pipeline import (
     setup_logging,
     load_config,
@@ -9,6 +10,8 @@ from ..main_pipeline import (
 )
 
 __all__ = [
+    "Pipeline",
+    "Task",
     "setup_logging",
     "load_config",
     "load_config_if_updated",
