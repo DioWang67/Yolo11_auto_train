@@ -938,9 +938,9 @@ def visualize_debug(
     debug_text = f"Prediction: {predicted_color} (confidence={confidence:.3f})\n"
     if debug_info:
         if debug_info.get("is_black_detected"):
-            debug_text += f"Black shortcut: True\n"
+            debug_text += "Black shortcut: True\n"
         if debug_info.get("is_yellow_detected"):
-            debug_text += f"Yellow shortcut: True\n"
+            debug_text += "Yellow shortcut: True\n"
         if debug_info.get("orange_red_separated"):
             debug_text += "Orange/Red disambiguation triggered\n"
         if debug_info.get("green_correction"):

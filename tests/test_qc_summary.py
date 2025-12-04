@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from picture_tool.report.qc_summary import generate_qc_summary
 

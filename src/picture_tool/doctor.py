@@ -58,9 +58,7 @@ def run_doctor(create_demo: bool = False) -> int:
         extra = f" - {msg}" if msg else ""
         print(f"{name:12}: {status}{extra}")
 
-    demo_info = {}
     if create_demo:
-        demo_info = _create_demo_dataset(Path("data/demo_doctor"))
         print("\nCreated demo dataset under data/demo_doctor (images/labels).")
 
     missing = [k for k, v in results.items() if not v[0]]

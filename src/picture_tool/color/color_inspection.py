@@ -12,10 +12,8 @@ summarised into HSV/LAB ranges per color category; outputs are stored in JSON.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
-import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path

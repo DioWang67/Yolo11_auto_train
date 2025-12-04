@@ -10,7 +10,7 @@ from typing import Iterable, Optional
 import yaml
 from picture_tool.anomaly import process_anomaly_detection
 from picture_tool.augment import ImageAugmentor, YoloDataAugmentor
-from picture_tool.color import color_inspection, color_verifier
+from picture_tool.color import color_verifier
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.format import convert_format
 from picture_tool.infer.batch_infer import run_batch_inference

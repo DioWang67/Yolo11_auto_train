@@ -12,7 +12,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -305,7 +304,6 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         self.config_path_edit = QLineEdit()
         self.config_path_edit.setPlaceholderText("config.yaml path...")
         
-        btn_layout = QHBoxLayout()
         browse_btn = QPushButton("Browse")
         browse_btn.setToolTip("選擇設定檔 (yaml)")
         browse_btn.setFixedWidth(80)
@@ -487,7 +485,8 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         if self._should_display_log(message):
             self._render_log_message(message)
         sb = self.log_text.verticalScrollBar()
-        if sb: sb.setValue(sb.maximum())
+        if sb:
+            sb.setValue(sb.maximum())
 
     def reset_task_statuses(self, tasks):
         self._rebuild_status_items(default_state="Pending...", only=tasks)
@@ -497,10 +496,15 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         if item:
             # 使用簡單的符號來表示狀態，讓列表更生動
             prefix = "⚪"
-            if "running" in message.lower(): prefix = "🔵"
-            elif "done" in message.lower(): prefix = "🟢"
-            elif "error" in message.lower(): prefix = "🔴"
-            
+            lower_msg = message.lower()
+
+            if "running" in lower_msg:
+                prefix = "🔵"
+            elif "done" in lower_msg:
+                prefix = "🟢"
+            elif "error" in lower_msg:
+                prefix = "🔴"
+
             item.setText(f"{prefix}  {TASK_OPTIONS_MAP.get(task, task)} \n      └─ {message}")
 
     def _validate_pipeline_configuration(self, tasks):
@@ -524,7 +528,8 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         return issues
 
     def _rebuild_status_items(self, default_state: str = "Idle", only=None) -> None:
-        if not hasattr(self, "status_list"): return
+        if not hasattr(self, "status_list"):
+            return
         self.status_list.clear()
         self.task_status_items.clear()
         
@@ -615,7 +620,8 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
             self._show_task_feedback(f"預設「{name}」沒有有效任務", color="#cca700")
 
     def _update_task_summary(self) -> None:
-        if not hasattr(self, "task_checkboxes"): return
+        if not hasattr(self, "task_checkboxes"): 
+            return
         selected_labels = [
             TASK_OPTIONS_MAP.get(key, key)
             for key, cb in self.task_checkboxes.items()
@@ -690,7 +696,8 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         return DEFAULT_PRESETS.copy()
 
     def _update_config_status(self) -> None:
-        if not hasattr(self, "config_status_label"): return
+        if not hasattr(self, "config_status_label"): 
+            return
         path_text = ""
         try:
             path_text = self.config_path_edit.text().strip()
