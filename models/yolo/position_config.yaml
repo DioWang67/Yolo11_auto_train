@@ -1,0 +1,22 @@
+﻿# Sample position configuration for YOLO position validation
+# Customize per product/area using imgsz-aligned coordinates.
+PCBA1:
+  A:
+    enabled: true
+    mode: bbox
+    tolerance: 2.0
+    expected_boxes:
+      J5-1: {x1: 400, y1: 200, x2: 540, y2: 340}
+
+# Cable1 / Area A production settings (imgsz=640)
+Cable1:
+  A:
+    enabled: true
+    mode: bbox
+    tolerance: 2.0
+    expected_boxes:
+      C22B: {x1: 350, y1: 210, x2: 390, y2: 310}
+      J5-1: {x1: 400, y1: 200, x2: 540, y2: 340}
+      J5-2: {x1: 80,  y1: 250, x2: 180, y2: 380}
+      J6:   {x1: 200, y1: 250, x2: 320, y2: 380}
+      J7:   {x1: 430, y1: 270, x2: 580, y2: 400}

@@ -1,0 +1,62 @@
+pipeline:
+  log_file: logs/demo_doctor.log
+  tasks:
+    - name: dataset_splitter
+      enabled: true
+      dependencies: []
+    - name: yolo_train
+      enabled: true
+      dependencies:
+        - dataset_splitter
+    - name: yolo_evaluation
+      enabled: true
+      dependencies:
+        - yolo_train
+    - name: qc_summary
+      enabled: true
+      dependencies:
+        - yolo_evaluation
+
+train_test_split:
+  input:
+    image_dir: ./data/demo_doctor/images
+    label_dir: ./data/demo_doctor/labels
+  input_formats: [".jpg", ".png"]
+  output:
+    output_dir: ./data/demo_doctor/split
+  split_ratios:
+    train: 0.7
+    val: 0.3
+    test: 0.0
+  stratified: false
+
+yolo_training:
+  dataset_dir: ./data/demo_doctor/split
+  class_names: ["demo_object"]
+  model: "yolo11n.pt"
+  epochs: 1
+  imgsz: 320
+  batch: 4
+  device: "cpu"
+  project: ./runs/detect
+  name: demo_doctor
+
+yolo_evaluation:
+  weights: null
+  imgsz: 320
+  device: cpu
+
+batch_inference:
+  input_dir: ./data/demo_doctor/split/val/images
+  output_dir: ./reports/demo_doctor/infer
+  weights: null
+  imgsz: 320
+  device: cpu
+
+color_verification:
+  enabled: false
+
+color_inspection:
+  enabled: false
+
+qc_summary: {}

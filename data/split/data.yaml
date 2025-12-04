@@ -1,0 +1,10 @@
+path: D:\Git\robotlearning\Yolo11_auto_train\data\split
+train: train/images
+val: val/images
+test: test/images
+names:
+- Black
+- Green
+- Orange
+- Red
+- Yellow

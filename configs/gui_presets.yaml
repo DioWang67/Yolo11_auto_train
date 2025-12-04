@@ -1,0 +1,14 @@
+presets:
+  YOLO訓練:
+    - yolo_augmentation
+    - dataset_splitter
+    - yolo_train
+    - yolo_evaluation
+    - generate_report
+    - dataset_lint
+    - aug_preview
+    - batch_inference
+
+  顏色檢測:
+    - color_inspection
+    - color_verification
