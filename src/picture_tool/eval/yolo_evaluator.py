@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional, List
 
 from picture_tool.utils.experiment import write_experiment
+from picture_tool.utils.experiment import _load_metrics_csv  # type: ignore
 
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
@@ -70,18 +71,23 @@ def evaluate_yolo(config: dict, logger: Optional[logging.Logger] = None) -> None
         f"Evaluating model: {weights_path} | data={data_yaml} imgsz={imgsz} device={device}"
     )
     model = YOLO(str(weights_path))
-    _ = model.val(data=str(data_yaml), imgsz=imgsz, device=device)
+    results = model.val(data=str(data_yaml), imgsz=imgsz, device=device)
     logger.info("Evaluation completed.")
     run_dir = weights_path.parent.parent
     artifacts = {
         "weights": weights_path,
         "data_yaml": data_yaml,
     }
+    metrics = {}
+    if hasattr(results, "results_file"):
+        metrics_path = Path(str(results.results_file))
+        metrics.update(_load_metrics_csv(metrics_path))
     write_experiment(
         run_type="eval",
         config=config,
         run_dir=run_dir,
-        metrics={},
+        metrics=metrics,
         artifacts=artifacts,
         extra={"imgsz": imgsz, "device": device},
+        results_csv=metrics_path if "metrics_path" in locals() else None,
     )

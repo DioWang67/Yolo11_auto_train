@@ -32,11 +32,12 @@ class PipelineControllerMixin:
     # ------------------------------------------------------------------
     def _default_config_path(self) -> Path:
         """Return the best-effort default configuration path."""
+        cwd = Path.cwd()
         candidates = [
+            cwd / "configs" / "default_pipeline.yaml",
+            cwd / "config.yaml",
             Path(__file__).resolve().parent.parent / "resources" / "default_pipeline.yaml",
             Path(__file__).resolve().parent.parent / "preset_config.yaml",
-            Path.cwd() / "configs" / "default_pipeline.yaml",
-            Path.cwd() / "config.yaml",
         ]
         for candidate in candidates:
             if candidate.exists():

@@ -41,6 +41,11 @@
   ```bash
   picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
   ```
+- Training export for inference config (detection_config.yaml); includes weights/conf/iou and, if position_validation is enabled, embeds position_config.
+  ```bash
+  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
+  # output: runs/detect/<name>/detection_config.yaml
+  ```
 - 批次推論（指定輸入/輸出、權重）：
   ```bash
   picture-tool-pipeline --config configs/default_pipeline.yaml \
@@ -106,11 +111,26 @@ picture-tool-color-verify \
   --color-stats reports/led_qc/color_stats.json \
   --expected-map reports/led_qc/expected.csv
 ```
-## ?s?W??O
-- ?i???/CLI ???G????????????u?@?B???j???k?w????A?????A??u CLI/GUI ?h?q?????C
-- ??l?p??G train/eval ?????|?b `reports/experiments/*.yaml|json` ?]?m???? config?B??A???B????|?C
-- `qc_summary` ?????`picture-tool-pipeline --tasks qc_summary`?y?O color verification/position validation/batch inference ????G??@?X?@??? JSON???i?C
-- `picture-tool-doctor --create-demo` ?i?_??????J??L?]ffmpeg/torch/onnxruntime?^?A????p demo ??????`data/demo_doctor`?^?C
+## 新增功能
+- 核心/CLI 拆分：任務執行集中在核心，CLI/GUI 只負責參數解析並自動處理依賴。
+- 實驗紀錄：train/eval 後在 `reports/experiments/*.yaml|json` 留存 config、環境、git commit、產物路徑與 metrics。
+- QC 彙總：`qc_summary` 任務（`picture-tool-pipeline --tasks qc_summary`）會把 color verification / position validation / batch inference 輸出整合成一份 JSON。
+- 健康檢查：`picture-tool-doctor --create-demo` 檢查 ffmpeg/torch/onnxruntime 等匯入並產生 `data/demo_doctor` 小型資料集，可配合 `configs/demo_doctor.yaml` 直接跑。
+- 任務查詢：`picture-tool-pipeline --list-tasks` 或 `--describe-task <name>` 可查看可用任務、依賴與描述。
+
+## 角色導向
+- **我只想完整跑一輪訓練（含 split/訓練/評估/報告）**  
+  `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full`  
+  （若只訓練：`--tasks yolo_train`；GPU/epochs 可用 `--device 0 --epochs 50` 覆蓋）
+- **我只想對現有推論圖做顏色 QC**  
+  `picture-tool-color-verify --input-dir data/led_qc/infer --color-stats reports/led_qc/color_stats.json --output-json reports/led_qc/verify.json --output-csv reports/led_qc/verify.csv`  
+  如需依檔名推 expected，加 `--expected-from-name`；有 mapping 就帶 `--expected-map <csv>`.
+- **我只想做位置驗證**  
+  確保已訓練好的權重在 `runs/detect/<name>/weights/best.pt`，config 設好 product/area：  
+  `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks position_validation`
+- **我想快速驗環境**  
+  `picture-tool-doctor --create-demo` 產生 demo 資料集並檢查匯入；再用 `configs/demo_doctor.yaml` 跑：  
+  `picture-tool-pipeline --config configs/demo_doctor.yaml --tasks full`
 
 
 ## 任務設定與預設
@@ -135,6 +155,7 @@ yolo_training:
     device: auto             # 選填
     tolerance_override: null # 選填，百分比
 ```
+> Note: class names must match the model; with `auto_generate: true`, training will infer expected_boxes from sample images, save to `runs/detect/<name>/auto_position_config.yaml`, and detection_config export will include that position config.
 2. 確認 `yolo_training.project/name` 指向已有訓練結果（預設 `runs/detect/train`）。
 3. 執行：GUI 勾選「Position Validation」，或 CLI `--tasks position_validation`。
 4. 輸出：`runs/detect/<name>/position_validation/position_validation.json`（或自訂 `output_dir`）。

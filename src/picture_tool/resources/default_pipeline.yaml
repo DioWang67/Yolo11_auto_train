@@ -210,7 +210,7 @@ yolo_training:
   # Initial weights (local file or model name)
   model: ./models/yolo11n.pt
   # Training hyperparameters
-  epochs: 20
+  epochs: 5
   imgsz: 640
   batch: 16
   device: cpu

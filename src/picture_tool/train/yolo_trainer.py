@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
 import yaml
 from picture_tool.utils.experiment import write_experiment
+from picture_tool.utils.experiment import _load_metrics_csv  # type: ignore
 
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
@@ -794,11 +795,13 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
         artifacts["detection_config"] = detection_cfg_path
     if generated_cfg:
         artifacts["position_config"] = generated_cfg
+    metrics = _load_metrics_csv(run_dir / "results.csv")
     write_experiment(
         run_type="train",
         config=config,
         run_dir=run_dir,
-        metrics={},
+        metrics=metrics,
         artifacts=artifacts,
+        results_csv=run_dir / "results.csv",
     )
     return run_dir

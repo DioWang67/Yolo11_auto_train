@@ -1,4 +1,4 @@
-weights: D:\Git\robotlearning\Yolo11_auto_train\runs\detect\train\weights\best.pt
+weights: D:\Git\robotlearning\Yolo11_auto_train\runs\detect\train12\weights\best.pt
 device: cpu
 conf_thres: 0.4
 iou_thres: 0.45
@@ -8,16 +8,17 @@ imgsz:
 timeout: 1
 enable_yolo: true
 output_dir: Result
-current_product: PCBA3
+current_product: Cable1
 current_area: A
 expected_items:
-  PCBA3:
+  Cable1:
     A:
-    - C22B
-    - J5-1
-    - J5-2
-    - J6
-    - J7
+    - Black
+    - Green
+    - Orange
+    - Red
+    - Yellow
+
 position_config:
   PCBA3:
     A:

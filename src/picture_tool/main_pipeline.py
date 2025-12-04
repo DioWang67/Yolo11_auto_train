@@ -22,6 +22,24 @@ from picture_tool.split import split_dataset
 from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.position import run_position_validation
 
+TASK_DESCRIPTIONS = {
+    "format_conversion": "Convert image formats in bulk.",
+    "anomaly_detection": "Run anomaly detection on reference/test folders.",
+    "yolo_augmentation": "YOLO label-aware augmentation.",
+    "image_augmentation": "Image-only augmentation.",
+    "dataset_splitter": "Split dataset into train/val/test.",
+    "dataset_lint": "Dataset quality linting.",
+    "aug_preview": "Preview augmented samples.",
+    "yolo_train": "Train YOLO model.",
+    "yolo_evaluation": "Evaluate YOLO model.",
+    "generate_report": "Aggregate training/eval report.",
+    "batch_inference": "Batch inference over a folder.",
+    "color_inspection": "Collect SAM color templates.",
+    "color_verification": "Verify colors against templates.",
+    "position_validation": "Offline position validation.",
+    "qc_summary": "Summarise QC outputs into one report.",
+}
+
 
 _DEFAULT_CONFIG_RESOURCE = "default_pipeline.yaml"
 
@@ -92,6 +110,61 @@ def _mtime_latest(paths: Iterable[Path]) -> float:
 
 def _exists_and_nonempty(p: Path) -> bool:
     return p.exists() and any(p.iterdir())
+
+
+def _detect_existing_weights(
+    config: dict, prefer: str | None = None
+) -> tuple[Optional[Path], Optional[Path]]:
+    """
+    Locate an existing trained weight file and its run directory (if available).
+
+    Order of precedence:
+    1. Explicit override on preferred section (position_validation or evaluation).
+    2. Explicit override on the other section.
+    3. Latest run under project/name* containing best/last.pt.
+    """
+    ycfg = config.get("yolo_training", {}) or {}
+    pv_cfg = ycfg.get("position_validation", {}) or {}
+    ecfg = config.get("yolo_evaluation", {}) or {}
+    project = Path(str(ycfg.get("project", "./runs/detect")))
+    name_prefix = str(ycfg.get("name", "train"))
+
+    def _candidate_path(path_val: Optional[str | Path]) -> Optional[tuple[Path, Path]]:
+        if not path_val:
+            return None
+        p = Path(str(path_val)).expanduser().resolve()
+        if not p.exists():
+            return None
+        run_dir = p.parent.parent if p.parent.name == "weights" else p.parent
+        return p, run_dir.resolve()
+
+    preferred_first = (
+        [pv_cfg.get("weights"), ecfg.get("weights")]
+        if prefer == "position"
+        else [ecfg.get("weights"), pv_cfg.get("weights")]
+    )
+    for candidate in preferred_first:
+        resolved = _candidate_path(candidate)
+        if resolved:
+            return resolved
+
+    if project.exists():
+        runs = [
+            p
+            for p in project.iterdir()
+            if p.is_dir() and p.name.startswith(name_prefix)
+        ]
+        candidates: list[tuple[float, Path, Path]] = []
+        for run in runs:
+            for fname in ("best.pt", "last.pt"):
+                w = run / "weights" / fname
+                if w.exists():
+                    candidates.append((w.stat().st_mtime, w.resolve(), run.resolve()))
+        if candidates:
+            _, w_path, run_dir = max(candidates, key=lambda entry: entry[0])
+            return w_path, run_dir
+
+    return None, None
 
 
 def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
@@ -221,6 +294,7 @@ def validate_dependencies(tasks, config, logger):
     task_entries = pipeline_section.setdefault("tasks", [])
     task_dict = {t["name"]: t for t in task_entries}
     known_sections = set(config.keys())
+    missing_weights: set[str] = set()
 
     def _ensure_task(task_name: str) -> bool:
         if task_name in task_dict:
@@ -259,6 +333,33 @@ def validate_dependencies(tasks, config, logger):
             continue
         dependencies = task_dict[task].get("dependencies", [])
         for dep in dependencies:
+            if (
+                dep == "yolo_train"
+                and task in {"yolo_evaluation", "position_validation"}
+                and dep not in selected_tasks
+                and dep not in required_tasks
+            ):
+                prefer = "position" if task == "position_validation" else None
+                weights_path, run_dir = _detect_existing_weights(config, prefer=prefer)
+                if weights_path:
+                    logger.info(
+                        "Task %s has existing weights at %s (run_dir=%s); skipping dependency %s.",
+                        task,
+                        weights_path,
+                        run_dir,
+                        dep,
+                    )
+                    continue
+                missing_weights.add(task)
+                logger.warning(
+                    "Task %s requires trained weights but none were found under %s (name prefix '%s'). "
+                    "Provide explicit weights or run training manually; dependency %s will not be auto-added.",
+                    task,
+                    Path(str((config.get("yolo_training", {}) or {}).get("project", "./runs/detect"))),
+                    str((config.get("yolo_training", {}) or {}).get("name", "train")),
+                    dep,
+                )
+                continue
             if dep not in selected_tasks and dep not in required_tasks:
                 logger.info(f"Task {task} depends on {dep}; adding dependency.")
                 required_tasks.append(dep)
@@ -271,6 +372,14 @@ def validate_dependencies(tasks, config, logger):
                 final_tasks.append(dep)
         if task not in final_tasks:
             final_tasks.append(task)
+
+    if missing_weights:
+        task_list = ", ".join(sorted(missing_weights))
+        raise FileNotFoundError(
+            f"No existing YOLO weights detected for: {task_list}. "
+            "Set yolo_evaluation.weights or yolo_training.position_validation.weights, "
+            "or run yolo_train manually."
+        )
 
     return final_tasks
 
@@ -350,6 +459,19 @@ def run_yolo_train(config, args):
 
 
 def run_yolo_evaluation(config, args):
+    weights_path, run_dir = _detect_existing_weights(config, prefer=None)
+    if weights_path:
+        ecfg = config.setdefault("yolo_evaluation", {})
+        ecfg["weights"] = str(weights_path)
+        logging.getLogger(__name__).info(
+            "Using existing weights for evaluation: %s (run_dir=%s)",
+            weights_path,
+            run_dir,
+        )
+    else:
+        logging.getLogger(__name__).warning(
+            "No existing weights detected before evaluation; will rely on default resolution."
+        )
     evaluate_yolo(config)
 
 
@@ -374,11 +496,28 @@ def run_position_validation_task(config, args):
     ycfg = config.get("yolo_training", {}) if isinstance(config, dict) else {}
     run_root = Path(str(ycfg.get("project", "./runs/detect")))
     run_name = str(ycfg.get("name", "train"))
-    run_dir = run_root / run_name
+    default_run_dir = run_root / run_name
+    weights_path, detected_run_dir = _detect_existing_weights(config, prefer="position")
+    run_dir = detected_run_dir or default_run_dir
+
+    if weights_path:
+        pv_cfg = ycfg.get("position_validation", {}) or {}
+        pv_cfg["weights"] = str(weights_path)
+        ycfg["position_validation"] = pv_cfg
+        config["yolo_training"] = ycfg
+        logging.getLogger(__name__).info(
+            "Using existing weights for position validation: %s (run_dir=%s)",
+            weights_path,
+            run_dir,
+        )
+
     if not run_dir.exists():
         raise FileNotFoundError(
-            f"Run directory not found for position validation: {run_dir}"
+            "No trained run found for position_validation. "
+            f"Checked {run_dir} (project={run_root}, name prefix={run_name}). "
+            "Provide yolo_training.position_validation.weights or run yolo_train manually."
         )
+
     return run_position_validation(config, run_dir, logger=logging.getLogger(__name__))
 
 def _section_enabled(section: Optional[dict]) -> bool:
@@ -554,7 +693,7 @@ def build_task_registry(config: dict) -> dict[str, Task]:
             run=handler,
             dependencies=deps_map.get(name, []),
             skip_fn=lambda cfg, a, n=name: _should_skip(n, cfg, a),
-            description="",
+            description=TASK_DESCRIPTIONS.get(name, ""),
         )
     return registry
 
@@ -604,6 +743,16 @@ def main():
         help="Interactively select tasks before running.",
     )
     parser.add_argument(
+        "--list-tasks",
+        action="store_true",
+        help="List available tasks and exit.",
+    )
+    parser.add_argument(
+        "--describe-task",
+        type=str,
+        help="Show details for a specific task and exit.",
+    )
+    parser.add_argument(
         "--input-format",
         type=str,
         help="Override the expected input format (e.g. .bmp).",
@@ -644,6 +793,24 @@ def main():
     args = parser.parse_args()
     config = load_config(args.config)
     logger = setup_logging(config["pipeline"]["log_file"])
+    registry = build_task_registry(config)
+
+    if args.list_tasks:
+        for task_name, task in registry.items():
+            deps = ",".join(task.dependencies) if task.dependencies else "-"
+            enabled = next((t.get("enabled", True) for t in config["pipeline"]["tasks"] if t["name"] == task_name), True)
+            desc = task.description or ""
+            print(f"{task_name:20} deps=[{deps}] enabled={enabled} {desc}")
+        return
+    if args.describe_task:
+        task = registry.get(args.describe_task)
+        if not task:
+            print(f"Unknown task: {args.describe_task}")
+            return
+        deps = ", ".join(task.dependencies) if task.dependencies else "None"
+        enabled = next((t.get("enabled", True) for t in config["pipeline"]["tasks"] if t["name"] == task.name), True)
+        print(f"Task: {task.name}\nEnabled: {enabled}\nDependencies: {deps}\nDescription: {task.description or 'N/A'}")
+        return
 
     if args.interactive:
         tasks = interactive_task_selection(config)
