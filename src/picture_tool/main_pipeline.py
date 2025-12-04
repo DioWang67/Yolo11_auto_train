@@ -5,7 +5,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 import yaml
 from picture_tool.anomaly import process_anomaly_detection
@@ -521,7 +521,9 @@ def run_position_validation_task(config, args):
     return run_position_validation(config, run_dir, logger=logging.getLogger(__name__))
 
 def _section_enabled(section: Optional[dict]) -> bool:
-    return bool(section) and section.get("enabled", True)
+    if section is None:
+        return False
+    return section.get("enabled", True)
 
 
 def _namespace(section: Optional[dict], **base):
@@ -684,6 +686,13 @@ def _config_dependencies(config: dict) -> dict[str, list[str]]:
     return deps
 
 
+def _make_skipper(name: str) -> Callable[[dict, object], Optional[str]]:
+    def _skip(cfg: dict, args: object) -> Optional[str]:
+        return _should_skip(name, cfg, args)
+
+    return _skip
+
+
 def build_task_registry(config: dict) -> dict[str, Task]:
     deps_map = _config_dependencies(config)
     registry: dict[str, Task] = {}
@@ -692,7 +701,7 @@ def build_task_registry(config: dict) -> dict[str, Task]:
             name=name,
             run=handler,
             dependencies=deps_map.get(name, []),
-            skip_fn=lambda cfg, a, n=name: _should_skip(n, cfg, a),
+            skip_fn=_make_skipper(name),
             description=TASK_DESCRIPTIONS.get(name, ""),
         )
     return registry

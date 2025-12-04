@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -93,10 +93,10 @@ class ColorDecision:
     confidence: float
     status: str
     ratios: Dict[str, float]
-    debug_info: Dict[str, object] = None
+    debug_info: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, object]:
-        result = {
+        result: Dict[str, object] = {
             "image": str(self.image),
             "predicted_color": self.predicted_color,
             "expected_color": self.expected_color,
@@ -113,7 +113,7 @@ class ColorDecision:
 @dataclass
 class DecisionContext:
     ratios: Dict[str, float]
-    debug_info: Dict[str, object]
+    debug_info: Dict[str, Any]
     hsv_img: np.ndarray
     lab_img: np.ndarray
 
@@ -237,13 +237,13 @@ def separate_orange_red_improved(
     lab_vals: np.ndarray,
     orange_score: float,
     red_score: float
-) -> Tuple[str, float, Dict]:
+) -> Tuple[str, float, Dict[str, Any]]:
     """改進的 Orange vs Red 分離"""
     if len(hsv_vals) == 0:
         return ("Red" if red_score >= orange_score else "Orange", 
                 max(red_score, orange_score), {})
     
-    debug = {}
+    debug: Dict[str, object] = {}
     hue_vals = hsv_vals[:, 0]
     
     # 色相分布
@@ -306,9 +306,9 @@ def _evaluate_image_improved(
     hsv_img: np.ndarray,
     lab_img: np.ndarray,
     color_ranges: Dict[str, ColorRange],
-) -> Tuple[Dict[str, float], Dict[str, np.ndarray], Dict[str, object]]:
+) -> Tuple[Dict[str, float], Dict[str, np.ndarray], Dict[str, Any]]:
     """整合改進邏輯的圖片評估函數"""
-    debug_info = {}
+    debug_info: Dict[str, Any] = {}
     h, w = hsv_img.shape[:2]
     
     # 快速檢查黑色
@@ -490,7 +490,7 @@ def _rule_black(
     context: DecisionContext,
 ) -> Optional[Tuple[str, float]]:
     if context.debug_info.get("is_black_detected") and "Black" in context.ratios:
-        new_conf = context.debug_info.get("black_confidence", confidence)
+        new_conf = float(context.debug_info.get("black_confidence", confidence))
         return "Black", new_conf
     return None
 
@@ -501,7 +501,7 @@ def _rule_yellow(
     context: DecisionContext,
 ) -> Optional[Tuple[str, float]]:
     if context.debug_info.get("is_yellow_detected") and "Yellow" in context.ratios:
-        new_conf = context.debug_info.get("yellow_confidence", confidence)
+        new_conf = float(context.debug_info.get("yellow_confidence", confidence))
         return "Yellow", new_conf
     return None
 
@@ -879,7 +879,7 @@ def visualize_debug(
     ratios: Dict[str, float],
     mask: np.ndarray,
     output_path: Path,
-    debug_info: Dict[str, object] = None,
+    debug_info: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -950,7 +950,7 @@ def visualize_debug(
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
     fig.suptitle(f"Color decision: {predicted_color}", fontsize=14, fontweight='bold')
-    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
+    fig.tight_layout(rect=(0, 0.05, 1, 0.96))
     fig.savefig(str(output_path), dpi=150, bbox_inches='tight')
     plt.close(fig)
 

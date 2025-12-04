@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 
 @dataclass
@@ -10,9 +10,9 @@ class Task:
     """A unit of work in the picture-tool pipeline."""
 
     name: str
-    run: Callable[[dict, object], object]
+    run: Callable[[dict, Any], object]
     dependencies: List[str] = field(default_factory=list)
-    skip_fn: Optional[Callable[[dict, object], Optional[str]]] = None
+    skip_fn: Optional[Callable[[dict, Any], Optional[str]]] = None
     description: str = ""
 
 
@@ -82,7 +82,7 @@ class Pipeline:
         self,
         requested: List[str],
         config: dict,
-        args: object,
+        args: Any,
         before_task: Optional[Callable[["Task", dict], dict]] = None,
     ) -> None:
         """Resolve dependencies, topo-sort, and execute tasks with skip logic."""
@@ -97,7 +97,7 @@ class Pipeline:
                     config = before_task(task, config)
                 except Exception as exc:  # pragma: no cover - defensive
                     self.logger.warning(f"Pre-task hook for {task.name} failed: {exc}")
-            if getattr(args, "stop_event", None) and getattr(args.stop_event, "is_set", lambda: False)():
+            if hasattr(args, "stop_event") and getattr(args.stop_event, "is_set", lambda: False)():
                 self.logger.info("Stop requested; aborting remaining tasks.")
                 break
             skip_reason: Optional[str] = None

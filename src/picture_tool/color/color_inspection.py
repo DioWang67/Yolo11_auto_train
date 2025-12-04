@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, cast
 
 import cv2
 import numpy as np
@@ -569,10 +569,12 @@ def compute_hsv_lab_stats(
     lab_mean, lab_min, lab_max = _compute_channel_stats(lab, mask)
     mask_bool = mask > 0
     coverage = float(np.count_nonzero(mask_bool)) / max(mask.size, 1)
-    hsv_p10 = np.percentile(hsv[mask_bool], 10, axis=0)
-    hsv_p90 = np.percentile(hsv[mask_bool], 90, axis=0)
-    lab_p10 = np.percentile(lab[mask_bool], 10, axis=0)
-    lab_p90 = np.percentile(lab[mask_bool], 90, axis=0)
+    masked_hsv = hsv[mask_bool].astype(np.float64)
+    masked_lab = lab[mask_bool].astype(np.float64)
+    hsv_p10 = np.percentile(masked_hsv, 10, axis=0)
+    hsv_p90 = np.percentile(masked_hsv, 90, axis=0)
+    lab_p10 = np.percentile(masked_lab, 10, axis=0)
+    lab_p90 = np.percentile(masked_lab, 90, axis=0)
     return {
         "hsv_mean": hsv_mean.tolist(),
         "hsv_min": hsv_min.tolist(),
@@ -682,7 +684,9 @@ class ImageCanvas(QtWidgets.QLabel):
             QtCore.Qt.TransformationMode.SmoothTransformation,
         )
         self.setPixmap(QtGui.QPixmap.fromImage(scaled))
-        self.setFixedSize(self.pixmap().size())
+        pixmap = self.pixmap()
+        if pixmap is not None:
+            self.setFixedSize(pixmap.size())
 
     def set_scale_factor(self, factor: float) -> None:
         factor = max(self._min_scale, min(self._max_scale, factor))
@@ -720,20 +724,22 @@ class ImageCanvas(QtWidgets.QLabel):
             int(round(bottom_right.y())),
         )
 
-    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+    def mousePressEvent(self, event: Optional[QtGui.QMouseEvent]) -> None:
+        if event is None:
+            return
         if event.button() == QtCore.Qt.MouseButton.LeftButton and self.pixmap():
             self._drawing = True
             self._box_start = event.pos()
             self._current_box = QtCore.QRect(self._box_start, self._box_start)
             self.update()
 
-    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if self._drawing:
+    def mouseMoveEvent(self, event: Optional[QtGui.QMouseEvent]) -> None:
+        if self._drawing and event is not None:
             self._current_box = QtCore.QRect(self._box_start, event.pos()).normalized()
             self.update()
 
-    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        if not self.pixmap():
+    def mouseReleaseEvent(self, event: Optional[QtGui.QMouseEvent]) -> None:
+        if not self.pixmap() or event is None:
             return
         if self._drawing and event.button() == QtCore.Qt.MouseButton.LeftButton:
             rect = QtCore.QRect(self._box_start, event.pos()).normalized()
@@ -749,7 +755,9 @@ class ImageCanvas(QtWidgets.QLabel):
             img_point = self._display_to_image(event.pos())
             self.pointPlaced.emit(img_point, 0)
 
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+    def paintEvent(self, event: Optional[QtGui.QPaintEvent]) -> None:
+        if event is None:
+            return
         super().paintEvent(event)
         if self.pixmap() is None:
             return
@@ -952,7 +960,14 @@ class SamSelectionWindow(QtWidgets.QWidget):
             return None
         if abs(self.sam_scale - 1.0) < 1e-6:
             return self.current_box
-        return tuple(int(round(coord * self.sam_scale)) for coord in self.current_box)
+        x0, y0, x1, y1 = self.current_box
+        scale = self.sam_scale
+        return (
+            int(round(x0 * scale)),
+            int(round(y0 * scale)),
+            int(round(x1 * scale)),
+            int(round(y1 * scale)),
+        )
 
     def _scaled_points_for_sam(self) -> Optional[List[Tuple[float, float]]]:
         if not self.point_coords:
@@ -999,6 +1014,8 @@ class SamSelectionWindow(QtWidgets.QWidget):
             return
         color = self.color_combo.currentText() or "Unknown"
         image_path = self.image_paths[self.current_index]
+        coverage_val = stats.get("coverage", 0.0)
+        coverage = float(coverage_val) if isinstance(coverage_val, (int, float)) else 0.0
         self.recorder.record(
             image_path,
             color,
@@ -1012,7 +1029,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
             stats["hsv_p90"],
             stats["lab_p10"],
             stats["lab_p90"],
-            float(stats["coverage"]),
+            coverage,
         )
         self.info_label.setText(f"Saved selection for {color}. Moving to next image.")
         self._next_image()
@@ -1161,8 +1178,10 @@ class SamSelectionWindow(QtWidgets.QWidget):
         except ValueError:
             self.stats_label.setText("HSV/LAB stats: empty mask")
             return
-        hsv_mean = stats.get("hsv_mean", [float("nan")] * 3)
-        lab_mean = stats.get("lab_mean", [float("nan")] * 3)
+        hsv_mean_val = stats.get("hsv_mean", [float("nan")] * 3)
+        lab_mean_val = stats.get("lab_mean", [float("nan")] * 3)
+        hsv_mean = hsv_mean_val if isinstance(hsv_mean_val, list) else [float("nan")] * 3
+        lab_mean = lab_mean_val if isinstance(lab_mean_val, list) else [float("nan")] * 3
         hsv_text = f"H= {hsv_mean[0]:.1f}, S= {hsv_mean[1]:.1f}, V= {hsv_mean[2]:.1f}"
         lab_text = f"L= {lab_mean[0]:.1f}, a= {lab_mean[1]:.1f}, b= {lab_mean[2]:.1f}"
         self.stats_label.setText(f"HSV/LAB stats: {hsv_text} | {lab_text}")
@@ -1222,6 +1241,7 @@ def run_gui_session(cfg: SessionConfig) -> None:
     window = SamSelectionWindow(cfg)
     window.show()
     if owns_app:
+        assert app is not None
         app.exec_()
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, TYPE_CHECKING
 
 import yaml
 from PyQt5 import QtCore, QtGui
@@ -31,15 +31,18 @@ from PyQt5.QtWidgets import (
 )
 
 # 模擬 Mixin 以防導入失敗
-try:
+if TYPE_CHECKING:
     from picture_tool.gui.pipeline_controller import PipelineControllerMixin
-except ImportError:
-    class PipelineControllerMixin:
-        def _init_pipeline_controller(self): self.config = {}
-        def load_default_config(self): pass
-        def load_config(self): pass
-        def start_pipeline(self): pass
-        def stop_pipeline(self): pass
+else:
+    try:
+        from picture_tool.gui.pipeline_controller import PipelineControllerMixin
+    except ImportError:
+        class PipelineControllerMixin:
+            def _init_pipeline_controller(self): self.config = {}
+            def load_default_config(self): pass
+            def load_config(self): pass
+            def start_pipeline(self): pass
+            def stop_pipeline(self): pass
 
 TASK_OPTIONS: List[tuple[str, str]] = [
     ("format_conversion", "Format Conversion"),
