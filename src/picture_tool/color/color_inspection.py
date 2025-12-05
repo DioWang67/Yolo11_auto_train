@@ -18,6 +18,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+import threading
 
 import cv2
 import numpy as np
@@ -605,6 +606,8 @@ class _SamInferenceTask(QtCore.QRunnable):
         point_coords: Optional[List[Tuple[float, float]]],
         point_labels: Optional[List[int]],
         callback,
+        progress_cb=None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
         super().__init__()
         self.request_id = request_id
@@ -614,9 +617,16 @@ class _SamInferenceTask(QtCore.QRunnable):
         self.point_coords = point_coords
         self.point_labels = point_labels
         self.callback = callback
+        self.progress_cb = progress_cb
+        self.cancel_event = cancel_event or threading.Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
 
     def run(self) -> None:  # pragma: no cover - background thread
         t0 = time.time()
+        if self.cancel_event.is_set():
+            return
         try:
             mask = self.predictor.predict(
                 self.sam_image,
@@ -625,8 +635,16 @@ class _SamInferenceTask(QtCore.QRunnable):
                 point_labels=self.point_labels,
             )
             inference_ms = (time.time() - t0) * 1000.0
+            if self.cancel_event.is_set():
+                return
+            if self.progress_cb:
+                self.progress_cb("done", inference_ms)
             self.callback(self.request_id, mask, inference_ms, None)
         except Exception as exc:
+            if self.cancel_event.is_set():
+                return
+            if self.progress_cb:
+                self.progress_cb("error", 0.0)
             self.callback(self.request_id, None, 0.0, exc)
 
 
@@ -793,6 +811,7 @@ class ImageCanvas(QtWidgets.QLabel):
 
 class SamSelectionWindow(QtWidgets.QWidget):
     samResultReady = QtCore.pyqtSignal(int, object, float, object)
+    samProgress = QtCore.pyqtSignal(str, float)
     """Main window orchestrating per-image SAM selections."""
 
     def __init__(self, cfg: SessionConfig) -> None:
@@ -812,6 +831,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
             Tuple[Optional[Tuple[int, int, int, int]], Optional[List[Tuple[float, float]]], Optional[List[int]]]
         ] = None
         self.samResultReady.connect(self._on_sam_result)
+        self.samProgress.connect(self._on_sam_progress)
         self.image_paths = sorted(
             [
                 p
@@ -1083,6 +1103,12 @@ class SamSelectionWindow(QtWidgets.QWidget):
             self.sam_status_label.setText("SAM: Queued")
             return
         self._queued_sam_args = None
+        if self._sam_pending and hasattr(self, "_active_sam_task"):
+            try:
+                self._active_sam_task.cancel()
+                self.sam_status_label.setText("SAM: Cancelling previous")
+            except Exception:
+                pass
         self._launch_sam_task(params)
 
     def _launch_sam_task(
@@ -1107,7 +1133,9 @@ class SamSelectionWindow(QtWidgets.QWidget):
             point_coords=scaled_points,
             point_labels=point_labels,
             callback=self.samResultReady.emit,
+            progress_cb=self.samProgress.emit,
         )
+        self._active_sam_task = task
         self._sam_pool.start(task)
 
     @QtCore.pyqtSlot(int, object, float, object)
@@ -1121,6 +1149,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
         if request_id != self._sam_request_id:
             return
         self._sam_pending = False
+        self._active_sam_task = None
         if error is not None or mask is None:
             if error is not None:
                 logging.exception("SAM prediction failed", exc_info=error)
@@ -1154,6 +1183,12 @@ class SamSelectionWindow(QtWidgets.QWidget):
             self.sam_status_label.setText("SAM: Running (queued)")
         else:
             self.sam_status_label.setText("SAM: Idle")
+
+    def _on_sam_progress(self, status: str, inference_ms: float) -> None:
+        if status == "done":
+            self.sam_status_label.setText(f"SAM: Done ({inference_ms:.0f} ms)")
+        elif status == "error":
+            self.sam_status_label.setText("SAM: Error")
 
     def _update_prompt_label(self) -> None:
         pos = sum(1 for lbl in self.point_labels if lbl == 1)

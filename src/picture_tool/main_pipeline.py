@@ -2,6 +2,7 @@
 import logging
 import subprocess
 import sys
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ from picture_tool.pipeline.core import Pipeline, Task
 from picture_tool.split import split_dataset
 from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.position import run_position_validation
+from picture_tool.config_validation import validate_config_schema
 
 TASK_DESCRIPTIONS = {
     "format_conversion": "Convert image formats in bulk.",
@@ -76,6 +78,13 @@ def load_config(config_path: str | Path = "config.yaml"):
         ) from exc
 
 
+@lru_cache(maxsize=4)
+def _load_config_snapshot(path: str, mtime: float) -> dict:
+    config_path = Path(path)
+    with config_path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or {}
+
+
 def load_config_if_updated(config_path, config, logger):
     """Reload the configuration if the on-disk file changed."""
     config_file = Path(config_path)
@@ -91,7 +100,7 @@ def load_config_if_updated(config_path, config, logger):
     if current_mtime > last_mtime:
         logger.info("Detected configuration change; reloading.")
         load_config_if_updated.last_mtime = current_mtime
-        return load_config(config_path)
+        return _load_config_snapshot(str(config_file.resolve()), current_mtime)
 
     return config
 
@@ -709,11 +718,13 @@ def build_task_registry(config: dict) -> dict[str, Task]:
 
 def run_pipeline(tasks, config, logger, args, stop_event=None):
     """Execute each task handler with dependency checks and skipping logic."""
+    validate_config_schema(config, logger=logger, strict=False)
     tasks = validate_dependencies(tasks, config, logger)
     setattr(args, "stop_event", stop_event)
 
     def _before_task(task_obj: Task, cfg: dict) -> dict:
         fresh_cfg = load_config_if_updated(args.config, cfg, logger)
+        fresh_cfg = validate_config_schema(fresh_cfg, logger=logger, strict=False)
         _apply_cli_overrides(fresh_cfg, args, logger)
         _auto_device(fresh_cfg, logger)
         return fresh_cfg

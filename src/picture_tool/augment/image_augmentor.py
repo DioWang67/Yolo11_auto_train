@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any, List, Optional
@@ -81,13 +81,11 @@ class ImageAugmentor:
                     "blur": {"kernel": (3, 5)},
                 },
             },
-            "processing": {"batch_size": 10, "num_workers": None},
+            "processing": {"batch_size": 10, "num_workers": None, "use_process_pool": False},
         }
 
-    def _create_augmentations(self) -> Any:
-        aug_config = self.config["augmentation"]
-        ops_config = aug_config["operations"]
-
+    @staticmethod
+    def _build_augmentations_from_ops(ops_config: dict[str, Any]) -> Any:
         aug_list = []
 
         if ops_config.get("flip"):
@@ -164,6 +162,11 @@ class ImageAugmentor:
 
         return A.Compose(aug_list)
 
+    def _create_augmentations(self) -> Any:
+        aug_config = self.config["augmentation"]
+        ops_config = aug_config["operations"]
+        return self._build_augmentations_from_ops(ops_config)
+
     def _process_single_image(self, img_file: str) -> bool:
         try:
             img_path = Path(self.config["input"]["image_dir"]) / img_file
@@ -223,17 +226,65 @@ class ImageAugmentor:
         else:
             num_workers = cpu_count()
 
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            results = list(
-                tqdm(
-                    executor.map(self._process_single_image, img_files),
-                    total=len(img_files),
-                    desc="處理進度",
-                    mininterval=0.2,
+        use_process_pool = bool(self.config["processing"].get("use_process_pool", False))
+
+        if use_process_pool:
+            job_args = [
+                (
+                    img_file,
+                    self.config["input"]["image_dir"],
+                    self.config["output"]["image_dir"],
+                    self.config["augmentation"],
                 )
-            )
+                for img_file in img_files
+            ]
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                results = list(
+                    tqdm(
+                        executor.map(_process_single_image_job, job_args),
+                        total=len(img_files),
+                        desc="處理進度",
+                        mininterval=0.2,
+                    )
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                results = list(
+                    tqdm(
+                        executor.map(self._process_single_image, img_files),
+                        total=len(img_files),
+                        desc="處理進度",
+                        mininterval=0.2,
+                    )
+                )
 
         elapsed_time = time.time() - start_time
         ok = sum(1 for r in results if r)
         fail = len(results) - ok
         self.logger.info(f"完成! 花費: {elapsed_time:.2f} 秒，成功 {ok}，失敗 {fail}")
+
+
+def _process_single_image_job(
+    args: tuple[str, str, str, dict[str, Any]]
+) -> bool:
+    img_file, input_dir, output_dir, aug_config = args
+    try:
+        img_path = Path(input_dir) / img_file
+        image = cv2.imread(str(img_path))
+        if image is None:
+            return False
+
+        augmentations = ImageAugmentor._build_augmentations_from_ops(
+            aug_config["operations"]
+        )
+        saved_any = False
+        for i in range(aug_config["num_images"]):
+            transformed = augmentations(image=image)
+            augmented_image = transformed["image"]
+            aug_img_filename = f"{Path(img_file).stem}_aug_{i + 1}.png"
+            aug_img_path = Path(output_dir) / aug_img_filename
+            cv2.imwrite(str(aug_img_path), augmented_image)
+            saved_any = True
+        return saved_any
+    except Exception:
+        return False

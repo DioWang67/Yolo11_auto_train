@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import (
     Any,
@@ -154,12 +155,8 @@ def _imgsz_value(imgsz: Any) -> int:
 def _letterbox_transform(
     bbox: Sequence[Number], orig_w: int, orig_h: int, imgsz: int
 ) -> BBox:
+    scale, pad_x, pad_y = _letterbox_params(orig_w, orig_h, imgsz)
     x1, y1, x2, y2 = [float(v) for v in bbox]
-    scale = min(imgsz / float(orig_w), imgsz / float(orig_h))
-    new_w = float(orig_w) * scale
-    new_h = float(orig_h) * scale
-    pad_x = (imgsz - new_w) / 2.0
-    pad_y = (imgsz - new_h) / 2.0
     lx1 = x1 * scale + pad_x
     ly1 = y1 * scale + pad_y
     lx2 = x2 * scale + pad_x
@@ -170,6 +167,16 @@ def _letterbox_transform(
         max(0.0, min(float(imgsz), lx2)),
         max(0.0, min(float(imgsz), ly2)),
     )
+
+
+@lru_cache(maxsize=128)
+def _letterbox_params(orig_w: int, orig_h: int, imgsz: int) -> Tuple[float, float, float]:
+    scale = min(imgsz / float(orig_w), imgsz / float(orig_h))
+    new_w = float(orig_w) * scale
+    new_h = float(orig_h) * scale
+    pad_x = (imgsz - new_w) / 2.0
+    pad_y = (imgsz - new_h) / 2.0
+    return scale, pad_x, pad_y
 
 
 def _resolve_class_name(names: Any, class_id: int) -> str:
