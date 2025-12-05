@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from tqdm import tqdm
+
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
@@ -54,7 +56,7 @@ def run_batch_inference(config: dict, logger: Optional[logging.Logger] = None) -
         writer.writerow(
             ["file", "class_id", "class_name", "conf", "x1", "y1", "x2", "y2"]
         )
-        for img_path in images:
+        for img_path in tqdm(images, desc="Batch inference", unit="img"):
             results = model(str(img_path), imgsz=imgsz, device=device, conf=conf)
             for res in results:
                 names = res.names
