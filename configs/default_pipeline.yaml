@@ -109,7 +109,6 @@ pipeline:
       enabled: true
       dependencies:
         - color_verification
-        - position_validation
         - batch_inference
 
 ###############################################################################
@@ -270,7 +269,7 @@ yolo_training:
   model: ./models/yolo11n.pt
 
   # Training hyperparameters
-  epochs: 20
+  epochs: 5
   imgsz: 640
   batch: 16
   device: cpu

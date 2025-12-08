@@ -67,33 +67,50 @@ class WorkerThread(QThread):
             config = self._resolve_config()
             args = self._build_args()
 
-            planned_tasks = pipeline.validate_dependencies(self.tasks, config, logger)
+            # Using build_task_registry to get Task objects
+            registry = pipeline.build_task_registry(config)
+            
+            # Using Pipeline core to resolve dependencies correctly
+            pipe_core = pipeline.Pipeline(registry, logger)
+            collected = pipe_core._collect(self.tasks)
+            # The original logic expected `validate_dependencies` to return a list, 
+            # but now we should trust Pipeline topological sort if possible.
+            # However, to maintain incremental signal emission, we iterate manually on the sorted tasks.
+            ordered_tasks = pipe_core._toposort(collected)
+            
+            planned_tasks = [t.name for t in ordered_tasks]
             total = max(len(planned_tasks), 1)
 
-            for index, task in enumerate(planned_tasks):
+            for index, task_obj in enumerate(ordered_tasks):
+                task_name = task_obj.name
                 if self._cancel_requested:
                     logger.info("Pipeline cancelled by user.")
                     break
 
-                self.task_started.emit(task)
+                self.task_started.emit(task_name)
+                
+                # Apply overrides before each task (mimicking Pipeline logic)
                 pipeline._apply_cli_overrides(config, args, logger)  # type: ignore[attr-defined]
                 pipeline._auto_device(config, logger)  # type: ignore[attr-defined]
-                skip_reason = pipeline._should_skip(  # type: ignore[attr-defined]
-                    task, config, args, logger
-                )
+                
+                skip_reason = None
+                if task_obj.skip_fn:
+                     try:
+                         skip_reason = task_obj.skip_fn(config, args)
+                     except Exception as exc:
+                         logger.warning(f"Skip check for {task_name} failed: {exc}")
+
                 if skip_reason:
-                    logger.info(f"Skipping {task}: {skip_reason}")
-                    self.task_completed.emit(task)
+                    logger.info(f"Skipping {task_name}: {skip_reason}")
+                    self.task_completed.emit(task_name)
                     self._emit_progress(index + 1, total)
                     continue
 
-                handler_fn = pipeline.TASK_HANDLERS.get(task)
-                if handler_fn is None:
-                    logger.warning(f"No handler registered for task {task}")
-                else:
-                    handler_fn(config, args)
-                    logger.info(f"Finished task {task}")
-                self.task_completed.emit(task)
+                logger.info(f"Running task: {task_name}")
+                task_obj.run(config, args)
+                logger.info(f"Finished task {task_name}")
+                
+                self.task_completed.emit(task_name)
                 self._emit_progress(index + 1, total)
 
             if not self._cancel_requested:

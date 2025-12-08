@@ -83,122 +83,303 @@ DEFAULT_PRESETS = {
 }
 
 # ------------------------------------------------------------------
-# 現代化樣式表 (含 Tab 和 Frame 優化)
+# 現代化樣式表 - 全面升級版
 # ------------------------------------------------------------------
 MODERN_STYLE = """
 QMainWindow {
-    background-color: #1e1e1e;
+    background-color: #0d1117;
 }
 QWidget {
-    font-family: "Segoe UI", sans-serif;
+    font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
     font-size: 10pt;
-    color: #cccccc;
+    color: #c9d1d9;
 }
+
 /* 左側側邊欄背景 */
 QWidget#SideBar {
-    background-color: #252526;
-    border-right: 1px solid #3e3e42;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+        stop:0 #161b22, stop:1 #0d1117);
+    border-right: 2px solid #30363d;
 }
+
 /* 群組標題 */
 QLabel.Header {
     font-weight: bold;
-    font-size: 11pt;
+    font-size: 12pt;
     color: #ffffff;
-    padding-bottom: 5px;
-    border-bottom: 2px solid #007acc;
-    margin-bottom: 10px;
-}
-/* 輸入框 */
-QLineEdit {
-    background-color: #3c3c3c;
-    border: 1px solid #3e3e42;
-    color: white;
-    padding: 5px;
-    border-radius: 3px;
-}
-/* 按鈕 */
-QPushButton {
-    background-color: #3c3c3c;
-    border: none;
-    color: white;
-    padding: 8px 15px;
-    border-radius: 3px;
-}
-QPushButton:hover {
-    background-color: #4e4e4e;
-}
-QPushButton#PrimaryBtn {
-    background-color: #007acc;
-    font-weight: bold;
-}
-QPushButton#PrimaryBtn:hover {
-    background-color: #0098ff;
-}
-QPushButton#DangerBtn {
-    background-color: #ce3838;
-}
-QPushButton#DangerBtn:hover {
-    background-color: #e84545;
-}
-/* 任務清單 */
-QListWidget {
-    background-color: #1e1e1e;
-    border: 1px solid #3e3e42;
-    border-radius: 4px;
-}
-QListWidget::item {
-    padding: 5px;
-}
-/* Tab 頁籤 */
-QTabWidget::pane {
-    border: 1px solid #3e3e42;
-    background: #1e1e1e;
-}
-QTabBar::tab {
-    background: #2d2d2d;
-    color: #999;
-    padding: 8px 20px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
-}
-QTabBar::tab:selected {
-    background: #1e1e1e;
-    color: #fff;
-    border-top: 2px solid #007acc;
+    padding: 8px 0px;
+    border-bottom: 2px solid;
+    border-image: linear-gradient(90deg, #58a6ff 0%, #1f6feb 100%) 1;
+    margin-bottom: 12px;
 }
 
-/* 下拉選單 (QComboBox) */
+/* 輸入框 */
+QLineEdit {
+    background-color: #161b22;
+    border: 2px solid #30363d;
+    color: #c9d1d9;
+    padding: 8px 12px;
+    border-radius: 6px;
+    selection-background-color: #1f6feb;
+}
+QLineEdit:focus {
+    border: 2px solid #58a6ff;
+    background-color: #0d1117;
+}
+QLineEdit:hover {
+    border-color: #484f58;
+}
+
+/* 按鈕基礎樣式 */
+QPushButton {
+    background-color: #21262d;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 500;
+    min-width: 60px;
+}
+QPushButton:hover {
+    background-color: #30363d;
+    border-color: #484f58;
+}
+QPushButton:pressed {
+    background-color: #161b22;
+}
+QPushButton:disabled {
+    background-color: #161b22;
+    color: #484f58;
+    border-color: #21262d;
+}
+
+/* 主要按鈕 (漸層效果) */
+QPushButton#PrimaryBtn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #1f6feb, stop:1 #58a6ff);
+    border: none;
+    color: #ffffff;
+    font-weight: 600;
+    padding: 12px 28px;
+    min-width: 100px;
+}
+QPushButton#PrimaryBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #388bfd, stop:1 #79c0ff);
+}
+QPushButton#PrimaryBtn:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #0969da, stop:1 #1f6feb);
+}
+QPushButton#PrimaryBtn:disabled {
+    background: #21262d;
+    color: #484f58;
+}
+
+/* 危險按鈕 */
+QPushButton#DangerBtn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #da3633, stop:1 #f85149);
+    border: none;
+    color: #ffffff;
+    font-weight: 600;
+    padding: 10px 20px;
+    min-width: 80px;
+}
+QPushButton#DangerBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #ff6b6b, stop:1 #ff8787);
+}
+QPushButton#DangerBtn:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #b62324, stop:1 #da3633);
+}
+
+/* 成功按鈕 */
+QPushButton#SuccessBtn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #238636, stop:1 #2ea043);
+    border: none;
+    color: #ffffff;
+    font-weight: 600;
+    padding: 10px 20px;
+    min-width: 80px;
+}
+QPushButton#SuccessBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #2ea043, stop:1 #3fb950);
+}
+
+/* 任務清單 */
+QListWidget {
+    background-color: #0d1117;
+    border: 2px solid #30363d;
+    border-radius: 8px;
+    padding: 4px;
+}
+QListWidget::item {
+    padding: 8px;
+    border-radius: 6px;
+    margin: 2px 0px;
+}
+QListWidget::item:hover {
+    background-color: #161b22;
+}
+QListWidget::item:selected {
+    background-color: #1f6feb;
+    color: #ffffff;
+}
+
+/* Tab 頁籤 */
+QTabWidget::pane {
+    border: 2px solid #30363d;
+    border-radius: 8px;
+    background: #0d1117;
+    top: -2px;
+}
+QTabBar::tab {
+    background: #161b22;
+    color: #8b949e;
+    padding: 10px 24px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    margin-right: 4px;
+    font-weight: 500;
+}
+QTabBar::tab:selected {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+        stop:0 #0d1117, stop:1 #161b22);
+    color: #58a6ff;
+    border-top: 3px solid #58a6ff;
+}
+QTabBar::tab:hover:!selected {
+    background: #21262d;
+    color: #c9d1d9;
+}
+
+/* 下拉選單 */
 QComboBox {
-    background-color: #1e1e1e;
-    border: 1px solid #3e3e42;
-    color: #e6e6e6;
-    padding: 6px 8px;
-    border-radius: 3px;
+    background-color: #161b22;
+    border: 2px solid #30363d;
+    color: #c9d1d9;
+    padding: 8px 12px;
+    border-radius: 6px;
+}
+QComboBox:hover {
+    border-color: #484f58;
+}
+QComboBox:focus {
+    border-color: #58a6ff;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 30px;
+}
+QComboBox::down-arrow {
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #8b949e;
+    margin-right: 8px;
 }
 QComboBox QAbstractItemView {
-    background-color: #252526;
-    color: #e6e6e6;
-    selection-background-color: #007acc;
+    background-color: #161b22;
+    border: 2px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    selection-background-color: #1f6feb;
     selection-color: #ffffff;
+    padding: 4px;
 }
+
 /* 進度條 */
 QProgressBar {
     border: none;
-    background-color: #2d2d2d;
-    height: 6px;
+    background-color: #161b22;
+    height: 8px;
     text-align: center;
-    border-radius: 3px;
+    border-radius: 4px;
 }
 QProgressBar::chunk {
-    background-color: #007acc;
-    border-radius: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+        stop:0 #1f6feb, stop:0.5 #58a6ff, stop:1 #79c0ff);
+    border-radius: 4px;
 }
 
-/* 文本區塊 (Logs / Config preview) */
+/* 文本區塊 */
 QTextEdit {
-    background-color: #1e1e1e;
-    border: 1px solid #3e3e42;
-    color: #e6e6e6;
+    background-color: #0d1117;
+    border: 2px solid #30363d;
+    border-radius: 8px;
+    color: #c9d1d9;
+    padding: 8px;
+    selection-background-color: #1f6feb;
+}
+
+/* CheckBox */
+QCheckBox {
+    spacing: 6px;
+    color: #c9d1d9;
+    padding: 4px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 2px solid #30363d;
+    background-color: #161b22;
+}
+QCheckBox::indicator:hover {
+    border-color: #484f58;
+}
+QCheckBox::indicator:checked {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+        stop:0 #1f6feb, stop:1 #58a6ff);
+    border-color: #1f6feb;
+}
+QCheckBox::indicator:checked:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
+        stop:0 #388bfd, stop:1 #79c0ff);
+}
+
+/* 分隔線 */
+QFrame[frameShape="4"] { /* HLine */
+    background-color: #30363d;
+    max-height: 2px;
+}
+
+/* 滾動條 */
+QScrollBar:vertical {
+    background: #0d1117;
+    width: 12px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: #30363d;
+    border-radius: 6px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #484f58;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar:horizontal {
+    background: #0d1117;
+    height: 12px;
+    border-radius: 6px;
+}
+QScrollBar::handle:horizontal {
+    background: #30363d;
+    border-radius: 6px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #484f58;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
 }
 """
 
@@ -237,7 +418,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         # --- 左側面板 (Control Panel) ---
         self.side_bar = QWidget()
         self.side_bar.setObjectName("SideBar") # 用於 CSS 定位
-        self.side_bar.setFixedWidth(350) # 固定寬度，像工具列
+        self.side_bar.setFixedWidth(420) # 增加寬度以容納文字
         
         side_layout = QVBoxLayout(self.side_bar)
         side_layout.setContentsMargins(20, 20, 20, 20)
@@ -307,15 +488,14 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         self.config_path_edit = QLineEdit()
         self.config_path_edit.setPlaceholderText("config.yaml path...")
         
-        browse_btn = QPushButton("Browse")
+        browse_btn = QPushButton("📁 瀏覽")
         browse_btn.setToolTip("選擇設定檔 (yaml)")
-        browse_btn.setFixedWidth(80)
         browse_btn.clicked.connect(self.browse_config_file)
 
-        reload_btn = QPushButton("Reload")
+        reload_btn = QPushButton("🔄 重載")
         reload_btn.clicked.connect(self.load_config)
         
-        default_btn = QPushButton("Reset")
+        default_btn = QPushButton("↺ 重設")
         default_btn.clicked.connect(self.load_default_config)
 
         row1 = QHBoxLayout()
@@ -342,14 +522,12 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         layout.setSpacing(10)
 
         control_row = QHBoxLayout()
-        select_all_btn = QPushButton("全選")
+        select_all_btn = QPushButton("☑ 全選")
         select_all_btn.setToolTip("勾選全部任務")
-        select_all_btn.setFixedWidth(60)
         select_all_btn.clicked.connect(self._select_all_tasks)
 
-        clear_all_btn = QPushButton("清空")
+        clear_all_btn = QPushButton("☐ 清空")
         clear_all_btn.setToolTip("清除所有勾選")
-        clear_all_btn.setFixedWidth(60)
         clear_all_btn.clicked.connect(self._clear_all_tasks)
 
         control_row.addWidget(select_all_btn)
@@ -360,11 +538,10 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         preset_row = QHBoxLayout()
         self.preset_combo = QComboBox()
         self._populate_preset_combo()
-        apply_preset_btn = QPushButton("套用預設")
+        apply_preset_btn = QPushButton("✓ 套用")
         apply_preset_btn.setToolTip("依需求模式勾選任務")
         apply_preset_btn.clicked.connect(self._apply_selected_preset)
-        reload_preset_btn = QPushButton("重新載入")
-        reload_preset_btn.setFixedWidth(80)
+        reload_preset_btn = QPushButton("🔄")
         reload_preset_btn.setToolTip("重新讀取 configs/gui_presets.yaml")
         reload_preset_btn.clicked.connect(self._reload_presets)
 
@@ -377,19 +554,18 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
 
         grid = QGridLayout()
         grid.setContentsMargins(0,0,0,0)
-        grid.setVerticalSpacing(8)
-        grid.setHorizontalSpacing(5)
+        grid.setVerticalSpacing(6)
+        grid.setHorizontalSpacing(10)
 
         for index, (task_key, label) in enumerate(TASK_OPTIONS):
             checkbox = QCheckBox(label)
-            # 讓文字長度過長時顯示 ...
             checkbox.setToolTip(label)
             checkbox.setChecked(task_key in {"dataset_splitter", "yolo_train"})
             checkbox.setStatusTip(TASK_DESCRIPTIONS.get(task_key, label))
             checkbox.stateChanged.connect(self._on_tasks_changed)
             
             self.task_checkboxes[task_key] = checkbox
-            # 2欄排列，比較適合側邊欄寬度
+            # 2欄排列
             grid.addWidget(checkbox, index // 2, index % 2)
 
         layout.addLayout(grid)
@@ -424,14 +600,14 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         self.run_summary_label.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
 
         btns_layout = QHBoxLayout()
-        self.start_btn = QPushButton("RUN PIPELINE")
+        self.start_btn = QPushButton("▶ RUN PIPELINE")
         self.start_btn.setObjectName("PrimaryBtn")
         self.start_btn.setMinimumHeight(45)
         self.start_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.start_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_btn.clicked.connect(self.start_pipeline)
 
-        self.stop_btn = QPushButton("STOP")
+        self.stop_btn = QPushButton("⏹ STOP")
         self.stop_btn.setObjectName("DangerBtn")
         self.stop_btn.setMinimumHeight(45)
         self.stop_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
@@ -557,8 +733,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         self.log_filter_combo.addItem("僅錯誤/警告", userData="issues")
         self.log_filter_combo.currentIndexChanged.connect(self._refresh_log_view)
 
-        clear_btn = QPushButton("清空 Log")
-        clear_btn.setFixedWidth(90)
+        clear_btn = QPushButton("🗑 清空")
         clear_btn.clicked.connect(self._clear_logs)
 
         row.addWidget(self.log_filter_combo)
