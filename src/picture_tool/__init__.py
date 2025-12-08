@@ -7,7 +7,7 @@ from importlib import metadata
 from .anomaly import process_anomaly_detection
 from .augment import ImageAugmentor, YoloDataAugmentor
 from .format import convert_format
-from .pipeline import (
+from .main_pipeline import (
     get_tasks_from_groups,
     interactive_task_selection,
     load_config,

@@ -1,7 +1,7 @@
 import logging
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import yaml
 from picture_tool.utils.experiment import write_experiment
@@ -468,6 +468,7 @@ def _maybe_export_detection_config(
     config: MutableMapping[str, Any],
     run_dir: Path,
     logger: logging.Logger,
+    include_position: bool,
 ) -> Optional[Path]:
     """Create the post-training detection config file when enabled."""
     ycfg = config.get("yolo_training")
@@ -522,11 +523,12 @@ def _maybe_export_detection_config(
         export_cfg.get("expected_items"), product, area
     )
 
-    include_position_config = bool(
+    explicit_position = bool(
         export_cfg.get("position_config") or export_cfg.get("position_config_path")
     )
-    if not include_position_config and pos_cfg.get("enabled"):
-        include_position_config = True
+    include_position_config = explicit_position or (
+        include_position and pos_cfg.get("enabled")
+    )
 
     position_config: Dict[str, Any] = {}
     if include_position_config:
@@ -611,8 +613,25 @@ def _maybe_export_detection_config(
         payload["current_area"] = str(area)
     if expected_items:
         payload["expected_items"] = expected_items
-    if position_config:
+    
+    # 始終包含 position_config
+    if include_position_config and position_config:
         payload["position_config"] = position_config
+    elif include_position_config and include_position:
+        # 提供預設範本
+        payload["position_config"] = {
+            "# NOTE": "Position validation disabled. Default template for reference.",
+            "enabled": False,
+            "ProductA": {
+                "Area1": {
+                    "tolerance": 10,
+                    "expected_boxes": {
+                        "ClassName1": {"x1": 100, "y1": 100, "x2": 200, "y2": 200}
+                    }
+                }
+            }
+        }
+        logger.info("Position validation not configured, added default template")
 
     with open(output_path, "w", encoding="utf-8") as fh:
         yaml.safe_dump(payload, fh, allow_unicode=True, sort_keys=False)
@@ -625,6 +644,7 @@ def _bundle_run_artifacts(
     run_dir: Path,
     detection_config_path: Optional[Path],
     generated_position_path: Optional[Path],
+    include_position: bool,
     logger: logging.Logger,
 ) -> Optional[Path]:
     """Collect selected training artifacts into a single directory."""
@@ -668,7 +688,7 @@ def _bundle_run_artifacts(
             if default_detection.exists():
                 copy_into_bundle(default_detection)
 
-    if bundle_cfg.get("include_position_config", True):
+    if bundle_cfg.get("include_position_config", True) and include_position:
         candidate: Optional[Path] = None
         if generated_position_path:
             candidate = Path(generated_position_path)
@@ -701,7 +721,11 @@ def _bundle_run_artifacts(
     return bundle_dir
 
 
-def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
+def train_yolo(
+    config: dict,
+    logger: Optional[logging.Logger] = None,
+    args: Optional[object] = None,
+) -> Path:
     """Train YOLO using Ultralytics and return run directory.
 
     Expects config['yolo_training'] block with keys:
@@ -709,6 +733,14 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     """
     logger = logger or logging.getLogger(__name__)
     ycfg = config.get("yolo_training", {})
+    position_cfg = ycfg.get("position_validation", {}) if isinstance(ycfg, Mapping) else {}
+    selected_tasks: Iterable[str] = getattr(args, "tasks", []) if args is not None else []
+    requested_tasks = {str(t) for t in selected_tasks} if selected_tasks else set()
+    position_requested = not requested_tasks or "position_validation" in requested_tasks
+    position_validation_active = bool(
+        isinstance(position_cfg, Mapping) and position_cfg.get("enabled") and position_requested
+    )
+    run_position_during_train = position_validation_active and not requested_tasks
 
     dataset_dir = Path(ycfg.get("dataset_dir", "./datasets/split_dataset")).resolve()
     names = ycfg.get("class_names") or []
@@ -763,12 +795,13 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
         run_dir = (Path(project) / name).resolve()
     logger.info(f"Training completed. Run directory: {run_dir}")
 
-    generated_cfg = _auto_generate_position_config(config, run_dir, logger)
-    if generated_cfg:
-        logger.info("Position config generated automatically: %s", generated_cfg)
+    generated_cfg: Optional[Path] = None
+    if position_validation_active:
+        generated_cfg = _auto_generate_position_config(config, run_dir, logger)
+        if generated_cfg:
+            logger.info("Position config generated automatically: %s", generated_cfg)
 
-    position_cfg = ycfg.get("position_validation", {})
-    if isinstance(position_cfg, Mapping) and position_cfg.get("enabled"):
+    if run_position_during_train:
         try:
             from picture_tool.position.yolo_position_validator import (
                 run_position_validation,
@@ -778,12 +811,15 @@ def train_yolo(config: dict, logger: Optional[logging.Logger] = None) -> Path:
         except Exception as exc:
             logger.error(f"Position validation failed: {exc}")
 
-    detection_cfg_path = _maybe_export_detection_config(config, run_dir, logger=logger)
+    detection_cfg_path = _maybe_export_detection_config(
+        config, run_dir, logger=logger, include_position=position_validation_active
+    )
     _bundle_run_artifacts(
         config,
         run_dir,
         detection_cfg_path,
         generated_cfg,
+        position_validation_active,
         logger,
     )
     artifacts = {

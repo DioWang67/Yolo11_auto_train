@@ -53,15 +53,10 @@ def minimal_config(tmp_path):
     cfg = {
         "pipeline": {
             "log_file": str(tmp_path / "logs" / "pipeline.log"),
-            "tasks": [
-                {"name": "dataset_splitter", "enabled": True, "dependencies": []},
-                {
-                    "name": "yolo_train",
-                    "enabled": True,
-                    "dependencies": ["dataset_splitter"],
-                },
-            ],
-            "task_groups": {"train": ["dataset_splitter", "yolo_train"]},
+            # 'tasks' list is used for enabling/disabling, but not for defining dependencies in new arch
+            "task_groups": {
+                 "train": ["dataset_splitter", "yolo_train"]
+            }
         },
         "train_test_split": {
             "input": {
@@ -87,36 +82,6 @@ def minimal_config(tmp_path):
     return cfg, cfg_path
 
 
-def test_validate_dependencies_injects_missing(minimal_config):
-    cfg, _ = minimal_config
-    logger = DummyLogger()
-    ordered = pipeline.validate_dependencies(["yolo_train"], cfg, logger)
-    assert ordered == ["dataset_splitter", "yolo_train"]
-    assert any(level == "info" for level, _ in logger.records)
-
-
-def test_validate_dependencies_auto_registers_new_section(minimal_config):
-    cfg, _ = minimal_config
-    cfg["color_verification"] = {"enabled": True}
-    logger = DummyLogger()
-    ordered = pipeline.validate_dependencies(["color_verification"], cfg, logger)
-    assert ordered == ["color_verification"]
-    assert any(
-        "Auto-registered task color_verification" in message
-        for level, message in logger.records
-        if level == "info"
-    )
-
-
-def test_validate_dependencies_creates_section_for_known_task(minimal_config):
-    cfg, _ = minimal_config
-    logger = DummyLogger()
-    ordered = pipeline.validate_dependencies(["color_verification"], cfg, logger)
-    assert ordered == ["color_verification"]
-    assert "color_verification" in cfg
-    assert cfg["color_verification"]["enabled"] is True
-
-
 def test_run_pipeline_executes_in_declared_order(monkeypatch, minimal_config):
     cfg, cfg_path = minimal_config
     args = _make_args(cfg_path)
@@ -128,21 +93,23 @@ def test_run_pipeline_executes_in_declared_order(monkeypatch, minimal_config):
     )
     monkeypatch.setattr(pipeline, "_apply_cli_overrides", lambda config, args, lg: None)
     monkeypatch.setattr(pipeline, "_auto_device", lambda config, lg: None)
-    monkeypatch.setattr(pipeline, "_should_skip", lambda task, config, args, lg: None)
+    
+    # Mock task registry
+    from picture_tool.pipeline.core import Task
+    
+    def splitter(c, a): calls.append("dataset_splitter")
+    def trainer(c, a): calls.append("yolo_train")
+    
+    tasks = {
+        "dataset_splitter": Task("dataset_splitter", splitter),
+        "yolo_train": Task("yolo_train", trainer, dependencies=["dataset_splitter"])
+    }
+    
+    monkeypatch.setattr(pipeline, "build_task_registry", lambda c: tasks)
 
-    def handler_factory(name):
-        def _handler(config, args):
-            calls.append(name)
-
-        return _handler
-
-    monkeypatch.setitem(
-        pipeline.TASK_HANDLERS, "dataset_splitter", handler_factory("dataset_splitter")
-    )
-    monkeypatch.setitem(
-        pipeline.TASK_HANDLERS, "yolo_train", handler_factory("yolo_train")
-    )
-
+    # Note: run_pipeline now expects 'validate_dependencies' to pass through user requests.
+    # The 'auto-dependency resolving' happens in Pipeline.run, so we just ask for 'yolo_train'.
+    
     pipeline.run_pipeline(["yolo_train"], cfg, logger, args)
 
     assert calls == ["dataset_splitter", "yolo_train"]
@@ -169,16 +136,22 @@ def test_run_pipeline_honours_stop_event(monkeypatch, minimal_config):
     )
     monkeypatch.setattr(pipeline, "_apply_cli_overrides", lambda config, args, lg: None)
     monkeypatch.setattr(pipeline, "_auto_device", lambda config, lg: None)
-    monkeypatch.setattr(pipeline, "_should_skip", lambda task, config, args, lg: None)
 
     def dataset_handler(config, args):
         calls.append("dataset_splitter")
 
     def train_handler(config, args):
         pytest.fail("Pipeline should have stopped before yolo_train executed")
-
-    monkeypatch.setitem(pipeline.TASK_HANDLERS, "dataset_splitter", dataset_handler)
-    monkeypatch.setitem(pipeline.TASK_HANDLERS, "yolo_train", train_handler)
+                
+    from picture_tool.pipeline.core import Task
+    tasks = {
+        "dataset_splitter": Task("dataset_splitter", dataset_handler),
+        # yolo_train depends on splitter, so splitter runs first. StopEvent triggers after splitter?
+        # StopEvent logic is checked inside the loop.
+        # Loop order: splitter (checked Stop?), train (checked Stop?).
+        "yolo_train": Task("yolo_train", train_handler, dependencies=["dataset_splitter"])
+    }
+    monkeypatch.setattr(pipeline, "build_task_registry", lambda c: tasks)
 
     pipeline.run_pipeline(["yolo_train"], cfg, logger, args, stop_event=stop_event)
 
@@ -187,6 +160,9 @@ def test_run_pipeline_honours_stop_event(monkeypatch, minimal_config):
 
 def test_get_tasks_from_groups_union(minimal_config):
     cfg, _ = minimal_config
+    # Need to populate task_groups in config for this test
+    # (minimal_config fixture sets it up, but let's double check coverage of function)
+    assert "train" in cfg["pipeline"]["task_groups"]
     tasks = pipeline.get_tasks_from_groups(["train", "nonexistent"], cfg)
     assert set(tasks) == {"dataset_splitter", "yolo_train"}
 

@@ -1,0 +1,24 @@
+site_name: Picture Tool Documentation
+site_description: Documentation for Yolo11_auto_train project.
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+
+nav:
+  - Home: index.md
+  - API Reference:
+      - Pipeline: api/pipeline.md
+      - Tasks: api/tasks.md
+      - Augmentation: api/augmentation.md
+      - Config: api/config.md

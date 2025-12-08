@@ -13,6 +13,15 @@ from tqdm import tqdm  # type: ignore[import-untyped]
 
 from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger
 
+# Global variable for worker processes
+_worker_augmentations = None
+
+def _init_worker(ops_config: dict[str, Any]) -> None:
+    """Initialize the augmentation pipeline in the worker process."""
+    global _worker_augmentations
+    _worker_augmentations = ImageAugmentor._build_augmentations_from_ops(ops_config)
+
+
 
 class ImageAugmentor:
     def __init__(self, config_path: str | None = None) -> None:
@@ -229,16 +238,22 @@ class ImageAugmentor:
         use_process_pool = bool(self.config["processing"].get("use_process_pool", False))
 
         if use_process_pool:
+            # Pass only necessary data, not the full config which might contain non-picklable items
+            ops_config = self.config["augmentation"]["operations"]
             job_args = [
                 (
                     img_file,
                     self.config["input"]["image_dir"],
                     self.config["output"]["image_dir"],
-                    self.config["augmentation"],
+                    self.config["augmentation"]["num_images"],
                 )
                 for img_file in img_files
             ]
-            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            with ProcessPoolExecutor(
+                max_workers=num_workers,
+                initializer=_init_worker,
+                initargs=(ops_config,),
+            ) as executor:
                 results = list(
                     tqdm(
                         executor.map(_process_single_image_job, job_args),
@@ -265,21 +280,23 @@ class ImageAugmentor:
 
 
 def _process_single_image_job(
-    args: tuple[str, str, str, dict[str, Any]]
+    args: tuple[str, str, str, int]
 ) -> bool:
-    img_file, input_dir, output_dir, aug_config = args
+    img_file, input_dir, output_dir, num_images = args
     try:
         img_path = Path(input_dir) / img_file
         image = cv2.imread(str(img_path))
         if image is None:
             return False
 
-        augmentations = ImageAugmentor._build_augmentations_from_ops(
-            aug_config["operations"]
-        )
+        # Use the global augmentations initialized in the worker
+        global _worker_augmentations
+        if _worker_augmentations is None:
+             return False
+
         saved_any = False
-        for i in range(aug_config["num_images"]):
-            transformed = augmentations(image=image)
+        for i in range(num_images):
+            transformed = _worker_augmentations(image=image)
             augmented_image = transformed["image"]
             aug_img_filename = f"{Path(img_file).stem}_aug_{i + 1}.png"
             aug_img_path = Path(output_dir) / aug_img_filename

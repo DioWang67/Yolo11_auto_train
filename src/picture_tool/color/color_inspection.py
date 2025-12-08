@@ -602,6 +602,7 @@ class _SamInferenceTask(QtCore.QRunnable):
         request_id: int,
         predictor: SamPredictorWrapper,
         sam_image: np.ndarray,
+        original_images: Tuple[np.ndarray, np.ndarray, np.ndarray],
         box: Optional[Tuple[int, int, int, int]],
         point_coords: Optional[List[Tuple[float, float]]],
         point_labels: Optional[List[int]],
@@ -613,6 +614,7 @@ class _SamInferenceTask(QtCore.QRunnable):
         self.request_id = request_id
         self.predictor = predictor
         self.sam_image = sam_image
+        self.orig_bgr, self.orig_hsv, self.orig_lab = original_images
         self.box = box
         self.point_coords = point_coords
         self.point_labels = point_labels
@@ -634,18 +636,47 @@ class _SamInferenceTask(QtCore.QRunnable):
                 point_coords=self.point_coords,
                 point_labels=self.point_labels,
             )
+            
+            if self.cancel_event.is_set():
+                return
+
+            # Resize mask to original resolution
+            h, w = self.orig_bgr.shape[:2]
+            resized_mask = cv2.resize(
+                mask,
+                (w, h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+            # Compute heavy statistics (percentiles etc.)
+            stats = None
+            if np.count_nonzero(resized_mask) > 0:
+                try:
+                    stats = compute_hsv_lab_stats(
+                        self.orig_bgr,
+                        resized_mask,
+                        hsv_image=self.orig_hsv,
+                        lab_image=self.orig_lab,
+                    )
+                except ValueError:
+                    stats = None
+
             inference_ms = (time.time() - t0) * 1000.0
+            
             if self.cancel_event.is_set():
                 return
             if self.progress_cb:
                 self.progress_cb("done", inference_ms)
-            self.callback(self.request_id, mask, inference_ms, None)
+            
+            # Return full-res mask AND computed stats
+            self.callback(self.request_id, resized_mask, stats, inference_ms, None)
+            
         except Exception as exc:
             if self.cancel_event.is_set():
                 return
             if self.progress_cb:
                 self.progress_cb("error", 0.0)
-            self.callback(self.request_id, None, 0.0, exc)
+            self.callback(self.request_id, None, None, 0.0, exc)
 
 
 class ImageCanvas(QtWidgets.QLabel):
@@ -810,14 +841,91 @@ class ImageCanvas(QtWidgets.QLabel):
 
 
 class SamSelectionWindow(QtWidgets.QWidget):
-    samResultReady = QtCore.pyqtSignal(int, object, float, object)
+    # Updated signal: request_id, mask(full-res), stats(dict), inference_ms, error
+    samResultReady = QtCore.pyqtSignal(int, object, object, float, object)
     samProgress = QtCore.pyqtSignal(str, float)
     """Main window orchestrating per-image SAM selections."""
 
     def __init__(self, cfg: SessionConfig) -> None:
         super().__init__()
         self.cfg = cfg
-        self.setWindowTitle("SAM Color Selection")
+        self.setWindowTitle("🎨 SAM Color Selection Tool")
+        self.setMinimumSize(1200, 800)
+        
+        # Apply modern stylesheet
+        self.setStyleSheet("""
+            QWidget {
+                font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
+                background-color: #0d1117;
+                color: #c9d1d9;
+            }
+            QPushButton {
+                background-color: #21262d;
+                border: 1px solid #30363d;
+                color: #c9d1d9;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #30363d;
+                border-color: #484f58;
+            }
+            QPushButton:pressed {
+                background-color: #161b22;
+            }
+            QPushButton#PrimaryBtn {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #1f6feb, stop:1 #58a6ff);
+                border: none;
+                color: #ffffff;
+                font-weight: 600;
+            }
+            QPushButton#PrimaryBtn:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #388bfd, stop:1 #79c0ff);
+            }
+            QPushButton#SuccessBtn {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #238636, stop:1 #2ea043);
+                border: none;
+                color: #ffffff;
+                font-weight: 600;
+            }
+            QPushButton#SuccessBtn:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #2ea043, stop:1 #3fb950);
+            }
+            QLabel {
+                color: #c9d1d9;
+                padding: 4px;
+            }
+            QComboBox {
+                background-color: #161b22;
+                border: 2px solid #30363d;
+                color: #c9d1d9;
+                padding: 6px 10px;
+                border-radius: 6px;
+            }
+            QComboBox:hover {
+                border-color: #484f58;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 25px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #161b22;
+                border: 2px solid #30363d;
+                color: #c9d1d9;
+                selection-background-color: #1f6feb;
+            }
+            QScrollArea {
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                background-color: #0d1117;
+            }
+        """)
         self.recorder = ColorStatsRecorder()
         self.sam = SamPredictorWrapper(cfg.sam)
         self.sam_image_bgr: Optional[np.ndarray] = None
@@ -827,6 +935,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self._sam_pool.setMaxThreadCount(1)
         self._sam_pending = False
         self._sam_request_id = 0
+        self._active_sam_task: Optional[_SamInferenceTask] = None
         self._queued_sam_args: Optional[
             Tuple[Optional[Tuple[int, int, int, int]], Optional[List[Tuple[float, float]]], Optional[List[int]]]
         ] = None
@@ -846,6 +955,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.current_hsv: Optional[np.ndarray] = None
         self.current_lab: Optional[np.ndarray] = None
         self.current_mask: Optional[np.ndarray] = None
+        self.current_stats: Optional[Dict[str, object]] = None # Cache for stats
         self.current_box: Optional[Tuple[int, int, int, int]] = None
         self.point_coords: List[Tuple[float, float]] = []
         self.point_labels: List[int] = []
@@ -870,67 +980,102 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.sam_status_label.setStyleSheet("color: #888;")
 
         self.info_label = QtWidgets.QLabel(
-            "Drag a loose rectangle to initialize the mask. Left click adds positive points, right click adds negative points."
+            "🖌 拖曳矩形框選區域，左鍵增加正面點，右鍵增加負面點。"
         )
         self.info_label.setWordWrap(True)
+        self.info_label.setStyleSheet("color: #8b949e; font-size: 9pt; padding: 8px; background-color: #161b22; border-radius: 6px;")
 
-        self.prompt_label = QtWidgets.QLabel("Points: 0(+)/0(-)")
+        self.prompt_label = QtWidgets.QLabel("📍 Points: 0(+)/0(-)")
+        self.prompt_label.setStyleSheet("font-weight: 600; color: #58a6ff;")
 
-        btn_prev = QtWidgets.QPushButton("Previous")
+        # Navigation buttons
+        btn_prev = QtWidgets.QPushButton("◀ Previous")
         btn_prev.clicked.connect(self._prev_image)
-        btn_next = QtWidgets.QPushButton("Next (Skip)")
+        btn_next = QtWidgets.QPushButton("Next (Skip) ▶")
         btn_next.clicked.connect(self._next_image)
-        btn_save = QtWidgets.QPushButton("Save Selection")
+        
+        # Action buttons
+        btn_save = QtWidgets.QPushButton("💾 Save Selection")
+        btn_save.setObjectName("SuccessBtn")
         btn_save.clicked.connect(self._save_current_selection)
-        btn_finish = QtWidgets.QPushButton("Finish & Export")
+        
+        btn_finish = QtWidgets.QPushButton("✓ Finish & Export")
+        btn_finish.setObjectName("PrimaryBtn")
         btn_finish.clicked.connect(self._finish_session)
-        btn_undo_point = QtWidgets.QPushButton("Undo Point")
+        
+        # Edit buttons
+        btn_undo_point = QtWidgets.QPushButton("↶ Undo Point")
         btn_undo_point.clicked.connect(self._undo_last_point)
-        btn_clear_points = QtWidgets.QPushButton("Clear Points")
+        
+        btn_clear_points = QtWidgets.QPushButton("✕ Clear Points")
         btn_clear_points.clicked.connect(self._clear_points)
-        btn_clear_mask = QtWidgets.QPushButton("Clear Mask")
+        
+        btn_clear_mask = QtWidgets.QPushButton("🗑 Clear Mask")
         btn_clear_mask.clicked.connect(self._clear_mask)
 
-        zoom_in_btn = QtWidgets.QPushButton("Zoom +")
+        # Zoom buttons
+        zoom_in_btn = QtWidgets.QPushButton("🔍 Zoom +")
         zoom_in_btn.clicked.connect(self.canvas.zoom_in)
-        zoom_out_btn = QtWidgets.QPushButton("Zoom -")
+        
+        zoom_out_btn = QtWidgets.QPushButton("🔎 Zoom -")
         zoom_out_btn.clicked.connect(self.canvas.zoom_out)
-        zoom_reset_btn = QtWidgets.QPushButton("Reset Zoom")
+        
+        zoom_reset_btn = QtWidgets.QPushButton("↺ Reset Zoom")
         zoom_reset_btn.clicked.connect(self.canvas.reset_zoom)
 
+        # Improved layout organization
         btn_layout = QtWidgets.QHBoxLayout()
         btn_layout.addWidget(btn_prev)
         btn_layout.addWidget(btn_next)
+        btn_layout.addStretch()
         btn_layout.addWidget(btn_save)
         btn_layout.addWidget(btn_finish)
 
-        prompt_layout = QtWidgets.QHBoxLayout()
-        prompt_layout.addWidget(self.prompt_label)
-        prompt_layout.addWidget(btn_undo_point)
-        prompt_layout.addWidget(btn_clear_points)
-        prompt_layout.addWidget(btn_clear_mask)
+        edit_layout = QtWidgets.QHBoxLayout()
+        edit_layout.addWidget(self.prompt_label)
+        edit_layout.addStretch()
+        edit_layout.addWidget(btn_undo_point)
+        edit_layout.addWidget(btn_clear_points)
+        edit_layout.addWidget(btn_clear_mask)
 
         zoom_layout = QtWidgets.QHBoxLayout()
-        zoom_layout.addWidget(QtWidgets.QLabel("Zoom:"))
+        zoom_layout.addWidget(QtWidgets.QLabel("🔍 Zoom:"))
         zoom_layout.addWidget(zoom_out_btn)
         zoom_layout.addWidget(zoom_in_btn)
         zoom_layout.addWidget(zoom_reset_btn)
         zoom_layout.addStretch()
 
         color_layout = QtWidgets.QHBoxLayout()
-        color_layout.addWidget(QtWidgets.QLabel("Color label:"))
+        color_label = QtWidgets.QLabel("🎨 Color:")
+        color_label.setStyleSheet("font-weight: 600;")
+        color_layout.addWidget(color_label)
         color_layout.addWidget(self.color_combo, 1)
         color_layout.addWidget(self.status_label)
 
+        # Status panel with card style
+        status_panel = QtWidgets.QWidget()
+        status_panel.setStyleSheet("""
+            QWidget {
+                background-color: #161b22;
+                border-radius: 8px;
+                padding: 12px;
+            }
+        """)
+        status_layout = QtWidgets.QVBoxLayout(status_panel)
+        status_layout.setContentsMargins(12, 12, 12, 12)
+        status_layout.addWidget(self.file_label)
+        status_layout.addWidget(self.stats_label)
+        status_layout.addWidget(self.sam_status_label)
+
         main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
         main_layout.addWidget(self.scroll_area, 1)
         main_layout.addLayout(zoom_layout)
         main_layout.addLayout(color_layout)
-        main_layout.addWidget(self.file_label)
+        main_layout.addWidget(status_panel)
         main_layout.addWidget(self.info_label)
-        main_layout.addWidget(self.stats_label)
-        main_layout.addWidget(self.sam_status_label)
-        main_layout.addLayout(prompt_layout)
+        main_layout.addLayout(edit_layout)
         main_layout.addLayout(btn_layout)
 
         self._load_current_image()
@@ -949,6 +1094,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.current_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         self.current_lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
         self.current_mask = None
+        self.current_stats = None
         self.current_box = None
         self.sam_image_bgr, self.sam_scale = self._prepare_sam_inputs(image)
         self._clear_points(update_info=False)
@@ -1022,16 +1168,12 @@ class SamSelectionWindow(QtWidgets.QWidget):
         if self.current_image_bgr is None or self.current_mask is None:
             self.info_label.setText("Please draw a box and generate a mask first.")
             return
-        try:
-            stats = compute_hsv_lab_stats(
-                self.current_image_bgr,
-                self.current_mask,
-                hsv_image=self.current_hsv,
-                lab_image=self.current_lab,
-            )
-        except ValueError as exc:
-            self.info_label.setText(str(exc))
-            return
+        # Use cached stats if available
+        stats = self.current_stats
+        if stats is None:
+             self.info_label.setText("Statistics not ready/failed. Try updating the mask.")
+             return
+
         color = self.color_combo.currentText() or "Unknown"
         image_path = self.image_paths[self.current_index]
         coverage_val = stats.get("coverage", 0.0)
@@ -1089,6 +1231,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
             self.info_label.setText("Add a bounding box or click points to guide SAM.")
             self.canvas.set_overlay_mask(None)
             self.current_mask = None
+            self.current_stats = None
             self.stats_label.setText("HSV/LAB stats: -")
             return
         if self.sam_image_bgr is None:
@@ -1117,18 +1260,35 @@ class SamSelectionWindow(QtWidgets.QWidget):
             Optional[Tuple[int, int, int, int]], Optional[List[Tuple[float, float]]], Optional[List[int]]
         ],
     ) -> None:
-        if self.sam_image_bgr is None:
+        # Capture to locals for type narrowing
+        img_bgr = self.current_image_bgr
+        img_hsv = self.current_hsv
+        img_lab = self.current_lab
+        sam_bgr = self.sam_image_bgr
+        
+        if (
+            sam_bgr is None 
+            or img_bgr is None
+            or img_hsv is None
+            or img_lab is None
+        ):
             return
+            
         box, scaled_points, point_labels = params
         self._sam_request_id += 1
         request_id = self._sam_request_id
         self._sam_pending = True
-        self.info_label.setText("Running SAM...")
+        self.info_label.setText("Running SAM & Stats...")
         self.sam_status_label.setText("SAM: Running")
+        
+        # Pass full-res logic to thread
+        original_images = (img_bgr, img_hsv, img_lab)
+        
         task = _SamInferenceTask(
             request_id=request_id,
             predictor=self.sam,
-            sam_image=self.sam_image_bgr,
+            sam_image=sam_bgr,
+            original_images=original_images,
             box=box,
             point_coords=scaled_points,
             point_labels=point_labels,
@@ -1138,11 +1298,12 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self._active_sam_task = task
         self._sam_pool.start(task)
 
-    @QtCore.pyqtSlot(int, object, float, object)
+    @QtCore.pyqtSlot(int, object, object, float, object)
     def _on_sam_result(
         self,
         request_id: int,
-        mask: Optional[np.ndarray],
+        mask: Optional[np.ndarray], # Now already full-res
+        stats: Optional[Dict[str, object]], # Pre-computed stats
         inference_ms: float,
         error: Optional[BaseException],
     ) -> None:
@@ -1158,24 +1319,31 @@ class SamSelectionWindow(QtWidgets.QWidget):
                 logging.error("SAM prediction returned empty mask.")
                 error_msg = "Unknown SAM error"
             self.current_mask = None
+            self.current_stats = None
             self.canvas.set_overlay_mask(None)
             self.stats_label.setText("HSV/LAB stats: -")
             self.info_label.setText(f"SAM failed: {error_msg}")
         else:
             if self.current_image_bgr is None:
                 return
-            resized_mask = cv2.resize(
-                mask,
-                (self.current_image_bgr.shape[1], self.current_image_bgr.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
-            )
-            self.current_mask = resized_mask
-            self.canvas.set_overlay_mask(resized_mask)
-            coverage = float(np.count_nonzero(resized_mask)) / resized_mask.size * 100.0
-            self._refresh_stats_label()
+            
+            # mask is already resized in thread
+            self.current_mask = mask
+            self.canvas.set_overlay_mask(mask)
+            
+            self.current_stats = stats
+            
+            coverage = 0.0
+            if stats:
+                coverage_val = stats.get("coverage", 0.0)
+                coverage = float(coverage_val) * 100.0 if isinstance(coverage_val, (int, float)) else 0.0
+                
+            self._render_stats_to_label(stats)
+            
             self.info_label.setText(
-                f"Mask updated in {inference_ms:.0f} ms (coverage {coverage:.2f}%). Save when satisfied."
+                f"Mask & Stats updated in {inference_ms:.0f} ms (coverage {coverage:.2f}%). Save when satisfied."
             )
+            
         if self._queued_sam_args:
             pending = self._queued_sam_args
             self._queued_sam_args = None
@@ -1195,24 +1363,11 @@ class SamSelectionWindow(QtWidgets.QWidget):
         neg = sum(1 for lbl in self.point_labels if lbl == 0)
         self.prompt_label.setText(f"Points: {pos}(+)/{neg}(-)")
 
-    def _refresh_stats_label(self) -> None:
-        if (
-            self.current_image_bgr is None
-            or self.current_mask is None
-            or np.count_nonzero(self.current_mask) == 0
-        ):
-            self.stats_label.setText("HSV/LAB stats: -")
-            return
-        try:
-            stats = compute_hsv_lab_stats(
-                self.current_image_bgr,
-                self.current_mask,
-                hsv_image=self.current_hsv,
-                lab_image=self.current_lab,
-            )
-        except ValueError:
-            self.stats_label.setText("HSV/LAB stats: empty mask")
-            return
+    def _render_stats_to_label(self, stats: Optional[Dict[str, object]]) -> None:
+        if not stats:
+             self.stats_label.setText("HSV/LAB stats: empty/failed")
+             return
+             
         hsv_mean_val = stats.get("hsv_mean", [float("nan")] * 3)
         lab_mean_val = stats.get("lab_mean", [float("nan")] * 3)
         hsv_mean = hsv_mean_val if isinstance(hsv_mean_val, list) else [float("nan")] * 3
