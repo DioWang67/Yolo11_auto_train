@@ -169,13 +169,13 @@ class DataAugmentor:
                 limit = max(abs(angle[0]), abs(angle[1]))
             else:
                 limit = abs(angle)
-            # 使用 border_value 以相容不同版本 Albumentations
+            # 使用 fill 以相容不同版本 Albumentations
             aug_list.append(
                 A.Rotate(
                     limit=limit,
                     p=0.3,
                     border_mode=cv2.BORDER_CONSTANT,
-                    border_value=(128, 128, 128),
+                    fill=(128, 128, 128),
                 )
             )
         if ops_config.get("multiply"):
@@ -210,10 +210,10 @@ class DataAugmentor:
             )
         if ops_config.get("noise") and ops_config["noise"]["scale"][1] > 0:
             noise_scale = ops_config["noise"]["scale"]
-            # 兼容不同版本 Albumentations，若 var_limit 參數不可用則降級使用預設
+            # 兼容不同版本 Albumentations，若 std_range 參數不可用則降級使用預設
             try:
                 aug_list.append(
-                    A.GaussNoise(var_limit=(0, noise_scale[1] * 255), p=0.2)
+                    A.GaussNoise(std_range=(0, noise_scale[1]), p=0.2)
                 )
             except TypeError:
                 aug_list.append(A.GaussNoise(p=0.2))
