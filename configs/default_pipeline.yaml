@@ -151,36 +151,54 @@ yolo_augmentation:
       - 3
     operations:
       blur:
+        # Kernel size for blurring (must be odd integers, e.g., 3, 5, 7)
+        # Range: [0, infinity) - 0 means no blur
         kernel:
           - 0
           - 1
       contrast:
+        # Contrast multiplier (1.0 = original image)
+        # Range: [0.0, infinity) - e.g., 0.8 to 1.2
         range:
           - 0.92
           - 1.08
       flip:
+        # Probability of horizontal flip
+        # Range: [0.0, 1.0]
         probability: 0.0
       hue:
+        # Hue shift in degrees (or value)
+        # Range: [-180, 180] - e.g., -10 to 10 is usually sufficient
         range:
           - 1
           - 1
       multiply:
+        # Brightness multiplier (1.0 = original image)
+        # Range: [0.0, infinity) - e.g., 0.8 to 1.2
         range:
           - 0.88
           - 1.15
       noise:
+        # Gaussian noise standard deviation range (normalized 0.0-1.0)
+        # Range: [0.0, 1.0] - e.g., 0.02 is subtle noise
         scale:
           - 0
-          - 6
+          - 0.02
       perspective:
+        # Perspective transformation scale
+        # Range: [0.0, 0.1] - higher values cause more distortion
         scale:
           - 0.0
           - 0.0
       rotate:
+        # Rotation angle in degrees
+        # Range: [-180, 180] - e.g., -10 to 10
         angle:
           - -2
           - 2
       scale:
+        # Image scaling multiplier
+        # Range: [0.0, infinity) - e.g., 0.9 to 1.1 (zoom out / zoom in)
         range:
           - 0.97
           - 1.03
@@ -199,36 +217,45 @@ image_augmentation:
       - 4
     operations:
       blur:
+        # Kernel size for blurring
         kernel:
           - 1
           - 3
       contrast:
+        # Contrast multiplier
         range:
           - 0.95
           - 1.05
       flip:
+        # Flip probability
         probability: 0
       hue:
+        # Hue shift
         range:
           - -5
           - 5
       multiply:
+        # Brightness multiplier
         range:
           - 0.95
           - 1.05
       noise:
+        # Noise scale (normalized std)
         scale:
-          - 1
-          - 3
+          - 0.01  # Corrected from 1 to avoid excessive noise
+          - 0.05  # Corrected from 3 to avoid excessive noise
       perspective:
+        # Perspective scale
         scale:
           - 0.01
           - 0.02
       rotate:
+        # Rotation angle
         angle:
           - 0
           - 1
       scale:
+        # Scaling multiplier
         range:
           - 0.95
           - 1.05
