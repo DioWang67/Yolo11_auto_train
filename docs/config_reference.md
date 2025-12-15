@@ -90,6 +90,7 @@ interpreted relative to the project root unless stated otherwise.
 | `workers` (opt.)           | int         | DataLoader workers; default 0 on Windows via trainer helper. |
 | `position_validation`      | mapping     | Optional position validation config (see below). |
 | `export_detection_config`  | mapping     | Post-training export settings (thresholds, output dir, expected items). |
+| `export_onnx`              | mapping     | Post-training ONNX export settings. |
 | `artifact_bundle`          | mapping     | Controls bundling of outputs (weights, configs, results). |
 
 ### `position_validation`
@@ -101,10 +102,16 @@ fields before allowing runs.
 Important keys: `enabled`, `output_path`, `weights_name`, `conf_thres`, `iou_thres`,
 `current_product`, `area`, `expected_items`, `include_all_products`.
 
+### `export_onnx`
+Important keys: `enabled`, `weights_name` (defaults to `best.pt`), `imgsz`
+(defaults to training `imgsz`), `device`, `half`, `dynamic`, `simplify`, `opset`.
+When enabled, writes an `.onnx` next to the trained weights (e.g.
+`runs/detect/train/weights/best.onnx`).
+
 ### `artifact_bundle`
 Controls the optional `bundle/` directory created after training. Keys include
 `enabled`, `dir_name`, `base_dir`, and toggles such as `include_weights`,
-`include_detection_config`, etc.
+`include_detection_config`, `include_onnx`, etc.
 
 ---
 
