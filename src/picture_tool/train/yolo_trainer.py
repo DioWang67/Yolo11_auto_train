@@ -519,6 +519,82 @@ def _maybe_export_detection_config(
         ycfg.get("class_names"),
     )
 
+
+def _maybe_export_onnx(
+    config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger
+) -> Optional[Path]:
+    """Export trained weights to ONNX when enabled."""
+    ycfg = config.get("yolo_training")
+    if not isinstance(ycfg, Mapping):
+        return None
+    export_cfg = ycfg.get("export_onnx")
+    if not isinstance(export_cfg, Mapping) or export_cfg.get("enabled", True) is False:
+        return None
+    if YOLO is None:  # pragma: no cover
+        logger.warning("ONNX export skipped: ultralytics is not available.")
+        return None
+
+    weights_name = str(export_cfg.get("weights_name") or "best.pt")
+    weights_path = (run_dir / "weights" / weights_name).resolve()
+    if not weights_path.exists():
+        logger.warning(
+            "ONNX export skipped: unable to find weights at %s", weights_path
+        )
+        return None
+
+    imgsz = _normalize_imgsz(export_cfg.get("imgsz"))
+    if imgsz is None:
+        imgsz = _normalize_imgsz(ycfg.get("imgsz"))
+    if imgsz is None:
+        imgsz = [640, 640]
+    imgsz_arg: Any = (
+        imgsz[0] if len(imgsz) == 2 and imgsz[0] == imgsz[1] else imgsz
+    )
+
+    device = str(export_cfg.get("device") or ycfg.get("device") or "cpu")
+    half = bool(export_cfg.get("half", False))
+    dynamic = bool(export_cfg.get("dynamic", False))
+    simplify = bool(export_cfg.get("simplify", False))
+    export_kwargs: Dict[str, Any] = {
+        "format": "onnx",
+        "imgsz": imgsz_arg,
+        "device": device,
+        "half": half,
+        "dynamic": dynamic,
+        "simplify": simplify,
+    }
+
+    opset_val = export_cfg.get("opset")
+    if opset_val is not None:
+        try:
+            export_kwargs["opset"] = int(opset_val)
+        except (TypeError, ValueError):
+            logger.warning("ONNX export: invalid opset %r, ignoring", opset_val)
+
+    try:
+        model = YOLO(str(weights_path))
+        result_path = model.export(**export_kwargs)
+    except Exception as exc:  # pragma: no cover - defensive around export
+        logger.error("ONNX export failed: %s", exc)
+        return None
+
+    try:
+        export_path = Path(str(result_path)).resolve()
+    except Exception:
+        export_path = weights_path.with_suffix(".onnx")
+
+    if not export_path.exists():
+        fallback = weights_path.with_suffix(".onnx")
+        if fallback.exists():
+            export_path = fallback
+
+    if export_path.exists():
+        logger.info("ONNX exported to %s", export_path)
+        return export_path
+
+    logger.warning("ONNX export completed but output file not found near %s", export_path)
+    return None
+
     expected_items = _normalize_expected_items(
         export_cfg.get("expected_items"), product, area
     )
@@ -645,6 +721,7 @@ def _bundle_run_artifacts(
     detection_config_path: Optional[Path],
     generated_position_path: Optional[Path],
     include_position: bool,
+    onnx_path: Optional[Path],
     logger: logging.Logger,
 ) -> Optional[Path]:
     """Collect selected training artifacts into a single directory."""
@@ -707,6 +784,9 @@ def _bundle_run_artifacts(
             candidate = weights_dir / name
             if candidate.exists():
                 copy_into_bundle(candidate)
+
+    if bundle_cfg.get("include_onnx", True) and onnx_path:
+        copy_into_bundle(Path(onnx_path))
 
     if bundle_cfg.get("include_results_csv", True):
         results_csv = run_dir / "results.csv"
@@ -814,12 +894,14 @@ def train_yolo(
     detection_cfg_path = _maybe_export_detection_config(
         config, run_dir, logger=logger, include_position=position_validation_active
     )
+    onnx_path = _maybe_export_onnx(config, run_dir, logger=logger)
     _bundle_run_artifacts(
         config,
         run_dir,
         detection_cfg_path,
         generated_cfg,
         position_validation_active,
+        onnx_path,
         logger,
     )
     artifacts = {
@@ -831,6 +913,8 @@ def train_yolo(
         artifacts["detection_config"] = detection_cfg_path
     if generated_cfg:
         artifacts["position_config"] = generated_cfg
+    if onnx_path:
+        artifacts["onnx"] = onnx_path
     metrics = _load_metrics_csv(run_dir / "results.csv")
     write_experiment(
         run_type="train",

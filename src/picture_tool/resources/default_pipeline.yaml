@@ -258,6 +258,16 @@ yolo_training:
     position_config_path: null  # fallback to position_validation.config_path
     position_config: {}
     include_all_products: false
+
+  export_onnx:
+    enabled: true
+    weights_name: best.pt
+    imgsz: null  # fallback to training imgsz
+    device: null  # fallback to training device
+    half: false
+    dynamic: false
+    simplify: false
+    opset: null
   artifact_bundle:
     enabled: true
     dir_name: bundle
@@ -265,6 +275,7 @@ yolo_training:
     include_weights: true
     include_detection_config: true
     include_position_config: true
+    include_onnx: true
     include_results_csv: true
     include_args_yaml: true
 
