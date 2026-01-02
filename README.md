@@ -127,22 +127,6 @@ picture-tool-color-verify \
   如需依檔名推 expected，加 `--expected-from-name`；有 mapping 就帶 `--expected-map <csv>`.
 - **我只想做位置驗證**  
   確保已訓練好的權重在 `runs/detect/<name>/weights/best.pt`，config 設好 product/area：  
-  `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks position_validation`
-- **我想快速驗環境**  
-  `picture-tool-doctor --create-demo` 產生 demo 資料集並檢查匯入；再用 `configs/demo_doctor.yaml` 跑：  
-  `picture-tool-pipeline --config configs/demo_doctor.yaml --tasks full`
-
-
-## 任務設定與預設
-- `configs/default_pipeline.yaml`：預設任務清單 (`pipeline.tasks`)、分組、各任務參數。
-- `configs/gui_presets.yaml`：GUI 預設組合（可自行修改）。
-- 任務名稱需與 `src/picture_tool/main_pipeline.py` 的 `TASK_HANDLERS` 一致（見「功能總覽」）。
-
-## Position Validation 使用說明
-檢查偵測中心是否落在預期框內，輸出 `position_validation.json`：
-1. 設定檔（config.yaml 或 configs/default_pipeline.yaml）填寫：
-```yaml
-yolo_training:
   position_validation:
     enabled: true
     product: Cable1          # 必填

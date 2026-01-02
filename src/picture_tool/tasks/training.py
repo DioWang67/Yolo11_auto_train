@@ -1,13 +1,53 @@
 import logging
+import json
 from pathlib import Path
 from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.position import run_position_validation
 from picture_tool.pipeline.utils import detect_existing_weights, mtime_latest
 from picture_tool.pipeline.core import Task
+from picture_tool.utils.onnx_exporter import OnnxExporter
+from picture_tool.position.position_config_gen import PositionConfigGenerator
+from picture_tool.utils.detection_config import DetectionConfigExporter
+from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
+from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
 
 def run_yolo_train(config, args):
-    train_yolo(config, args=args)
+    logger = logging.getLogger(__name__)
+    run_dir = train_yolo(config, args=args, logger=logger)
+    
+    # Post-training steps
+    # 1. Position Config Generation
+    try:
+        updated_pos_cfg = PositionConfigGenerator.generate(config, run_dir, logger)
+    except Exception as e:
+        logger.warning(f"Position config generation failed: {e}")
+
+    # 2. ONNX Export
+    try:
+        OnnxExporter.export(config, run_dir, logger)
+    except Exception as e:
+        logger.warning(f"ONNX export failed: {e}")
+
+    # 3. Detection Config Export
+    ycfg = config.get("yolo_training", {})
+    pos_cfg = ycfg.get("position_validation", {})
+    selected_tasks = getattr(args, "tasks", []) or []
+    req_tasks = {str(t) for t in selected_tasks}
+    position_requested = not req_tasks or "position_validation" in req_tasks
+    position_validation_active = bool(
+         isinstance(pos_cfg, dict) and pos_cfg.get("enabled") and position_requested
+    )
+    
+    try:
+        DetectionConfigExporter.export(
+            config, 
+            run_dir, 
+            logger, 
+            include_position=position_validation_active
+        )
+    except Exception as e:
+        logger.warning(f"Detection config export failed: {e}")
 
 
 def run_yolo_evaluation(config, args):
@@ -30,7 +70,7 @@ def run_yolo_evaluation(config, args):
 def run_position_validation_task(config, args):
     """Run offline position validation using trained weights and sample images."""
     ycfg = config.get("yolo_training", {}) if isinstance(config, dict) else {}
-    run_root = Path(str(ycfg.get("project", "./runs/detect")))
+    run_root = Path(str(ycfg.get("project", DEFAULT_RUNS_DIR / "detect")))
     run_name = str(ycfg.get("name", "train"))
     default_run_dir = run_root / run_name
     weights_path, detected_run_dir = detect_existing_weights(config, prefer="position")
@@ -85,18 +125,45 @@ def run_position_validation_task(config, args):
 
 
 def skip_yolo_train(config, args):
-    y = config["yolo_training"]
-    run_dir = Path(y.get("project", "./runs/detect")) / y.get("name", "train")
-    weights = run_dir / "weights" / "best.pt"
-    dataset_dir = Path(y.get("dataset_dir", "./data/split"))
+    y = config.get("yolo_training", {})
+    project = Path(str(y.get("project", DEFAULT_RUNS_DIR / "detect")))
+    name = str(y.get("name", "train"))
+    run_dir = project / name
     
-    # Check if we need to force run to generate auto-config
-    auto_conf = run_dir / "auto_position_config.yaml"
-    need_auto_conf = not auto_conf.exists()
+    metadata_path = run_dir / "last_run_metadata.json"
+    
+    if getattr(args, "force", False):
+        return None
+        
+    if not run_dir.exists() or not metadata_path.exists():
+        return None
+        
+    # Check hashes
+    try:
+        with open(metadata_path, "r") as f:
+            stored_meta = json.load(f)
+            
+        dataset_dir = Path(str(y.get("dataset_dir", DEFAULT_SPLITS_DIR))).resolve()
+        current_data_hash = compute_dir_hash(dataset_dir)
+        current_cfg_hash = compute_config_hash(y)
+        
+        if (stored_meta.get("dataset_hash") == current_data_hash and
+            stored_meta.get("config_hash") == current_cfg_hash and 
+            (run_dir / "weights" / "best.pt").exists()):
+            return "Skipping training: Source dataset and config match last run."
+            
+    except Exception:
+        # Fallback to mtime if hash check fails or file corrupt
+        pass
 
-    if weights.exists() and not need_auto_conf:
+    # Legacy mtime fallback
+    weights = run_dir / "weights" / "best.pt"
+    dataset_dir = Path(str(y.get("dataset_dir", DEFAULT_SPLITS_DIR)))
+    auto_conf = run_dir / "auto_position_config.yaml"
+    if weights.exists() and auto_conf.exists():
         if weights.stat().st_mtime >= mtime_latest([dataset_dir]):
-            return "Found latest best.pt; skipping training."
+            return "Found latest best.pt (mtime check); skipping training."
+            
     return None
 
 

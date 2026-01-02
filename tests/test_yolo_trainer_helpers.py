@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 
 from picture_tool.train import yolo_trainer
+from picture_tool.utils.normalization import normalize_imgsz, normalize_name_sequence
 
 
 def test_ensure_data_yaml_creates_expected_structure(tmp_path):
@@ -20,15 +21,15 @@ def test_ensure_data_yaml_creates_expected_structure(tmp_path):
 
 
 def test_normalize_imgsz_handles_sequences_and_scalars():
-    assert yolo_trainer._normalize_imgsz(["", "512", "256"]) == [512, 256]
-    assert yolo_trainer._normalize_imgsz("640") == [640, 640]
-    assert yolo_trainer._normalize_imgsz(None) is None
+    assert normalize_imgsz(["", "512", "256"]) == [512, 256]
+    assert normalize_imgsz("640") == [640, 640]
+    assert normalize_imgsz(None) is None
 
 
 def test_normalize_name_sequence_accepts_mappings_and_lists():
     mapping = {"1": "first", "0": "zero"}
-    assert yolo_trainer._normalize_name_sequence(mapping) == ["zero", "first"]
-    assert yolo_trainer._normalize_name_sequence(["one", None, "two"]) == [
+    assert normalize_name_sequence(mapping) == ["zero", "first"]
+    assert normalize_name_sequence(["one", None, "two"]) == [
         "one",
         "two",
     ]
