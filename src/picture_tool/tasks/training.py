@@ -47,6 +47,33 @@ def run_position_validation_task(config, args):
             run_dir,
         )
 
+    # Fallback: If no explicit config provided, check for auto-generated one in run_dir
+    pv_cfg = ycfg.get("position_validation", {})
+    
+    # DEBUG: Log current config state
+    logging.getLogger(__name__).info(
+        f"DEBUG: Checking position config. Config keys: {list(pv_cfg.keys())}. "
+        f"Run dir: {run_dir}. Exists: {run_dir.exists()}"
+    )
+
+    if not pv_cfg.get("config") and not pv_cfg.get("config_path"):
+        auto_conf = run_dir / "auto_position_config.yaml"
+        if auto_conf.exists():
+            pv_cfg["config"] = str(auto_conf)
+            ycfg["position_validation"] = pv_cfg
+            config["yolo_training"] = ycfg
+            logging.getLogger(__name__).info(f"Using auto-generated position config: {auto_conf}")
+        else:
+            logging.getLogger(__name__).warning(
+                "Skipping position_validation: Auto-config not found in run_dir. "
+                "This likely means the model detected nothing during training auto-generation."
+            )
+            return None
+    else:
+        logging.getLogger(__name__).info(
+            f"DEBUG: Position config present in keys. Config: {pv_cfg.get('config')}, Path: {pv_cfg.get('config_path')}"
+        )
+
     if not run_dir.exists():
         raise FileNotFoundError(
             "No trained run found for position_validation. "
@@ -62,7 +89,12 @@ def skip_yolo_train(config, args):
     run_dir = Path(y.get("project", "./runs/detect")) / y.get("name", "train")
     weights = run_dir / "weights" / "best.pt"
     dataset_dir = Path(y.get("dataset_dir", "./data/split"))
-    if weights.exists():
+    
+    # Check if we need to force run to generate auto-config
+    auto_conf = run_dir / "auto_position_config.yaml"
+    need_auto_conf = not auto_conf.exists()
+
+    if weights.exists() and not need_auto_conf:
         if weights.stat().st_mtime >= mtime_latest([dataset_dir]):
             return "Found latest best.pt; skipping training."
     return None

@@ -10,6 +10,7 @@ import yaml
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -45,6 +46,8 @@ else:
         from picture_tool.gui.pipeline_controller import PipelineControllerMixin
         from picture_tool.gui.labelimg_launcher import LabelImgLauncher
         from picture_tool.gui.annotation_tracker import AnnotationTracker
+        from picture_tool.gui.config_editor import ConfigEditor
+        from picture_tool.gui.wizards import NewProjectWizard
     except ImportError:
         class PipelineControllerMixin:
             def _init_pipeline_controller(self): self.config = {}
@@ -52,6 +55,8 @@ else:
             def load_config(self): pass
             def start_pipeline(self): pass
             def stop_pipeline(self): pass
+        from picture_tool.gui.config_editor import ConfigEditor
+        class NewProjectWizard: pass # Mock
 
 TASK_OPTIONS: List[tuple[str, str]] = [
     ("format_conversion", "Format Conversion"),
@@ -487,6 +492,10 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         annotation_tab = self._build_annotation_tab()
         self.tabs.addTab(annotation_tab, "📝 圖像標註")
 
+        # Tab 4: Config Editor (New)
+        self.config_editor = ConfigEditor()
+        self.tabs.addTab(self.config_editor, "⚙ 設定編輯器")
+
         dash_layout.addLayout(self._build_log_controls())
         dash_layout.addWidget(self.tabs)
 
@@ -511,20 +520,30 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         browse_btn = QPushButton("📁 瀏覽")
         browse_btn.setToolTip("選擇設定檔 (yaml)")
         browse_btn.clicked.connect(self.browse_config_file)
+        
+        new_proj_btn = QPushButton("✨ 新專案")
+        new_proj_btn.setToolTip("建立並初始化新專案資料夾")
+        new_proj_btn.clicked.connect(self.launch_new_project_wizard)
 
         reload_btn = QPushButton("🔄 重載")
         reload_btn.clicked.connect(self.load_config)
         
+
         default_btn = QPushButton("↺ 重設")
         default_btn.clicked.connect(self.load_default_config)
+
+        save_btn = QPushButton("💾 存擋")
+        save_btn.clicked.connect(self.save_config)
 
         row1 = QHBoxLayout()
         row1.addWidget(self.config_path_edit)
         row1.addWidget(browse_btn)
 
         row2 = QHBoxLayout()
+        row2.addWidget(new_proj_btn)
         row2.addWidget(reload_btn)
         row2.addWidget(default_btn)
+        row2.addWidget(save_btn)
 
         layout.addLayout(row1)
         layout.addLayout(row2)
@@ -673,11 +692,15 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         """覆寫以附帶 UI 狀態更新"""
         PipelineControllerMixin.load_default_config(self)  # type: ignore[misc]
         self._update_config_status()
+        if hasattr(self, "config_editor"):
+            self.config_editor.set_config(self.config)
 
     def load_config(self) -> None:
         """覆寫以附帶 UI 狀態更新"""
         PipelineControllerMixin.load_config(self)  # type: ignore[misc]
         self._update_config_status()
+        if hasattr(self, "config_editor"):
+            self.config_editor.set_config(self.config)
 
     def log_message(self, message: str) -> None:
         self._log_history.append(message)
@@ -770,6 +793,15 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
             self.config_path_edit.setText(file_path)
             self.load_config()
             self._update_config_status()
+
+    def launch_new_project_wizard(self) -> None:
+        """Launch the wizard to create a new project."""
+        dlg = NewProjectWizard(self)
+        if dlg.exec_() == QDialog.Accepted:
+            if hasattr(dlg, 'created_path') and dlg.created_path:
+                self.config_path_edit.setText(str(dlg.created_path).replace('\\', '/'))
+                self.load_config()
+                QMessageBox.information(self, "Loaded", f"Loaded new project config from:\n{dlg.created_path}")
 
     def closeEvent(self, event) -> None:
         if hasattr(self, 'worker_thread') and self.worker_thread and self.worker_thread.isRunning():

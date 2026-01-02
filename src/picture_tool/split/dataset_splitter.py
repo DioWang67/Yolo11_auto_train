@@ -79,8 +79,8 @@ def split_dataset(config, log_file=None, logger=None):
     train_ratio = split_config["split_ratios"]["train"]
     val_ratio = split_config["split_ratios"]["val"]
     test_ratio = split_config["split_ratios"]["test"]
-    input_formats = split_config["input_formats"]
-    label_format = split_config["label_format"]
+    input_formats = split_config.get("input_formats", [".jpg", ".jpeg", ".png", ".bmp"])
+    label_format = split_config.get("label_format", ".txt")
 
     if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-6:
         raise ValueError("split_ratios 必須等於 1")
@@ -210,6 +210,14 @@ def split_dataset(config, log_file=None, logger=None):
     copy_files(test_images, test_labels, "test")
 
     logger.info("檔案已完成分割並複製至訓練/驗證/測試目錄")
+
+    # Copy classes.txt if exists (Crucial for trainer auto-detection)
+    src_classes = label_dir / "classes.txt"
+    dst_classes = output_dir / "classes.txt"
+    if src_classes.exists():
+        shutil.copy(src_classes, dst_classes)
+        logger.info(f"Copied classes.txt to {dst_classes}")
+
     if handler:
         logger.removeHandler(handler)
         handler.close()

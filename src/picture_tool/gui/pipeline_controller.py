@@ -58,6 +58,13 @@ class PipelineControllerMixin:
         except Exception:
             self.log_message(f"[error] {title}: {message}")
 
+    def _show_info(self, title: str, message: str) -> None:
+        try:  # pragma: no cover - UI specific path
+            parent: QWidget | None = self if isinstance(self, QWidget) else None
+            QMessageBox.information(parent, title, message)
+        except Exception:
+            self.log_message(f"[info] {title}: {message}")
+
     def load_default_config(self) -> None:
         path = self._default_config_path()
         config = self._load_config_file(path)
@@ -138,6 +145,29 @@ class PipelineControllerMixin:
                 "tasks": [],
             }
         }
+
+    def save_config(self) -> None:
+        """Save the current configuration to the file specified in the UI."""
+        target: Path | None = None
+        if hasattr(self, "config_path_edit"):
+            try:
+                text = self.config_path_edit.text().strip()
+                if text:
+                    target = Path(text)
+            except Exception:
+                target = None
+        
+        if not target:
+            self._show_warning("No config file", "Please select or enter a path to save the config.")
+            return
+
+        try:
+            with target.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(self.config, handle, allow_unicode=True, sort_keys=False)
+            self.log_message(f"Configuration saved to {target}")
+            self._show_info("Success", f"Config saved to {target}")
+        except Exception as exc:
+            self._show_error("Save Failed", f"Could not save config: {exc}")
 
     # ------------------------------------------------------------------
     # task selection helpers

@@ -34,10 +34,10 @@ def test_log_message_tracks_history(gui):
     assert "hello world" in gui.log_text.toPlainText()
 
 
-def test_status_items_use_arrow_separator(gui):
     first_item = gui.status_list.item(0)
     assert first_item is not None
-    assert "->" in first_item.text()
+    # Changed from "->" to "⚪" in modern UI update
+    assert "⚪" in first_item.text()
 
 
 def test_rebuild_status_items_resets_entries(gui):
