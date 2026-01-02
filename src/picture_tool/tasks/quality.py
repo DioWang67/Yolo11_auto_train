@@ -22,7 +22,8 @@ def run_dataset_splitter(config, args):
 
 
 def skip_dataset_splitter(config, args):
-    sc = config["train_test_split"]
+    sc = config.get("train_test_split")
+    if not sc: return None
     in_dirs = [Path(sc["input"]["image_dir"]), Path(sc["input"]["label_dir"])]
     out_root = Path(sc["output"]["output_dir"])
     out_dirs = [

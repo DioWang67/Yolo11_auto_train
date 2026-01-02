@@ -900,9 +900,29 @@ def train_yolo(
     run_position_during_train = position_validation_active and not requested_tasks
 
     dataset_dir = Path(ycfg.get("dataset_dir", "./datasets/split_dataset")).resolve()
-    names = ycfg.get("class_names") or []
+    names = ycfg.get("class_names")
+    
+    # Auto-detect class names if missing OR if set to default placeholder
+    can_autodetect = not names or (isinstance(names, list) and len(names) == 1 and names[0] == "object")
+    
+    if can_autodetect:
+        possible_classes = dataset_dir / "classes.txt"
+        if possible_classes.exists():
+            try:
+                content = possible_classes.read_text(encoding="utf-8")
+                detected = [line.strip() for line in content.splitlines() if line.strip()]
+                if detected:
+                    names = detected
+                    logger.info(f"Auto-detected class names from {possible_classes}: {names}")
+            except Exception as e:
+                logger.warning(f"Failed to read classes.txt: {e}")
+
     if not isinstance(names, list) or not names:
-        raise ValueError("yolo_training.class_names must be a non-empty list")
+        raise ValueError(
+            "yolo_training.class_names must be a non-empty list. "
+            "Please add it to config.yaml (e.g., class_names: ['dog', 'cat']) "
+            "or ensure classes.txt exists in dataset_dir."
+        )
 
     # Prepare data.yaml
     data_yaml = _ensure_data_yaml(dataset_dir, names)
@@ -953,12 +973,12 @@ def train_yolo(
     logger.info(f"Training completed. Run directory: {run_dir}")
 
     generated_cfg: Optional[Path] = None
-    if position_validation_active:
-        generated_cfg = _auto_generate_position_config(config, run_dir, logger)
-        if generated_cfg:
-            logger.info("Position config generated automatically: %s", generated_cfg)
+    # Always attempt to generate position config for downstream tasks
+    generated_cfg = _auto_generate_position_config(config, run_dir, logger)
+    if generated_cfg:
+        logger.info("Position config generated automatically: %s", generated_cfg)
 
-    if run_position_during_train:
+    if position_validation_active:
         try:
             from picture_tool.position.yolo_position_validator import (
                 run_position_validation,

@@ -6,20 +6,39 @@ from picture_tool.pipeline.core import Task
 
 
 def run_yolo_augmentation(config, args):
+    if "yolo_augmentation" not in config:
+        # Fallback or friendly error
+        raise ValueError(
+            "Config is missing 'yolo_augmentation' section. "
+            "If using an old config, please add this section or recreate project via Wizard."
+        )
     augmentor = YoloDataAugmentor()
-    augmentor.config = config["yolo_augmentation"]
+    augmentor.config = config.get("yolo_augmentation", {})
     augmentor._setup_output_dirs()
     augmentor.augmentations = augmentor._create_augmentations()
     augmentor.process_dataset()
 
 
 def skip_yolo_augmentation(config, args):
-    ic = config["yolo_augmentation"]["input"]
-    oc = config["yolo_augmentation"]["output"]
+    cfg = config.get("yolo_augmentation")
+    if not cfg:
+        # Can't skip if we can't check paths, but run() will raise accurate error
+        return None
+        
+    ic = cfg.get("input", {})
+    oc = cfg.get("output", {})
+    
+    if "image_dir" not in ic or "label_dir" not in ic:
+        return None # Let run() handle validation
+        
     in_dirs = [Path(ic["image_dir"]), Path(ic["label_dir"])]
-    out_dirs = [Path(oc["image_dir"]), Path(oc["label_dir"])]
+    out_dirs = [Path(oc.get("image_dir", "Data/augmented/images")), Path(oc.get("label_dir", "Data/augmented/labels"))]
+    
     if not all(p.exists() for p in in_dirs):
+        # Only raise if we are sure config is intended to be run
+        # but if we are here, task is enabled.
         raise FileNotFoundError(f"Augmentation inputs missing: {in_dirs}")
+        
     if all(exists_and_nonempty(p) for p in out_dirs):
         if mtime_latest(out_dirs) >= mtime_latest(in_dirs):
             return "Outputs are newer than inputs; skipping."
