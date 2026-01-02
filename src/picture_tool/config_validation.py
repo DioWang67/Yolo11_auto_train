@@ -2,51 +2,113 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, Literal
 
-try:  # Optional: use pydantic when available
-    from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-except Exception:  # pragma: no cover
+try:
+    from pydantic import BaseModel, ConfigDict, Field, field_validator, ValidationError
+except ImportError:
     BaseModel = None  # type: ignore
 
 
 class _ManualConfigError(Exception):
-    """Lightweight validation error when pydantic is unavailable."""
-
+    """Fallback error when Pydantic is missing."""
     def __init__(self, messages: List[str]) -> None:
         super().__init__("\n".join(messages))
         self.messages = messages
 
 
+# --- Models ---
 
+if BaseModel:
+    class BaseSchema(BaseModel):
+        model_config = ConfigDict(extra="ignore")  # Ignore unknown keys by default for forward compatibility
 
+    class AugmentationOperation(BaseSchema):
+        probability: float = Field(..., ge=0.0, le=1.0)
+        # Allow flexible extra fields for specific agumentations (e.g. angle, noise_limit)
+        model_config = ConfigDict(extra="allow")
 
-def _manual_validate_augmentation(config: Dict[str, Any], errors: List[str]) -> None:
-    aug = config.get("augmentation", {})
-    ops = aug.get("operations", {})
-    if "flip" in ops:
-        prob = ops["flip"].get("probability")
-        if prob is not None and not (0 <= prob <= 1):
-            errors.append(f"augmentation.operations.flip.probability must be 0-1, got {prob}")
-    if "rotate" in ops:
-        angle = ops["rotate"].get("angle")
-        if isinstance(angle, (list, tuple)) and len(angle) != 2:
-             errors.append(f"augmentation.operations.rotate.angle must be (min, max), got {angle}")
+    class AugmentationSchema(BaseSchema):
+        enabled: bool = True
+        num_images: int = Field(default=0, ge=0)
+        operations: Dict[str, Union[AugmentationOperation, Dict[str, Any]]] = Field(default_factory=dict)
+
+    class ProcessingSchema(BaseSchema):
+        batch_size: int = Field(default=16, gt=0)
+        num_workers: int = Field(default=4, ge=0)
+        device: str = "cpu"
+
+    class PositionValidationSchema(BaseSchema):
+        enabled: bool = False
+        auto_generate: bool = True
+        product: Optional[str] = None
+        area: Optional[str] = None
+        tolerance: float = 0.0
+        sample_dir: Optional[Path] = None
+        
+        @field_validator("sample_dir")
+        @classmethod
+        def _path_exists(cls, v: Optional[Path]) -> Optional[Path]:
+            if v and not v.exists():
+                raise ValueError(f"sample_dir does not exist: {v}")
+            return v
+
+    class YoloTrainingSchema(BaseSchema):
+        dataset_dir: Optional[Path] = None
+        class_names: Optional[List[str]] = None
+        model: Union[str, Path] = "yolo11n.pt"
+        epochs: int = Field(default=100, gt=0)
+        imgsz: int = Field(default=640, gt=0)
+        batch: int = Field(default=16, gt=0)
+        device: str = "cpu"
+        project: Optional[Path] = None
+        name: str = "train"
+        position_validation: Optional[PositionValidationSchema] = None
+        
+        model_config = ConfigDict(extra="allow") # Allow export_onnx, export_detection_config etc.
+
+        @field_validator("class_names")
+        @classmethod
+        def _non_empty_list(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+            if v is not None and len(v) == 0:
+                raise ValueError("class_names must not be empty")
+            return v
+
+        @field_validator("dataset_dir")
+        @classmethod
+        def _dir_exists(cls, v: Optional[Path]) -> Optional[Path]:
+            if v and not v.exists():
+                raise ValueError(f"dataset_dir does not exist: {v}")
+            return v
+
+    class PipelineSchema(BaseSchema):
+        yolo_training: Optional[YoloTrainingSchema] = None
+        augmentation: Optional[AugmentationSchema] = None
+        processing: Optional[ProcessingSchema] = None
 
 
 def _manual_validate(config: Dict[str, Any]) -> None:
-    errors: List[str] = []
-    yolo_cfg = config.get("yolo_training") or {}
-    class_names = yolo_cfg.get("class_names")
-    if class_names is not None and len(class_names) == 0:
-        errors.append("yolo_training.class_names must not be empty when provided")
-    dataset_dir = yolo_cfg.get("dataset_dir")
-    if dataset_dir:
-        path = Path(str(dataset_dir))
-        if not path.exists():
-            errors.append(f"yolo_training.dataset_dir does not exist: {path}")
+    """Fallback manual validation."""
+    errors = []
+    ycfg = config.get("yolo_training") or {}
     
-    _manual_validate_augmentation(config, errors)
+    # Dataset Check
+    ddir = ycfg.get("dataset_dir")
+    if ddir and not Path(str(ddir)).exists():
+        errors.append(f"yolo_training.dataset_dir not found: {ddir}")
+
+    # Class Names Check
+    names = ycfg.get("class_names")
+    if names is not None and not names:
+        errors.append("yolo_training.class_names cannot be empty")
+
+    # Augmentation Check
+    aug = config.get("augmentation") or {}
+    ops = aug.get("operations") or {}
+    for op, params in ops.items():
+        prob = params.get("probability")
+        if prob is not None and not (0 <= prob <= 1):
+             errors.append(f"augmentation.operations.{op}.probability must be 0-1")
 
     if errors:
         raise _ManualConfigError(errors)
@@ -56,79 +118,33 @@ def validate_config_schema(
     config: Dict[str, Any], logger: Optional[logging.Logger] = None, *, strict: bool = False
 ) -> Dict[str, Any]:
     """
-    Validate the config structure.
-
-    - Uses pydantic if installed; otherwise falls back to lightweight checks.
-    - strict=True raises on validation errors; otherwise logs warnings and continues.
+    Validate configuration using Pydantic (if available) or manual checks.
+    
+    Args:
+        config: The configuration dictionary.
+        logger: Logger for warnings.
+        strict: If True, raise exception on ANY validation error.
     """
-    if BaseModel is None:
+    if BaseModel:
+        try:
+            # Pydantic validation
+            PipelineSchema.model_validate(config)
+            return config
+        except ValidationError as e:
+            msg = f"Config validation failed:\n{e}"
+            if strict:
+                raise ValueError(msg) from e
+            if logger:
+                logger.warning(msg)
+            return config
+    else:
+        # Fallback
         try:
             _manual_validate(config)
-        except _ManualConfigError as exc:
+        except _ManualConfigError as e:
             if strict:
-                raise
+                raise ValueError(f"Config validation failed:\n{e}") from e
             if logger:
-                logger.warning("Config validation warnings: " + "; ".join(exc.messages))
+                logger.warning(f"Config validation warnings:\n{e}")
         return config
 
-    class YoloTrainingSchema(BaseModel):
-        model_config = ConfigDict(extra="allow")
-        dataset_dir: Optional[Path] = None
-        class_names: Optional[List[str]] = None
-
-        @field_validator("class_names")
-        @classmethod
-        def _non_empty(cls, value: Optional[List[str]]) -> Optional[List[str]]:
-            if value is not None and len(value) == 0:
-                raise ValueError("class_names must not be empty when provided")
-            return value
-
-        @field_validator("dataset_dir")
-        @classmethod
-        def _dataset_exists(cls, value: Optional[Path]) -> Optional[Path]:
-            if value and not value.exists():
-                raise ValueError(f"dataset_dir does not exist: {value}")
-            return value
-            return value
-
-    class AugmentationOpsSchema(BaseModel):
-        model_config = ConfigDict(extra="allow")
-        # Example specific validations
-        
-    class AugmentationSchema(BaseModel):
-        model_config = ConfigDict(extra="allow")
-        num_images: Optional[int] = None
-        operations: Optional[Dict[str, Any]] = None
-
-        @field_validator("num_images")
-        @classmethod
-        def _positive(cls, v: Optional[int]) -> Optional[int]:
-            if v is not None and v <= 0:
-                raise ValueError("num_images must be positive")
-            return v
-
-    class ProcessingSchema(BaseModel):
-        model_config = ConfigDict(extra="allow")
-        batch_size: Optional[int] = None
-        num_workers: Optional[int] = None
-        
-        @field_validator("batch_size")
-        @classmethod
-        def _positive_batch(cls, v: Optional[int]) -> Optional[int]:
-            if v is not None and v <= 0:
-                raise ValueError("batch_size must be positive")
-            return v
-    class PipelineSchema(BaseModel):
-        model_config = ConfigDict(extra="allow")
-        yolo_training: Optional[YoloTrainingSchema] = None
-        augmentation: Optional[AugmentationSchema] = None
-        processing: Optional[ProcessingSchema] = None
-
-    try:
-        PipelineSchema.model_validate(config)
-    except ValidationError as exc:
-        if strict:
-            raise
-        if logger:
-            logger.warning(f"Config validation warnings:\n{exc}")
-    return config
