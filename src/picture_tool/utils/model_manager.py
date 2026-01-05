@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class ModelManager:
         self.cache: OrderedDict[str, Any] = OrderedDict()
         self.logger = logger
 
-    def get(self, model_path: str, loader_fn: Optional[callable] = None) -> Any:
+    def get(self, model_path: str, loader_fn: Optional[Callable[[str], Any]] = None) -> Any:
         """
         Retrieve a model from cache or load it if not present.
 

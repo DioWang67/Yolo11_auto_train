@@ -60,4 +60,5 @@ def run_artifact_bundle(config, args):
     except Exception as e:
         logger.error(f"Failed to create bundle: {e}")
 
-TASKS = [] # Will likely be imported manually or we can add Task wrapper here if we want standard pattern
+from typing import List, Any
+TASKS: List[Any] = []

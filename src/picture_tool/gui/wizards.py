@@ -109,7 +109,7 @@ class NewProjectWizard(QDialog):
         with (root / "config.yaml").open("w", encoding="utf-8") as f:
             yaml.safe_dump(config_data, f, sort_keys=False, allow_unicode=True)
 
-    def _generate_default_config(self, root: Path, class_names: list[str] = None) -> dict:
+    def _generate_default_config(self, root: Path, class_names: Optional[list[str]] = None) -> dict:
         """Generates a config dict with absolute paths for the new project."""
         if class_names is None:
             class_names = ["object"]

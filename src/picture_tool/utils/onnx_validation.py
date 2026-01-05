@@ -25,7 +25,7 @@ def validate_onnx_structure(onnx_path: Path) -> None:
     if not _is_package_available("onnx"):
         raise ImportError("ONNX validation requires 'onnx' package. Install via: pip install onnx")
 
-    import onnx
+    import onnx # type: ignore
 
     onnx_path = onnx_path.resolve()
     if not onnx_path.exists():
@@ -66,8 +66,8 @@ def validate_onnx_runtime(
         logger.warning("onnxruntime not installed, skipping runtime smoke test.")
         return True
 
-    import onnxruntime as ort
-    import numpy as np
+    import onnxruntime as ort # type: ignore
+    import numpy as np # type: ignore
 
     logger.info(f"Starting ONNX runtime smoke test for: {onnx_path}")
     
@@ -119,7 +119,7 @@ def validate_onnx_runtime(
                     dummy_shape.append(1)
 
         # Handle dtype
-        numpy_dtype = np.float32
+        numpy_dtype: Any = np.float32
         if "float16" in input_type:
             numpy_dtype = np.float16
         elif "uint8" in input_type:

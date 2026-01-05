@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, 
     QSpinBox, QDoubleSpinBox, QScrollArea, QTabWidget, QCheckBox,
@@ -13,10 +13,10 @@ class ConfigEditor(QWidget):
     Updates the internal config dictionary in real-time or on demand.
     """
 
-    def __init__(self, config: Dict[str, Any] = None):
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__()
         self.config = config or {}
-        self._inputs = {}
+        self._inputs: Dict[str, QWidget] = {}
         self._init_ui()
 
     def set_config(self, config: Dict[str, Any]):

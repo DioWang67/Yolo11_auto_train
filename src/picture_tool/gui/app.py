@@ -53,7 +53,8 @@ else:
             def load_config(self): pass
             def start_pipeline(self): pass
             def stop_pipeline(self): pass
-        from picture_tool.gui.config_editor import ConfigEditor
+        class ConfigEditor:
+            pass # Mock
         class NewProjectWizard:
             pass # Mock
 

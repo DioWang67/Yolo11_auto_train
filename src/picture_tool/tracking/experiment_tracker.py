@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 try:
-    import mlflow
+    import mlflow # type: ignore
 except ImportError:
-    mlflow = None
+    mlflow = None # type: ignore
 
 
 class ExperimentTracker(ABC):
@@ -37,6 +37,7 @@ class MLflowTracker(ExperimentTracker):
     """MLflow implementation of ExperimentTracker."""
 
     def __init__(self, experiment_name: str = "yolo_training", tracking_uri: Optional[str] = None):
+        self._enabled: bool = True
         if mlflow is None:
             logging.warning("mlflow not installed. Tracking will be disabled.")
             self._enabled = False
