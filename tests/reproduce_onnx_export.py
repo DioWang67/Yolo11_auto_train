@@ -1,7 +1,6 @@
 
 import logging
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import pytest
 from picture_tool.train import yolo_trainer
 

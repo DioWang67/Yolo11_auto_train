@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Optional, Union
 
 try:
     from pydantic import BaseModel, ConfigDict, Field, field_validator, ValidationError

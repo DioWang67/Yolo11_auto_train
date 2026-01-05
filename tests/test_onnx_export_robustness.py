@@ -1,7 +1,7 @@
 
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 import pytest
 from picture_tool.train import yolo_trainer
 from picture_tool.utils import onnx_validation
@@ -159,7 +159,7 @@ def test_path_resolution_strategies(mock_yolo, tmp_path, mock_onnx_validation):
 
 def test_runtime_validation_success():
     onnx_path = Path("test.onnx")
-    logger = MagicMock()
+
     
     # Mock ort
     with patch("picture_tool.utils.onnx_validation._is_package_available", return_value=True), \

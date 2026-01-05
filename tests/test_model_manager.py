@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import Mock
 from picture_tool.utils.model_manager import ModelManager
 
 class DummyModel:
@@ -10,15 +9,16 @@ def test_model_manager_lru():
     """Test standard LRU eviction behavior."""
     manager = ModelManager(capacity=2)
     
-    loader = lambda path: DummyModel(path)
+    def loader(path):
+        return DummyModel(path)
     
     # Load 1
-    m1 = manager.get("model1", loader)
+    manager.get("model1", loader)
     assert "model1" in manager
     assert len(manager) == 1
     
     # Load 2
-    m2 = manager.get("model2", loader)
+    manager.get("model2", loader)
     assert "model2" in manager
     assert len(manager) == 2
     
@@ -26,7 +26,7 @@ def test_model_manager_lru():
     manager.get("model1", loader)
     
     # Load 3 (should evict 2, because 1 was just used)
-    m3 = manager.get("model3", loader)
+    manager.get("model3", loader)
     
     assert "model1" in manager
     assert "model3" in manager
@@ -36,7 +36,8 @@ def test_model_manager_lru():
 def test_model_manager_capacity_update():
     """Test that reducing capacity triggers eviction."""
     manager = ModelManager(capacity=5)
-    loader = lambda path: DummyModel(path)
+    def loader(path):
+        return DummyModel(path)
     
     for i in range(5):
         manager.get(f"model{i}", loader)
@@ -65,7 +66,8 @@ def test_model_manager_loader_error():
 
 def test_model_manager_clear():
     manager = ModelManager(capacity=2)
-    loader = lambda path: DummyModel(path)
+    def loader(path):
+        return DummyModel(path)
     manager.get("m1", loader)
     manager.clear()
     assert len(manager) == 0

@@ -1,15 +1,13 @@
-
 import io
 import logging
-from typing import Optional, List
+from contextlib import asynccontextmanager
 from pathlib import Path
+
 
 try:
     from fastapi import FastAPI, File, UploadFile, HTTPException
-    from fastapi.responses import JSONResponse
     import uvicorn
     from PIL import Image
-    import numpy as np
 except ImportError:
     FastAPI = None
 
@@ -27,8 +25,6 @@ def load_model(model_path: str):
         raise RuntimeError("ultralytics not installed")
     MODEL_INSTANCE = YOLO(model_path)
     logging.info(f"Model loaded from {model_path}")
-
-from contextlib import asynccontextmanager
 
 # ... imports ...
 

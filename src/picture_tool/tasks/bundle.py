@@ -1,8 +1,6 @@
 import logging
-import shutil
 import zipfile
 from pathlib import Path
-from picture_tool.constants import DEFAULT_RUNS_DIR
 from picture_tool.pipeline.utils import detect_existing_weights
 
 def run_artifact_bundle(config, args):

@@ -1,8 +1,7 @@
 import hashlib
 import json
-import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 def compute_dir_hash(directory: Path, glob_pattern: str = "**/*") -> str:
     """Compute a single hash for a directory structure (filenames + sizes + mtimes)."""

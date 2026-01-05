@@ -1,6 +1,5 @@
 
 import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from picture_tool.gui.wizards import NewProjectWizard

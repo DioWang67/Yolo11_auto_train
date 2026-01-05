@@ -1,8 +1,7 @@
 import logging
-import shutil
 import json
 from pathlib import Path
-from typing import Any, List, Mapping, Optional
+from typing import List, Optional
 
 import yaml
 from picture_tool.utils.experiment import write_experiment

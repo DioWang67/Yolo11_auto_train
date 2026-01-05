@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, 
     QSpinBox, QDoubleSpinBox, QScrollArea, QTabWidget, QCheckBox,
-    QGroupBox, QLabel
+    QLabel
 )
-from PyQt5.QtCore import Qt
 
 class ConfigEditor(QWidget):
     """
@@ -167,18 +166,24 @@ class ConfigEditor(QWidget):
             # Block signals to prevent feedback loop
             widget.blockSignals(True)
             if isinstance(widget, QSpinBox):
-                if val is not None: widget.setValue(int(val))
+                if val is not None:
+                    widget.setValue(int(val))
             elif isinstance(widget, QDoubleSpinBox):
-                 if val is not None: widget.setValue(float(val))
+                 if val is not None:
+                     widget.setValue(float(val))
             elif isinstance(widget, QCheckBox):
-                 if val is not None: widget.setChecked(bool(val))
+                 if val is not None:
+                     widget.setChecked(bool(val))
             elif isinstance(widget, QLineEdit):
-                 if val is not None: widget.setText(str(val))
+                 if val is not None:
+                     widget.setText(str(val))
             elif isinstance(widget, QComboBox):
                  if val is not None: 
                      idx = widget.findText(str(val))
-                     if idx >= 0: widget.setCurrentIndex(idx)
-                     else: widget.setCurrentText(str(val))
+                     if idx >= 0:
+                         widget.setCurrentIndex(idx)
+                     else:
+                         widget.setCurrentText(str(val))
             widget.blockSignals(False)
 
     def _get_config_value(self, key: str) -> Any:

@@ -29,11 +29,9 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QFrame,
     QSizePolicy,
-    QScrollArea,
     QGroupBox,
     QMessageBox,
     QInputDialog,
-    QColorDialog,
 )
 
 # 模擬 Mixin 以防導入失敗
@@ -56,7 +54,8 @@ else:
             def start_pipeline(self): pass
             def stop_pipeline(self): pass
         from picture_tool.gui.config_editor import ConfigEditor
-        class NewProjectWizard: pass # Mock
+        class NewProjectWizard:
+            pass # Mock
 
 TASK_OPTIONS: List[tuple[str, str]] = [
     ("format_conversion", "Format Conversion"),

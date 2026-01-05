@@ -1,5 +1,22 @@
-# Annotation management methods (to be appended to PictureToolGUI class)
+from pathlib import Path
 
+from PyQt5 import QtGui
+from PyQt5.QtWidgets import (
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 def _build_annotation_tab(self) -> QWidget:
     """Build the annotation management tab."""
     container = QWidget()

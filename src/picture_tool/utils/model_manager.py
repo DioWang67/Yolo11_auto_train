@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
-from pathlib import Path
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 import yaml
 from PyQt5.QtWidgets import QApplication
 

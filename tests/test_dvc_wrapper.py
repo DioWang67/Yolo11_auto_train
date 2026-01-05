@@ -1,7 +1,6 @@
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from picture_tool.utils.dvc_wrapper import DVCWrapper
-import shutil
 
 @patch("shutil.which")
 def test_dvc_not_installed(mock_which):

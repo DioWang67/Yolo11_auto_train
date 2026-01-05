@@ -20,7 +20,7 @@ def run_yolo_train(config, args):
     # Post-training steps
     # 1. Position Config Generation
     try:
-        updated_pos_cfg = PositionConfigGenerator.generate(config, run_dir, logger)
+        PositionConfigGenerator.generate(config, run_dir, logger)
     except Exception as e:
         logger.warning(f"Position config generation failed: {e}")
 
