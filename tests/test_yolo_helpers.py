@@ -1,7 +1,7 @@
 import os
 import time
 
-import pytest
+
 
 from picture_tool.eval.yolo_evaluator import (
     _candidate_runs,

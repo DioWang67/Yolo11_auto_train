@@ -1,6 +1,5 @@
 
 import pytest
-from pathlib import Path
 from picture_tool.config_validation import validate_config_schema
 from picture_tool.serve import app
 

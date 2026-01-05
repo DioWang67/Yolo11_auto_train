@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLineEdit, QPushButton, 
-    QFileDialog, QMessageBox, QLabel, QHBoxLayout
+    QFileDialog, QMessageBox, QHBoxLayout
 )
 
 class NewProjectWizard(QDialog):

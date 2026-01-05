@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, MutableMapping
+from typing import Any, Dict, Optional, MutableMapping
 
 try:
     from ultralytics import YOLO # type: ignore
@@ -23,9 +23,8 @@ class OnnxExporter:
         cwd = Path.cwd()
 
         # 1. Fail-fast dependency checks
-        try:
-            import onnx
-        except ImportError:
+        import importlib.util
+        if importlib.util.find_spec("onnx") is None:
             logger.error("ONNX export failed: 'onnx' package not found.")
             raise ImportError(
                 "ONNX export requires package onnx. Install via: pip install onnx"
@@ -61,9 +60,8 @@ class OnnxExporter:
             
             # Check onnxsim availability if simplify requested
             if simplify:
-                try:
-                    import onnxsim
-                except ImportError:
+                import importlib.util
+                if importlib.util.find_spec("onnxsim") is None:
                     logger.warning(
                         "ONNX export: simplify=True requested but 'onnxsim' not found. "
                         "Falling back to simplify=False."
