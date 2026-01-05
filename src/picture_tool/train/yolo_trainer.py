@@ -183,7 +183,7 @@ def train_yolo(
         # Log to MLflow/Tracker
         if metrics:
             # Take the last row of metrics
-            last_metrics = {k.strip(): float(v) for k, v in metrics[-1].items() if isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.', '', 1).isdigit())}
+            last_metrics = {k.strip(): float(v) for k, v in metrics.items() if isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.', '', 1).isdigit())}
             tracker.log_metrics(last_metrics)
         
         tracker.log_artifact(str(run_dir / "results.csv"))

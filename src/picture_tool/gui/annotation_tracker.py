@@ -41,7 +41,7 @@ class AnnotationTracker:
             return self._empty_stats()
         
         # Get all image files
-        image_files = set()
+        image_files: set[str] = set()
         for ext in self.image_extensions:
             image_files.update(
                 f.stem for f in image_dir.glob(f"*{ext}")

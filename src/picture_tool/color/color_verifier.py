@@ -569,7 +569,7 @@ def _rule_green_correction(
 
     if green_ratio > GREEN_DOMINANCE_RATIO:
         context.debug_info["green_correction"] = True
-        return "Green", green_ratio
+        return "Green", float(green_ratio)
     return None
 
 
