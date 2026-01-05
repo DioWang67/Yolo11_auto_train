@@ -16,3 +16,15 @@ matplotlib.use("Agg")
 import tqdm.std
 tqdm.std.TMonitor = type('TMonitor', (), {'__init__': lambda *args, **kwargs: None, 'exit': lambda *args: None})
 tqdm.tqdm.monitor_interval = 0
+
+# Aggressive garbage collection to prevent segfaults during teardown
+import gc
+import pytest
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_resources():
+    """Force cleanup of resources after test session to prevent segfaults."""
+    yield
+    # Force garbage collection before exit
+    gc.collect()
+    gc.collect()  # Double call to ensure circular references are cleaned
