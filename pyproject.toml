@@ -102,3 +102,12 @@ picture_tool = [
   "py.typed",
   "**/*.yaml",
 ]
+
+[tool.ruff]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    "src/picture_tool/libs/labelImg",
+]
