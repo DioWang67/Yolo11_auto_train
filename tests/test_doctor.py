@@ -1,6 +1,4 @@
-import pytest
-from unittest.mock import MagicMock, patch
-import sys
+from unittest.mock import patch
 from picture_tool import doctor
 
 def test_check_import_success():
@@ -16,7 +14,7 @@ def test_check_import_failure():
 def test_check_command_success():
     # echo is available on all platforms (shell=True needed mostly, but doctor uses list args)
     # We can mock subprocess.run for deterministic behavior
-    with patch("subprocess.run") as mock_run:
+    with patch("subprocess.run"):
         ok, msg = doctor._check_command(["dummy", "--version"])
         assert ok is True
         assert msg == ""
