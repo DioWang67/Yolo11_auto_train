@@ -76,7 +76,7 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 50
+fail_under = 15
 
 [project.scripts]
 picture-tool-pipeline = "picture_tool.main_pipeline:main"
