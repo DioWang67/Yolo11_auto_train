@@ -2,6 +2,7 @@ import io
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 
 try:
@@ -18,6 +19,7 @@ except ImportError:
 
 app = FastAPI(title="YOLO11 Inference Service") if FastAPI is not None else None
 MODEL_INSTANCE = None
+STARTUP_MODEL_PATH: Optional[str] = None
 
 def load_model(model_path: str):
     global MODEL_INSTANCE

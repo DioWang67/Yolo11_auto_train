@@ -121,11 +121,11 @@ class LabelImgLauncher:
             # Build command
             if str(self.labelimg_executable).endswith(".py"):
                 # Run vendored script
-                cmd = [sys.executable, self.labelimg_executable]
+                cmd: List[str] = [sys.executable, str(self.labelimg_executable)]
             elif self.labelimg_executable == "python_module":
                 cmd = [sys.executable, "-m", "labelImg"]
             else:
-                cmd = [self.labelimg_executable]
+                cmd = [str(self.labelimg_executable)]
             
             # Add arguments
             cmd.append(str(input_dir))
@@ -142,7 +142,7 @@ class LabelImgLauncher:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=str(Path(self.labelimg_executable).parent) if str(self.labelimg_executable).endswith(".py") else None
+                cwd=str(Path(str(self.labelimg_executable)).parent) if str(self.labelimg_executable).endswith(".py") else None
             )
             
             logger.info(f"LabelImg launched with PID: {self.process.pid}")

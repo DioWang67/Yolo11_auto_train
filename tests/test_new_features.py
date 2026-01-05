@@ -6,7 +6,7 @@ from picture_tool.serve import app
 try:
     from fastapi.testclient import TestClient
 except ImportError:
-    TestClient = None
+    TestClient = None  # type: ignore
 
 def test_pydantic_valid_config(tmp_path):
     d = tmp_path / "data"
@@ -37,7 +37,7 @@ def test_pydantic_invalid_config():
         pass
 
 def test_serving_endpoint():
-    if not TestClient or not app:
+    if TestClient is None or app is None:
         pytest.skip("FastAPI not installed")
     
     client = TestClient(app)

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -102,7 +103,7 @@ class DummyController(pipeline_controller.PipelineControllerMixin):
     def _validate_pipeline_configuration(self, tasks):
         return []
 
-    def _set_task_status(self, task, message, color):
+    def _set_task_status(self, task: str, message: str, color: Any = None) -> None:
         pass
 
     def refresh_metrics_dashboard(self):
@@ -188,51 +189,33 @@ def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
 
     created = SimpleNamespace(start_called=False)
 
+    class DummySignal:
+        def __init__(self):
+            self._callbacks = []
+        def connect(self, callback):
+            self._callbacks.append(callback)
+        def emit(self, *args, **kwargs):
+            for cb in self._callbacks:
+                cb(*args, **kwargs)
+
     class DummyThread:
         def __init__(self, tasks, cfg, cfg_path):
             created.tasks = tasks
             created.cfg = cfg
             created.cfg_path = cfg_path
+            # Define signals as instance attributes
+            self.progress_updated = DummySignal()
+            self.task_started = DummySignal()
+            self.task_completed = DummySignal()
+            self.log_message = DummySignal()
+            self.finished_signal = DummySignal()
+            self.error_occurred = DummySignal()
 
         def start(self):
             created.start_called = True
 
-        def progress_updated(self):
-            pass
-
-        def task_started(self, *args, **kwargs):
-            pass
-
-        def task_completed(self, *args, **kwargs):
-            pass
-
-        def log_message(self, *args, **kwargs):
-            pass
-
-        def finished_signal(self, *args, **kwargs):
-            pass
-
-        def error_occurred(self, *args, **kwargs):
-            pass
-
-        # mimic Qt connect pattern
-        def __getattr__(self, item):
-            if item.endswith("connect"):
-                return lambda callback: None
-            return super().__getattribute__(item)
-
-    def _factory(tasks, cfg, cfg_path):
-        thread = DummyThread(tasks, cfg, cfg_path)
-
-        # Provide connect callables
-        thread.progress_updated = SimpleNamespace(connect=lambda cb: None)
-        thread.task_started = SimpleNamespace(connect=lambda cb: None)
-        thread.task_completed = SimpleNamespace(connect=lambda cb: None)
-        thread.log_message = SimpleNamespace(connect=lambda cb: None)
-        thread.finished_signal = SimpleNamespace(connect=lambda cb: None)
-        thread.error_occurred = SimpleNamespace(connect=lambda cb: None)
-
-        return thread
+    def _factory(tasks, cfg, cfg_path, **kwargs):
+        return DummyThread(tasks, cfg, cfg_path)
 
     monkeypatch.setattr(pipeline_controller, "WorkerThread", _factory)
 

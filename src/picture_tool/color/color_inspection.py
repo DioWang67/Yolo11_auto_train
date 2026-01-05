@@ -826,7 +826,7 @@ class ImageCanvas(QtWidgets.QLabel):
             alpha[..., 0] = 30
             alpha[..., 1] = 190
             alpha[..., 2] = 255
-            alpha[..., 3] = (resized * 200).astype(np.uint8)
+            alpha[..., 3] = (resized.astype(float) * 200).astype(np.uint8)
             overlay_img = QtGui.QImage(
                 alpha.data, display_w, display_h, QtGui.QImage.Format.Format_RGBA8888
             )

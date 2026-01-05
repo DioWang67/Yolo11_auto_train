@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore
 
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]

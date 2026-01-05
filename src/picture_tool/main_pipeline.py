@@ -65,12 +65,12 @@ def load_config_if_updated(config_path, config, logger):
     last_mtime = getattr(load_config_if_updated, "last_mtime", None)
 
     if last_mtime is None:
-        load_config_if_updated.last_mtime = current_mtime
+        load_config_if_updated.last_mtime = current_mtime  # type: ignore
         return config
 
     if current_mtime > last_mtime:
         logger.info("Detected configuration change; reloading.")
-        load_config_if_updated.last_mtime = current_mtime
+        load_config_if_updated.last_mtime = current_mtime  # type: ignore
         return _load_config_snapshot(str(config_file.resolve()), current_mtime)
 
     return config
