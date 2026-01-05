@@ -87,7 +87,7 @@ async def predict(file: UploadFile = File(...), conf: float = 0.25):
         raise HTTPException(status_code=500, detail=str(e))
 
 def main():
-    if not FastAPI:
+    if FastAPI is None:
         print("FastAPI/Uvicorn not installed. Please pip install fastapi uvicorn python-multipart")
         return
     import argparse
