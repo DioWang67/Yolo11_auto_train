@@ -7,7 +7,6 @@ import os
 # MUST be set before importing tqdm anywhere
 os.environ["TQDM_DISABLE"] = "1"
 
-import pytest
 import matplotlib
 
 # Configure matplotlib to non-interactive backend (must be before pyplot import)
