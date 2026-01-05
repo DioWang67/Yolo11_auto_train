@@ -16,7 +16,7 @@ try:
 except ImportError:
     YOLO = None # type: ignore
 
-app = FastAPI(title="YOLO11 Inference Service") if FastAPI else None
+app = FastAPI(title="YOLO11 Inference Service") if FastAPI is not None else None
 MODEL_INSTANCE = None
 
 def load_model(model_path: str):
@@ -25,8 +25,6 @@ def load_model(model_path: str):
         raise RuntimeError("ultralytics not installed")
     MODEL_INSTANCE = YOLO(model_path)
     logging.info(f"Model loaded from {model_path}")
-
-# ... imports ...
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -43,7 +41,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown logic (if any)
 
-app = FastAPI(title="YOLO11 Inference Service", lifespan=lifespan) if FastAPI else None
+# Re-create app with lifespan if supported
+app = FastAPI(title="YOLO11 Inference Service", lifespan=lifespan) if FastAPI is not None else None
 
 
 @app.get("/health")

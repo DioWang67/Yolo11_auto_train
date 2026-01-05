@@ -19,7 +19,7 @@ class _ManualConfigError(Exception):
 
 # --- Models ---
 
-if BaseModel:
+if BaseModel is not None:
     class BaseSchema(BaseModel):
         model_config = ConfigDict(extra="ignore")  # Ignore unknown keys by default for forward compatibility
 
@@ -125,7 +125,7 @@ def validate_config_schema(
         logger: Logger for warnings.
         strict: If True, raise exception on ANY validation error.
     """
-    if BaseModel:
+    if BaseModel is not None:
         try:
             # Pydantic validation
             PipelineSchema.model_validate(config)
@@ -147,4 +147,3 @@ def validate_config_schema(
             if logger:
                 logger.warning(f"Config validation warnings:\n{e}")
         return config
-

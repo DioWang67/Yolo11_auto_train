@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from picture_tool.gui.pipeline_controller import PipelineControllerMixin
     from picture_tool.gui.labelimg_launcher import LabelImgLauncher
     from picture_tool.gui.annotation_tracker import AnnotationTracker
+    from picture_tool.gui.config_editor import ConfigEditor
+    from picture_tool.gui.wizards import NewProjectWizard
 else:
     try:
         from picture_tool.gui.pipeline_controller import PipelineControllerMixin
