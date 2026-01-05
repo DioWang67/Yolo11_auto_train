@@ -73,6 +73,7 @@ TASK_OPTIONS: List[tuple[str, str]] = [
     ("dataset_lint", "Dataset Lint"),
     ("aug_preview", "Augmentation Preview"),
     ("batch_inference", "Batch Inference"),
+    ("artifact_bundle", "Artifact Bundle (Zip)"),
 ]
 
 TASK_LABEL_TO_KEY = {label: key for key, label in TASK_OPTIONS}
@@ -535,9 +536,17 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         save_btn = QPushButton("💾 存擋")
         save_btn.clicked.connect(self.save_config)
 
+        self.product_override_edit = QLineEdit()
+        self.product_override_edit.setPlaceholderText("選填: 產品名稱 (如 Cable1)")
+        self.product_override_edit.setToolTip("若填寫，將自動設定 data/raw/{產品}/images 為輸入並覆寫專案名稱。")
+
         row1 = QHBoxLayout()
         row1.addWidget(self.config_path_edit)
         row1.addWidget(browse_btn)
+
+        row_prod = QHBoxLayout()
+        row_prod.addWidget(QLabel("Product:"))
+        row_prod.addWidget(self.product_override_edit)
 
         row2 = QHBoxLayout()
         row2.addWidget(new_proj_btn)
@@ -546,6 +555,7 @@ class PictureToolGUI(QMainWindow, PipelineControllerMixin):
         row2.addWidget(save_btn)
 
         layout.addLayout(row1)
+        layout.addLayout(row_prod)
         layout.addLayout(row2)
 
         self.config_status_label = QLabel("尚未載入設定")

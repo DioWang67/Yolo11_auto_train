@@ -33,6 +33,7 @@ def run(
     weights: Optional[str] = typer.Option(None, help="Override weights for evaluation."),
     infer_input: Optional[str] = typer.Option(None, help="Override batch inference input."),
     infer_output: Optional[str] = typer.Option(None, help="Override batch inference output."),
+    product: Optional[str] = typer.Option(None, help="Override product name (e.g., Cable1)."),
 ):
     """Run the pipeline with specified tasks and overrides."""
     logger = setup_logging("pipeline.log")
@@ -56,6 +57,7 @@ def run(
         "weights": weights,
         "infer_input": infer_input,
         "infer_output": infer_output,
+        "product": product,
         "input_format": None, # Not exposed in this command yet
         "output_format": None, # Not exposed in this command yet
     })()

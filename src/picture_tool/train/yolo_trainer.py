@@ -11,6 +11,11 @@ from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
 from picture_tool.tracking.experiment_tracker import get_tracker
 
+# Define a stop exception for cleaner handling
+class TrainingInterrupted(Exception):
+    pass
+
+
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
@@ -112,15 +117,40 @@ def train_yolo(
     })
 
     model = YOLO(model_arg)
-    train_results = model.train(
-        data=str(data_yaml),
-        epochs=epochs,
-        imgsz=imgsz,
-        batch=batch,
-        device=device,
-        project=project,
-        name=name,
-    )
+
+
+    # [NEW] Add Stop Callback if event provided
+    stop_event = getattr(args, "stop_event", None)
+    if stop_event:
+        def on_train_epoch_end(trainer):
+            if stop_event.is_set():
+                logger.info("Stop event detected. Stopping YOLO training gracefully.")
+                trainer.stop = True
+                raise TrainingInterrupted("Training stopped by user.")
+
+        model.add_callback("on_train_epoch_end", on_train_epoch_end)
+
+    try:
+        train_results = model.train(
+            data=str(data_yaml),
+            epochs=epochs,
+            imgsz=imgsz,
+            batch=batch,
+            device=device,
+            project=project,
+            name=name,
+            exist_ok=True,
+        )
+    except TrainingInterrupted:
+        logger.info("Training interrupted by user.")
+        return Path(project) / name # Return run dir even if partial
+    except Exception as e:
+        # Check if it was our interrupt disguised
+        if "Training stopped by user" in str(e):
+             logger.info("Training interrupted by user.")
+             return Path(project) / name
+        raise e
+
     run_dir: Optional[Path] = None
     if hasattr(train_results, "save_dir"):
         candidate = getattr(train_results, "save_dir")

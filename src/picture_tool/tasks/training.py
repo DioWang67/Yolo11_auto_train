@@ -11,6 +11,7 @@ from picture_tool.position.position_config_gen import PositionConfigGenerator
 from picture_tool.utils.detection_config import DetectionConfigExporter
 from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
+from picture_tool.tasks.bundle import run_artifact_bundle
 
 def run_yolo_train(config, args):
     logger = logging.getLogger(__name__)
@@ -186,5 +187,11 @@ TASKS = [
         run=run_position_validation_task,
         description="Offline position validation.",
         dependencies=[],  # 移除硬依賴,改為運行時檢查權重
+    ),
+    Task(
+        name="artifact_bundle",
+        run=run_artifact_bundle,
+        description="Bundle training artifacts (Zip).",
+        dependencies=[],
     ),
 ]
