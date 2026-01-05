@@ -1,6 +1,7 @@
 import logging
 import zipfile
 from pathlib import Path
+from typing import List, Any
 from picture_tool.pipeline.utils import detect_existing_weights
 
 def run_artifact_bundle(config, args):
@@ -60,5 +61,4 @@ def run_artifact_bundle(config, args):
     except Exception as e:
         logger.error(f"Failed to create bundle: {e}")
 
-from typing import List, Any
 TASKS: List[Any] = []

@@ -1,7 +1,7 @@
 import logging
 import importlib.util
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Union, Any
 
 logger = logging.getLogger(__name__)
 
