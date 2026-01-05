@@ -115,6 +115,33 @@ picture-tool-color-verify \
 - 核心/CLI 拆分：任務執行集中在核心，CLI/GUI 只負責參數解析並自動處理依賴。
 - 實驗紀錄：train/eval 後在 `reports/experiments/*.yaml|json` 留存 config、環境、git commit、產物路徑與 metrics。
 - QC 彙總：`qc_summary` 任務（`picture-tool-pipeline --tasks qc_summary`）會把 color verification / position validation / batch inference 輸出整合成一份 JSON。
+  支援 `/predict` 接口，接收圖片上傳，回傳 JSON 格式的偵測結果。
+
+### 3. 容器化部署 (Docker Deployment)
+支援標準化容器部署，適用於雲端或邊緣裝置。
+- **建置映像檔**：
+  ```bash
+  docker build -t picture-tool .
+  ```
+- **啟動服務**：
+  ```bash
+  docker run -p 8000:8000 picture-tool
+  ```
+  服務啟動後，API 將在 `http://localhost:8000` 上線。
+
+### 4. 數據版本控制 (DVC)
+支援大規模數據集管理。
+- **初始化**：
+  ```bash
+  dvc init
+  ```
+- **同步數據**：
+  pipeline 已整合 `data_sync` 任務，執行時會自動檢查並拉取最新數據（需先配置 remote）。
+  ```bash
+  picture-tool-pipeline --tasks data_sync
+  ```
+
+
 - 健康檢查：`picture-tool-doctor --create-demo` 檢查 ffmpeg/torch/onnxruntime 等匯入並產生 `data/demo_doctor` 小型資料集，可配合 `configs/demo_doctor.yaml` 直接跑。
 - 任務查詢：`picture-tool-pipeline --list-tasks` 或 `--describe-task <name>` 可查看可用任務、依賴與描述。
 

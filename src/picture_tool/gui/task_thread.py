@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 from types import SimpleNamespace
 from typing import Iterable, Optional
 
@@ -42,15 +43,19 @@ class WorkerThread(QThread):
         tasks: Iterable[str],
         config: dict,
         config_path: Optional[str] = None,
+        product: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.tasks = list(tasks)
         self.config = copy.deepcopy(config)
         self.config_path = config_path
+        self.product = product
         self._cancel_requested = False
+        self.stop_event = threading.Event()
 
     def request_stop(self) -> None:
         self._cancel_requested = True
+        self.stop_event.set()
 
     # ------------------------------------------------------------------
     # QThread implementation
@@ -155,6 +160,8 @@ class WorkerThread(QThread):
             weights=None,
             infer_input=None,
             infer_output=None,
+            product=self.product,
+            stop_event=self.stop_event,
         )
 
     def _emit_progress(self, completed: int, total: int) -> None:

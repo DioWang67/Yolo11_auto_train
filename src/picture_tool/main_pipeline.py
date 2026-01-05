@@ -100,6 +100,36 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
     if getattr(args, "name", None):
         yt["name"] = args.name
         changed.append(("name", yt["name"]))
+    
+    # [NEW] Product Override
+    product = getattr(args, "product", None)
+    if product:
+        # 1. Update Augmentation Inputs
+        ya = config.get("yolo_augmentation", {})
+        inp = ya.get("input", {})
+        
+        target_img_dir = f"./data/raw/{product}/images"
+        target_lbl_dir = f"./data/raw/{product}/labels"
+        
+        if not Path(target_img_dir).exists():
+             raise FileNotFoundError(f"Product directory not found: {target_img_dir}\n請確認 data/raw/{product} 是否存在。")
+        
+        inp["image_dir"] = target_img_dir
+        inp["label_dir"] = target_lbl_dir
+        ya["input"] = inp
+        config["yolo_augmentation"] = ya
+        changed.append(("yolo_augmentation.input", f"data/raw/{product}"))
+
+        # 2. Update Training Name
+        yt["name"] = product
+        changed.append(("yolo_training.name", product))
+
+        # 3. Update Position Validation Product
+        pv = yt.get("position_validation", {})
+        pv["product"] = product
+        yt["position_validation"] = pv
+        changed.append(("position_validation.product", product))
+
     config["yolo_training"] = yt
 
     ye = config.get("yolo_evaluation", {})
@@ -115,7 +145,11 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
     if getattr(args, "infer_output", None):
         bi["output_dir"] = args.infer_output
         changed.append(("infer.output", bi["output_dir"]))
+    # Also apply product override to inference input if not manually specified?
+    # For now, let's keep inference manual or assume default.
+    
     config["batch_inference"] = bi
+
 
     if changed:
         logger.info(
@@ -147,6 +181,7 @@ def build_task_registry(config: dict) -> dict[str, Task]:
         quality,
         training,
         augmentation,
+        data_sync,
     )
 
     tasks_modules = [
@@ -154,6 +189,7 @@ def build_task_registry(config: dict) -> dict[str, Task]:
         quality,
         training,
         augmentation,
+        data_sync,
     ]
     
     registry: dict[str, Task] = {}

@@ -226,7 +226,17 @@ class PipelineControllerMixin:
             except Exception:
                 config_path = ""
 
-        self.worker_thread = WorkerThread(tasks, config_copy, config_path or None)
+        # [NEW] Capture Product Override
+        product_text = None
+        if hasattr(self, "product_override_edit"):
+            try:
+                txt = self.product_override_edit.text().strip()
+                if txt:
+                    product_text = txt
+            except Exception:
+                pass
+
+        self.worker_thread = WorkerThread(tasks, config_copy, config_path or None, product=product_text)
         self.worker_thread.task_started.connect(self.on_task_started)
         self.worker_thread.task_completed.connect(self.on_task_completed)
         self.worker_thread.progress_updated.connect(self.update_progress)

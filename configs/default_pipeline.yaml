@@ -97,8 +97,8 @@ anomaly_detection:
   threshold: 50
 yolo_augmentation:
   input:
-    image_dir: ./data/raw/images
-    label_dir: ./data/raw/labels
+    image_dir: ./data/raw/Cable1/images
+    label_dir: ./data/raw/Cable1/labels
   output:
     image_dir: ./data/augmented/images
     label_dir: ./data/augmented/labels
