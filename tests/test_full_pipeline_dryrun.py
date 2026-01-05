@@ -12,7 +12,8 @@ MODULES_TO_TEST = [augmentation, conversion, quality, training]
 @pytest.fixture(scope="session")
 def qapp():
     if not QApplication.instance():
-        return QApplication([])
+        # Use offscreen platform for headless CI environments
+        return QApplication(["test_run", "-platform", "offscreen"])
     return QApplication.instance()
 
 @pytest.fixture
