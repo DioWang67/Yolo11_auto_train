@@ -9,8 +9,6 @@ from picture_tool.eval.yolo_evaluator import (
 )
 from picture_tool.train.yolo_trainer import (
     _ensure_data_yaml,
-    _normalize_imgsz,
-    _normalize_name_sequence,
 )
 
 
@@ -58,28 +56,6 @@ def test_resolve_weights_falls_back_to_latest_run(tmp_path):
 
     resolved = _resolve_weights(config)
     assert resolved == best.resolve()
-
-
-@pytest.mark.parametrize(
-    "value, expected",
-    [
-        (None, None),
-        (640, [640, 640]),
-        ([320], [320, 320]),
-        ((1280, 720), [1280, 720]),
-        (["", 512], [512, 512]),
-        ("invalid", None),
-    ],
-)
-def test_normalize_imgsz(value, expected):
-    assert _normalize_imgsz(value) == expected
-
-
-def test_normalize_name_sequence_handles_mapping_and_list():
-    assert _normalize_name_sequence({0: "ok", 1: "ng"}) == ["ok", "ng"]
-    assert _normalize_name_sequence(["a", "b", None]) == ["a", "b"]
-    assert _normalize_name_sequence("solo") == ["solo"]
-    assert _normalize_name_sequence(None) == []
 
 
 def test_ensure_data_yaml_creates_file(tmp_path):

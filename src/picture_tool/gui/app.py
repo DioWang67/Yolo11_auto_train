@@ -76,6 +76,7 @@ TASK_OPTIONS: List[tuple[str, str]] = [
     ("artifact_bundle", "Artifact Bundle (Zip)"),
 ]
 
+TASK_OPTIONS_MAP = {key: label for key, label in TASK_OPTIONS}
 TASK_LABEL_TO_KEY = {label: key for key, label in TASK_OPTIONS}
 TASK_DESCRIPTIONS: Dict[str, str] = {
     "format_conversion": "格式轉換，整理輸入圖檔格式。",
