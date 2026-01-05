@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional, MutableMapping
 try:
     from ultralytics import YOLO # type: ignore
 except ImportError:
-    YOLO = None
+    YOLO = None # type: ignore
 
 from picture_tool.utils.normalization import normalize_imgsz
 

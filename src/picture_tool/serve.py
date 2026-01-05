@@ -5,16 +5,16 @@ from pathlib import Path
 
 
 try:
-    from fastapi import FastAPI, File, UploadFile, HTTPException
+    from fastapi import FastAPI, File, UploadFile, HTTPException # type: ignore
     import uvicorn
     from PIL import Image
 except ImportError:
-    FastAPI = None
+    FastAPI = None # type: ignore
 
 try:
-    from ultralytics import YOLO
+    from ultralytics import YOLO # type: ignore
 except ImportError:
-    YOLO = None
+    YOLO = None # type: ignore
 
 app = FastAPI(title="YOLO11 Inference Service") if FastAPI else None
 MODEL_INSTANCE = None
