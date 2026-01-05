@@ -77,23 +77,37 @@ def test_full_pipeline_dryrun(default_config, tmp_path):
     # run real training/inference/io operations.
     # We ONLY want to check if config[key] access crashes.
     
-    with patch("picture_tool.tasks.augmentation.YoloDataAugmentor"), \
-         patch("picture_tool.tasks.augmentation.ImageAugmentor"), \
-         patch("picture_tool.tasks.augmentation.preview_dataset"), \
-         patch("picture_tool.tasks.conversion.convert_format"), \
-         patch("picture_tool.tasks.quality.process_anomaly_detection"), \
-         patch("picture_tool.tasks.quality.split_dataset"), \
-         patch("picture_tool.tasks.quality.lint_dataset"), \
-         patch("picture_tool.tasks.quality.generate_report"), \
-         patch("picture_tool.tasks.quality.run_batch_inference"), \
-         patch("picture_tool.tasks.quality.generate_qc_summary"), \
-         patch("picture_tool.tasks.quality.color_verifier"), \
-         patch("picture_tool.tasks.quality.subprocess.run"), \
-         patch("picture_tool.tasks.training.train_yolo"), \
-         patch("picture_tool.tasks.training.evaluate_yolo"), \
-         patch("picture_tool.tasks.training.run_position_validation"), \
-         patch("picture_tool.tasks.training.detect_existing_weights", return_value=(None, None)):
+    from contextlib import ExitStack
+    
+    with ExitStack() as stack:
+        stack.enter_context(patch("picture_tool.tasks.augmentation.YoloDataAugmentor"))
+        stack.enter_context(patch("picture_tool.tasks.augmentation.ImageAugmentor"))
+        stack.enter_context(patch("picture_tool.tasks.augmentation.preview_dataset"))
+        stack.enter_context(patch("picture_tool.tasks.conversion.convert_format"))
+        stack.enter_context(patch("picture_tool.tasks.quality.process_anomaly_detection"))
+        stack.enter_context(patch("picture_tool.tasks.quality.split_dataset"))
+        stack.enter_context(patch("picture_tool.tasks.quality.lint_dataset"))
+        stack.enter_context(patch("picture_tool.tasks.quality.generate_report"))
+        stack.enter_context(patch("picture_tool.tasks.quality.run_batch_inference"))
+        stack.enter_context(patch("picture_tool.tasks.quality.generate_qc_summary"))
+        stack.enter_context(patch("picture_tool.tasks.quality.color_verifier"))
+        stack.enter_context(patch("picture_tool.tasks.quality.run_color_inspection"))
+        stack.enter_context(patch("picture_tool.tasks.quality.subprocess.run"))
+        stack.enter_context(patch("picture_tool.tasks.training.train_yolo"))
+        stack.enter_context(patch("picture_tool.tasks.training.evaluate_yolo"))
+        stack.enter_context(patch("picture_tool.tasks.training.run_position_validation"))
+        stack.enter_context(patch("picture_tool.tasks.training.detect_existing_weights", return_value=(None, None)))
 
+        # Manually patch the 'run' method of each Task object in the registry
+        for module in MODULES_TO_TEST:
+            if not hasattr(module, "TASKS"):
+                continue
+            for task in module.TASKS:
+                # We replace the function reference on the Task object
+                # We use stack.enter_context to ensure it's reverted
+                stack.enter_context(patch.object(task, "run", MagicMock()))
+                
+        # Now run the test loop
         for module in MODULES_TO_TEST:
             if not hasattr(module, "TASKS"):
                 continue

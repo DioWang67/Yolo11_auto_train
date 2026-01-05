@@ -23,11 +23,14 @@ def temp_dirs(tmp_path):
 
     split_root = tmp_path / "split"
     for subset in ("train", "val", "test"):
-        (split_root / subset / "images").mkdir(parents=True)
+        d = split_root / subset / "images"
+        d.mkdir(parents=True)
+        (d / "dummy.jpg").write_bytes(b"img")
 
     runs_root = tmp_path / "runs" / "detect" / "train"
     (runs_root / "weights").mkdir(parents=True)
     (runs_root / "weights" / "best.pt").write_bytes(b"weights")
+    (runs_root / "auto_position_config.yaml").write_text("config", encoding="utf-8")
 
     lint_out = tmp_path / "reports" / "lint"
     lint_out.mkdir(parents=True)
@@ -130,6 +133,12 @@ def test_should_skip_dataset_splitter_when_split_ready(base_config):
 
 
 def test_should_skip_yolo_train_when_weights_fresh(base_config, temp_dirs):
+    # Ensure weights are newer than dataset files
+    import time
+    time.sleep(1.1)
+    (temp_dirs["runs"] / "weights" / "best.pt").touch()
+    (temp_dirs["runs"] / "last_run_metadata.json").write_text("{}", encoding="utf-8")
+    
     reason = training.skip_yolo_train(
         base_config, SimpleNamespace(force=False)
     )

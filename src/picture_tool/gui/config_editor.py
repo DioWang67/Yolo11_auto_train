@@ -127,23 +127,28 @@ class ConfigEditor(QWidget):
 
     def _add_input(self, layout: QFormLayout, key: str, label: str, value: Any, type_hint=str):
         """Helper to create an input widget and bind it to the config."""
+        widget: QWidget
         if type_hint is int:
-            widget = QSpinBox()
-            widget.setRange(0, 999999)
-            widget.setValue(int(value) if value is not None else 0)
-            widget.valueChanged.connect(lambda v: self._update_config_value(key, v))
+            spin = QSpinBox()
+            spin.setRange(0, 999999)
+            spin.setValue(int(value) if value is not None else 0)
+            spin.valueChanged.connect(lambda v: self._update_config_value(key, v))
+            widget = spin
         elif type_hint is float:
-            widget = QDoubleSpinBox()
-            widget.setRange(0.0, 999999.0)
-            widget.setValue(float(value) if value is not None else 0.0)
-            widget.valueChanged.connect(lambda v: self._update_config_value(key, v))
+            dspin = QDoubleSpinBox()
+            dspin.setRange(0.0, 999999.0)
+            dspin.setValue(float(value) if value is not None else 0.0)
+            dspin.valueChanged.connect(lambda v: self._update_config_value(key, v))
+            widget = dspin
         elif type_hint is bool:
-            widget = QCheckBox()
-            widget.setChecked(bool(value))
-            widget.stateChanged.connect(lambda v: self._update_config_value(key, bool(v)))
+            check = QCheckBox()
+            check.setChecked(bool(value))
+            check.stateChanged.connect(lambda v: self._update_config_value(key, bool(v)))
+            widget = check
         else:
-            widget = QLineEdit(str(value) if value is not None else "")
-            widget.textChanged.connect(lambda v: self._update_config_value(key, v))
+            line = QLineEdit(str(value) if value is not None else "")
+            line.textChanged.connect(lambda v: self._update_config_value(key, v))
+            widget = line
         
         layout.addRow(label, widget)
         self._inputs[key] = widget

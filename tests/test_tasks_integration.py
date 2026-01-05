@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import pytest
 import yaml
+from typing import Dict, Any
 from picture_tool.augment.image_augmentor import ImageAugmentor
 from picture_tool.config_validation import validate_config_schema
 from picture_tool.main_pipeline import build_task_registry
@@ -18,7 +19,7 @@ def test_config_validation_schema():
     assert validate_config_schema(valid_config, strict=True) == valid_config
 
     # Invalid config: empty class names
-    invalid_config_1 = {
+    invalid_config_1: Dict[str, Any] = {
         "yolo_training": {"class_names": []},
     }
     with pytest.raises(Exception): # Pydantic ValidationError or _ManualConfigError
