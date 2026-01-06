@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Main application service
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.optimized
+    image: yolo11-auto-train:latest
+    container_name: yolo11-app
+    restart: unless-stopped
+
+    # Environment variables
+    environment:
+      - DEVICE=cpu # Change to GPU index for GPU support
+      - PYTHONUNBUFFERED=1
+
+    # Volume mounts
+    volumes:
+      - ./data:/data:rw
+      - ./runs:/runs:rw
+      - ./configs:/app/configs:ro
+
+    # Port mapping
+    ports:
+      - "8000:8000" # Inference API
+      - "5000:5000" # MLflow UI
+
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+    # Health check
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import picture_tool" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Override default command if needed
+    # command: python -m picture_tool.main_pipeline /app/configs/default_pipeline.yaml
+
+    # Optional: GPU-enabled service
+  app-gpu:
+    extends: app
+    runtime: nvidia
+    environment:
+      - DEVICE=0
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    profiles:
+      - gpu
+
+  # Optional: MLflow tracking server
+  mlflow:
+    image: python:3.11-slim
+    container_name: mlflow-server
+    command: >
+      bash -c "pip install mlflow && 
+               mlflow server 
+               --host 0.0.0.0 
+               --port 5000 
+               --backend-store-uri /mlflow/backend 
+               --default-artifact-root /mlflow/artifacts"
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./mlflow:/mlflow
+    profiles:
+      - mlflow
+
+networks:
+  default:
+    name: yolo11-network
+    driver: bridge
+
+volumes:
+  data:
+    driver: local
+  runs:
+    driver: local
+  mlflow:
+    driver: local
