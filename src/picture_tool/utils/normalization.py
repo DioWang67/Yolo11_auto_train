@@ -1,5 +1,5 @@
 """Utilities for normalizing configuration values."""
-from typing import Any, List, Dict
+from typing import Any, List
 
 def normalize_imgsz(value: Any) -> List[int] | None:
     """
