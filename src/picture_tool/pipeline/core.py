@@ -89,7 +89,9 @@ class Pipeline:
         collected = self._collect(requested)
         ordered = self._toposort(collected)
         self.logger.info(f"Resolved task order: {[t.name for t in ordered]}")
-        force = bool(getattr(args, "force", False) or config.get("pipeline", {}).get("force"))
+        force = bool(
+            getattr(args, "force", False) or config.get("pipeline", {}).get("force")
+        )
 
         for task in ordered:
             if before_task:
@@ -97,7 +99,10 @@ class Pipeline:
                     config = before_task(task, config)
                 except Exception as exc:  # pragma: no cover - defensive
                     self.logger.warning(f"Pre-task hook for {task.name} failed: {exc}")
-            if hasattr(args, "stop_event") and getattr(args.stop_event, "is_set", lambda: False)():
+            if (
+                hasattr(args, "stop_event")
+                and getattr(args.stop_event, "is_set", lambda: False)()
+            ):
                 self.logger.info("Stop requested; aborting remaining tasks.")
                 break
             skip_reason: Optional[str] = None

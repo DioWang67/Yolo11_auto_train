@@ -13,10 +13,11 @@ from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
 from picture_tool.tasks.bundle import run_artifact_bundle
 
+
 def run_yolo_train(config, args):
     logger = logging.getLogger(__name__)
     run_dir = train_yolo(config, args=args, logger=logger)
-    
+
     # Post-training steps
     # 1. Position Config Generation
     try:
@@ -37,15 +38,12 @@ def run_yolo_train(config, args):
     req_tasks = {str(t) for t in selected_tasks}
     position_requested = not req_tasks or "position_validation" in req_tasks
     position_validation_active = bool(
-         isinstance(pos_cfg, dict) and pos_cfg.get("enabled") and position_requested
+        isinstance(pos_cfg, dict) and pos_cfg.get("enabled") and position_requested
     )
-    
+
     try:
         DetectionConfigExporter.export(
-            config, 
-            run_dir, 
-            logger, 
-            include_position=position_validation_active
+            config, run_dir, logger, include_position=position_validation_active
         )
     except Exception as e:
         logger.warning(f"Detection config export failed: {e}")
@@ -90,7 +88,7 @@ def run_position_validation_task(config, args):
 
     # Fallback: If no explicit config provided, check for auto-generated one in run_dir
     pv_cfg = ycfg.get("position_validation", {})
-    
+
     # DEBUG: Log current config state
     logging.getLogger(__name__).info(
         f"DEBUG: Checking position config. Config keys: {list(pv_cfg.keys())}. "
@@ -103,7 +101,9 @@ def run_position_validation_task(config, args):
             pv_cfg["config"] = str(auto_conf)
             ycfg["position_validation"] = pv_cfg
             config["yolo_training"] = ycfg
-            logging.getLogger(__name__).info(f"Using auto-generated position config: {auto_conf}")
+            logging.getLogger(__name__).info(
+                f"Using auto-generated position config: {auto_conf}"
+            )
         else:
             logging.getLogger(__name__).warning(
                 "Skipping position_validation: Auto-config not found in run_dir. "
@@ -130,29 +130,31 @@ def skip_yolo_train(config, args):
     project = Path(str(y.get("project", DEFAULT_RUNS_DIR / "detect")))
     name = str(y.get("name", "train"))
     run_dir = project / name
-    
+
     metadata_path = run_dir / "last_run_metadata.json"
-    
+
     if getattr(args, "force", False):
         return None
-        
+
     if not run_dir.exists() or not metadata_path.exists():
         return None
-        
+
     # Check hashes
     try:
         with open(metadata_path, "r") as f:
             stored_meta = json.load(f)
-            
+
         dataset_dir = Path(str(y.get("dataset_dir", DEFAULT_SPLITS_DIR))).resolve()
         current_data_hash = compute_dir_hash(dataset_dir)
         current_cfg_hash = compute_config_hash(y)
-        
-        if (stored_meta.get("dataset_hash") == current_data_hash and
-            stored_meta.get("config_hash") == current_cfg_hash and 
-            (run_dir / "weights" / "best.pt").exists()):
+
+        if (
+            stored_meta.get("dataset_hash") == current_data_hash
+            and stored_meta.get("config_hash") == current_cfg_hash
+            and (run_dir / "weights" / "best.pt").exists()
+        ):
             return "Skipping training: Source dataset and config match last run."
-            
+
     except Exception:
         # Fallback to mtime if hash check fails or file corrupt
         pass
@@ -164,7 +166,7 @@ def skip_yolo_train(config, args):
     if weights.exists() and auto_conf.exists():
         if weights.stat().st_mtime >= mtime_latest([dataset_dir]):
             return "Found latest best.pt (mtime check); skipping training."
-            
+
     return None
 
 

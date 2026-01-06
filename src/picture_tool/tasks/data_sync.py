@@ -5,10 +5,11 @@ from picture_tool.utils.dvc_wrapper import DVCWrapper
 
 logger = logging.getLogger(__name__)
 
+
 def run_data_sync(config: dict, args: Any) -> None:
     """Pull latest data using DVC."""
     dvc = DVCWrapper()
-    
+
     if not dvc.is_installed:
         logger.warning("DVC not installed. Skipping data sync.")
         return
@@ -22,7 +23,10 @@ def run_data_sync(config: dict, args: Any) -> None:
         logger.info("DVC pull complete.")
     else:
         # We don't crash the pipeline, maybe they are offline or just testing local changes
-        logger.warning("DVC pull failed or no data to pull (are you offline?). Proceeding with local data.")
+        logger.warning(
+            "DVC pull failed or no data to pull (are you offline?). Proceeding with local data."
+        )
+
 
 TASKS = [
     Task(

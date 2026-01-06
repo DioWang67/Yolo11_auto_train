@@ -38,7 +38,7 @@ class LabelImgLauncher:
         if executable:
             logger.info(f"Found labelImg at: {executable}")
             return executable
-        
+
         # 3. Try Python module execution
         try:
             result = subprocess.run(
@@ -51,7 +51,7 @@ class LabelImgLauncher:
                 return "python_module"
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
-        
+
         logger.warning("labelImg not found in system PATH")
         return None
 
@@ -66,28 +66,28 @@ class LabelImgLauncher:
         output_dir: Path,
     ) -> bool:
         """Prepare environment for LabelImg.
-        
+
         Args:
             classes: List of class names
             input_dir: Directory containing images to label
             output_dir: Directory for output labels
-        
+
         Returns:
             True if preparation successful, False otherwise
         """
         try:
             # Create output directory if it doesn't exist
             output_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Create predefined_classes.txt for LabelImg
             classes_file = output_dir.parent / "predefined_classes.txt"
             with open(classes_file, "w", encoding="utf-8") as f:
                 for class_name in classes:
                     f.write(f"{class_name}\n")
-            
+
             logger.info(f"Created predefined_classes.txt at {classes_file}")
             logger.info(f"Classes: {classes}")
-            
+
             return True
         except Exception as e:
             logger.error(f"Failed to prepare environment: {e}")
@@ -100,23 +100,23 @@ class LabelImgLauncher:
         predefined_classes_file: Optional[Path] = None,
     ) -> bool:
         """Launch LabelImg with configured settings.
-        
+
         Args:
             input_dir: Directory containing images
             output_dir: Directory for saving labels
             predefined_classes_file: Path to predefined_classes.txt
-        
+
         Returns:
             True if launched successfully, False otherwise
         """
         if not self.is_installed():
             logger.error("LabelImg is not installed")
             return False
-        
+
         if not input_dir.exists():
             logger.error(f"Input directory does not exist: {input_dir}")
             return False
-        
+
         try:
             # Build command
             if str(self.labelimg_executable).endswith(".py"):
@@ -126,28 +126,30 @@ class LabelImgLauncher:
                 cmd = [sys.executable, "-m", "labelImg"]
             else:
                 cmd = [str(self.labelimg_executable)]
-            
+
             # Add arguments
             cmd.append(str(input_dir))
-            
+
             if predefined_classes_file and predefined_classes_file.exists():
                 cmd.append(str(predefined_classes_file))
-            
+
             cmd.append(str(output_dir))
-            
+
             logger.info(f"Launching LabelImg with command: {' '.join(cmd)}")
-            
+
             # Launch as subprocess
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=str(Path(str(self.labelimg_executable)).parent) if str(self.labelimg_executable).endswith(".py") else None
+                cwd=str(Path(str(self.labelimg_executable)).parent)
+                if str(self.labelimg_executable).endswith(".py")
+                else None,
             )
-            
+
             logger.info(f"LabelImg launched with PID: {self.process.pid}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to launch LabelImg: {e}")
             return False
@@ -160,16 +162,16 @@ class LabelImgLauncher:
 
     def wait_for_completion(self, timeout: Optional[float] = None) -> int:
         """Wait for LabelImg to close.
-        
+
         Args:
             timeout: Maximum time to wait in seconds (None = infinite)
-        
+
         Returns:
             Exit code of the process
         """
         if self.process is None:
             return -1
-        
+
         try:
             return self.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:

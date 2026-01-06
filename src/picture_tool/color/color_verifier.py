@@ -2,6 +2,7 @@
 完整改進版 LED 顏色檢測程式
 可直接替換原 color_verifier.py
 """
+
 from __future__ import annotations
 
 import argparse
@@ -10,7 +11,17 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import cv2
 import numpy as np
@@ -102,7 +113,9 @@ class ColorDecision:
             "expected_color": self.expected_color,
             "confidence": self.confidence,
             "status": self.status,
-            "match": (self.predicted_color == self.expected_color) if self.expected_color else None,
+            "match": (self.predicted_color == self.expected_color)
+            if self.expected_color
+            else None,
             "ratios": self.ratios,
         }
         if self.debug_info:
@@ -123,6 +136,7 @@ DecisionRule = Callable[[str, float, "DecisionContext"], Optional[Tuple[str, flo
 
 # ============= 新增: 核心改進函數 =============
 
+
 def circular_hue_distance(h1: float, h2: float) -> float:
     """計算色相的循環距離 (0-180 度)"""
     diff = abs(h1 - h2)
@@ -130,73 +144,80 @@ def circular_hue_distance(h1: float, h2: float) -> float:
 
 
 def improved_match_ratio(
-    hsv_vals: np.ndarray,
-    lab_vals: np.ndarray,
-    color_range: ColorRange,
-    color_name: str
+    hsv_vals: np.ndarray, lab_vals: np.ndarray, color_range: ColorRange, color_name: str
 ) -> Tuple[float, Dict[str, float]]:
     """改進的匹配比例計算"""
     if hsv_vals.size == 0 or lab_vals.size == 0:
         return 0.0, {}
-    
+
     debug = {}
     h_vals = hsv_vals[:, 0]
     s_vals = hsv_vals[:, 1]
     v_vals = hsv_vals[:, 2]
-    
+
     # 針對不同顏色的特殊邏輯
     if color_name == "Red":
-        h_mask = ((h_vals <= 10) | (h_vals >= 170)) & \
-                 (s_vals >= max(color_range.hsv_min[1], 130)) & \
-                 (v_vals >= max(color_range.hsv_min[2], 80))
+        h_mask = (
+            ((h_vals <= 10) | (h_vals >= 170))
+            & (s_vals >= max(color_range.hsv_min[1], 130))
+            & (v_vals >= max(color_range.hsv_min[2], 80))
+        )
     elif color_name == "Orange":
-        h_mask = (h_vals >= 5) & (h_vals <= 20) & \
-                 (s_vals >= max(color_range.hsv_min[1], 130)) & \
-                 (v_vals >= max(color_range.hsv_min[2], 100))
+        h_mask = (
+            (h_vals >= 5)
+            & (h_vals <= 20)
+            & (s_vals >= max(color_range.hsv_min[1], 130))
+            & (v_vals >= max(color_range.hsv_min[2], 100))
+        )
     elif color_name == "Yellow":
-        h_mask = (h_vals >= 20) & (h_vals <= 35) & \
-                 (s_vals >= 80) & (v_vals >= 150)
+        h_mask = (h_vals >= 20) & (h_vals <= 35) & (s_vals >= 80) & (v_vals >= 150)
     elif color_name == "Green":
-        h_mask = (h_vals >= 70) & (h_vals <= 100) & \
-                 (s_vals >= 75) & \
-                 (v_vals >= 30) & (v_vals <= 100)
+        h_mask = (
+            (h_vals >= 70)
+            & (h_vals <= 100)
+            & (s_vals >= 75)
+            & (v_vals >= 30)
+            & (v_vals <= 100)
+        )
     elif color_name == "Black":
         h_mask = (s_vals < BLACK_S_THRESHOLD) & (v_vals < BLACK_V_THRESHOLD)
     else:
-        h_mask = (h_vals >= color_range.hsv_min[0]) & \
-                 (h_vals <= color_range.hsv_max[0]) & \
-                 (s_vals >= color_range.hsv_min[1]) & \
-                 (s_vals <= color_range.hsv_max[1]) & \
-                 (v_vals >= color_range.hsv_min[2]) & \
-                 (v_vals <= color_range.hsv_max[2])
-    
+        h_mask = (
+            (h_vals >= color_range.hsv_min[0])
+            & (h_vals <= color_range.hsv_max[0])
+            & (s_vals >= color_range.hsv_min[1])
+            & (s_vals <= color_range.hsv_max[1])
+            & (v_vals >= color_range.hsv_min[2])
+            & (v_vals <= color_range.hsv_max[2])
+        )
+
     hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
-    debug['hsv_ratio'] = hsv_ratio
-    
+    debug["hsv_ratio"] = hsv_ratio
+
     # LAB 匹配
     lab_mask = (
-        (lab_vals[:, 0] >= color_range.lab_min[0]) &
-        (lab_vals[:, 0] <= color_range.lab_max[0]) &
-        (lab_vals[:, 1] >= color_range.lab_min[1]) &
-        (lab_vals[:, 1] <= color_range.lab_max[1]) &
-        (lab_vals[:, 2] >= color_range.lab_min[2]) &
-        (lab_vals[:, 2] <= color_range.lab_max[2])
+        (lab_vals[:, 0] >= color_range.lab_min[0])
+        & (lab_vals[:, 0] <= color_range.lab_max[0])
+        & (lab_vals[:, 1] >= color_range.lab_min[1])
+        & (lab_vals[:, 1] <= color_range.lab_max[1])
+        & (lab_vals[:, 2] >= color_range.lab_min[2])
+        & (lab_vals[:, 2] <= color_range.lab_max[2])
     )
     lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
-    debug['lab_ratio'] = lab_ratio
-    
+    debug["lab_ratio"] = lab_ratio
+
     # 色相平均值檢查
     mean_h = float(np.mean(h_vals))
-    debug['mean_hue'] = mean_h
-    
+    debug["mean_hue"] = mean_h
+
     hue_similarity = 1.0
     if color_range.hsv_mean is not None:
         expected_h = float(color_range.hsv_mean[0])
         hue_dist = circular_hue_distance(mean_h, expected_h)
         hue_similarity = np.exp(-hue_dist / 15.0)
-        debug['hue_distance'] = hue_dist
-        debug['hue_similarity'] = float(hue_similarity)
-    
+        debug["hue_distance"] = hue_dist
+        debug["hue_similarity"] = float(hue_similarity)
+
     # LAB 色度分析 (對 Orange/Red 重要)
     lab_chroma_similarity = 1.0
     if color_range.lab_mean is not None and color_name in ["Orange", "Red"]:
@@ -204,67 +225,69 @@ def improved_match_ratio(
         mean_b = float(np.mean(lab_vals[:, 2]))
         expected_a = float(color_range.lab_mean[1])
         expected_b = float(color_range.lab_mean[2])
-        
-        lab_chroma_dist = np.sqrt((mean_a - expected_a)**2 + (mean_b - expected_b)**2)
+
+        lab_chroma_dist = np.sqrt(
+            (mean_a - expected_a) ** 2 + (mean_b - expected_b) ** 2
+        )
         lab_chroma_similarity = np.exp(-lab_chroma_dist / 20.0)
-        
-        debug['lab_chroma_dist'] = float(lab_chroma_dist)
-        debug['lab_chroma_similarity'] = float(lab_chroma_similarity)
-    
+
+        debug["lab_chroma_dist"] = float(lab_chroma_dist)
+        debug["lab_chroma_similarity"] = float(lab_chroma_similarity)
+
     # 動態權重
     if color_name in ["Orange", "Red"]:
-        weights = {'hsv': 0.35, 'lab': 0.25, 'hue_sim': 0.25, 'lab_chroma': 0.15}
+        weights = {"hsv": 0.35, "lab": 0.25, "hue_sim": 0.25, "lab_chroma": 0.15}
     elif color_name == "Green":
-        weights = {'hsv': 0.6, 'lab': 0.2, 'hue_sim': 0.2, 'lab_chroma': 0.0}
+        weights = {"hsv": 0.6, "lab": 0.2, "hue_sim": 0.2, "lab_chroma": 0.0}
     elif color_name == "Yellow":
-        weights = {'hsv': 0.5, 'lab': 0.2, 'hue_sim': 0.3, 'lab_chroma': 0.0}
+        weights = {"hsv": 0.5, "lab": 0.2, "hue_sim": 0.3, "lab_chroma": 0.0}
     else:
-        weights = {'hsv': 0.5, 'lab': 0.3, 'hue_sim': 0.2, 'lab_chroma': 0.0}
-    
+        weights = {"hsv": 0.5, "lab": 0.3, "hue_sim": 0.2, "lab_chroma": 0.0}
+
     final_score = (
-        hsv_ratio * weights['hsv'] +
-        lab_ratio * weights['lab'] +
-        hue_similarity * weights['hue_sim'] +
-        lab_chroma_similarity * weights['lab_chroma']
+        hsv_ratio * weights["hsv"]
+        + lab_ratio * weights["lab"]
+        + hue_similarity * weights["hue_sim"]
+        + lab_chroma_similarity * weights["lab_chroma"]
     )
-    
-    debug['final_score'] = float(final_score)
+
+    debug["final_score"] = float(final_score)
     return final_score, debug
 
 
 def separate_orange_red_improved(
-    hsv_vals: np.ndarray,
-    lab_vals: np.ndarray,
-    orange_score: float,
-    red_score: float
+    hsv_vals: np.ndarray, lab_vals: np.ndarray, orange_score: float, red_score: float
 ) -> Tuple[str, float, Dict[str, Any]]:
     """改進的 Orange vs Red 分離"""
     if len(hsv_vals) == 0:
-        return ("Red" if red_score >= orange_score else "Orange", 
-                max(red_score, orange_score), {})
-    
+        return (
+            "Red" if red_score >= orange_score else "Orange",
+            max(red_score, orange_score),
+            {},
+        )
+
     debug: Dict[str, object] = {}
     hue_vals = hsv_vals[:, 0]
-    
+
     # 色相分布
     orange_core = np.sum((hue_vals >= 8) & (hue_vals <= 16))
     red_core = np.sum((hue_vals <= 5) | (hue_vals >= 175))
-    
+
     orange_hue_ratio = orange_core / len(hue_vals)
     red_hue_ratio = red_core / len(hue_vals)
-    
-    debug['orange_hue_ratio'] = float(orange_hue_ratio)
-    debug['red_hue_ratio'] = float(red_hue_ratio)
-    
+
+    debug["orange_hue_ratio"] = float(orange_hue_ratio)
+    debug["red_hue_ratio"] = float(red_hue_ratio)
+
     # LAB a*/b* 分析
     mean_a = float(np.mean(lab_vals[:, 1]))
     mean_b = float(np.mean(lab_vals[:, 2]))
     ab_ratio = mean_b / max(mean_a, 1.0)
-    
-    debug['mean_a'] = mean_a
-    debug['mean_b'] = mean_b
-    debug['ab_ratio'] = float(ab_ratio)
-    
+
+    debug["mean_a"] = mean_a
+    debug["mean_b"] = mean_b
+    debug["ab_ratio"] = float(ab_ratio)
+
     # 判斷邏輯
     if ab_ratio > 1.05:
         lab_vote = "Orange"
@@ -272,13 +295,18 @@ def separate_orange_red_improved(
         lab_vote = "Red"
     else:
         lab_vote = "Unclear"
-    
-    hue_vote = "Orange" if orange_hue_ratio > red_hue_ratio * 1.2 else \
-               "Red" if red_hue_ratio > orange_hue_ratio * 1.2 else "Unclear"
-    
-    debug['lab_vote'] = lab_vote
-    debug['hue_vote'] = hue_vote
-    
+
+    hue_vote = (
+        "Orange"
+        if orange_hue_ratio > red_hue_ratio * 1.2
+        else "Red"
+        if red_hue_ratio > orange_hue_ratio * 1.2
+        else "Unclear"
+    )
+
+    debug["lab_vote"] = lab_vote
+    debug["hue_vote"] = hue_vote
+
     # 最終決策
     if hue_vote == lab_vote and hue_vote != "Unclear":
         predicted = hue_vote
@@ -294,12 +322,13 @@ def separate_orange_red_improved(
     else:
         predicted = "Orange" if orange_score > red_score else "Red"
         confidence = max(orange_score, red_score) * 0.9
-    
-    debug['decision'] = predicted
+
+    debug["decision"] = predicted
     return predicted, confidence, debug
 
 
 # ============= 主要評估函數 (整合改進邏輯) =============
+
 
 def _evaluate_image_improved(
     image: np.ndarray,
@@ -310,62 +339,73 @@ def _evaluate_image_improved(
     """整合改進邏輯的圖片評估函數"""
     debug_info: Dict[str, Any] = {}
     h, w = hsv_img.shape[:2]
-    
+
     # 快速檢查黑色
-    is_black, black_conf = _is_black_image(hsv_img, BLACK_S_THRESHOLD, BLACK_V_THRESHOLD)
+    is_black, black_conf = _is_black_image(
+        hsv_img, BLACK_S_THRESHOLD, BLACK_V_THRESHOLD
+    )
     debug_info["is_black_detected"] = is_black
     debug_info["black_confidence"] = float(black_conf)
-    
+
     if is_black and "Black" in color_ranges:
         ratios = {color: 0.0 for color in color_ranges.keys()}
         ratios["Black"] = black_conf
-        masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
+        masks = {
+            color: np.zeros(hsv_img.shape[:2], dtype=bool)
+            for color in color_ranges.keys()
+        }
         masks["Black"] = np.ones(hsv_img.shape[:2], dtype=bool)
         return ratios, masks, debug_info
-    
+
     # 快速檢查黃色
     is_yellow, yellow_conf = _detect_yellow_special(hsv_img)
     debug_info["is_yellow_detected"] = is_yellow
     debug_info["yellow_confidence"] = float(yellow_conf)
-    
+
     if is_yellow and "Yellow" in color_ranges:
         ratios = {color: 0.0 for color in color_ranges.keys()}
         ratios["Yellow"] = yellow_conf
-        masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
+        masks = {
+            color: np.zeros(hsv_img.shape[:2], dtype=bool)
+            for color in color_ranges.keys()
+        }
         masks["Yellow"] = np.ones(hsv_img.shape[:2], dtype=bool)
         return ratios, masks, debug_info
-    
+
     # 取中心區域
     margin_y = int(h * 0.15)
     margin_x = int(w * 0.15)
-    center_hsv = hsv_img[margin_y:h-margin_y, margin_x:w-margin_x]
-    center_lab = lab_img[margin_y:h-margin_y, margin_x:w-margin_x]
-    
+    center_hsv = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
+    center_lab = lab_img[margin_y : h - margin_y, margin_x : w - margin_x]
+
     # 過濾低飽和度
     sat_mask = center_hsv[:, :, 1] >= DEFAULT_SAT_THRESHOLD
     valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
     valid_lab = center_lab[sat_mask].reshape(-1, 3)
-    
+
     if len(valid_hsv) < 50:
         # 太少有效像素，可能是黑色
         ratios = {color: 0.0 for color in color_ranges.keys()}
         if "Black" in ratios:
             ratios["Black"] = 0.7
-        masks = {color: np.zeros(hsv_img.shape[:2], dtype=bool) for color in color_ranges.keys()}
+        masks = {
+            color: np.zeros(hsv_img.shape[:2], dtype=bool)
+            for color in color_ranges.keys()
+        }
         return ratios, masks, debug_info
-    
+
     # 使用改進的匹配函數計算每個顏色的分數
     ratios = {}
     all_debug = {}
-    
+
     for color_name, color_range in color_ranges.items():
         score, color_debug = improved_match_ratio(
             valid_hsv, valid_lab, color_range, color_name
         )
         ratios[color_name] = score
         all_debug[color_name] = color_debug
-    
-    debug_info['color_details'] = all_debug
+
+    debug_info["color_details"] = all_debug
     # ????B?n (??????X???O)
     masks = {}
     sat_mask_full = hsv_img[:, :, 1] >= DEFAULT_SAT_THRESHOLD
@@ -393,30 +433,34 @@ def _evaluate_image_improved(
     return ratios, masks, debug_info
 
 
-def _is_black_image(hsv_img: np.ndarray, s_thresh: float, v_thresh: float) -> Tuple[bool, float]:
+def _is_black_image(
+    hsv_img: np.ndarray, s_thresh: float, v_thresh: float
+) -> Tuple[bool, float]:
     """檢測是否為黑色圖片"""
     h, w = hsv_img.shape[:2]
     margin_y = int(h * 0.15)
     margin_x = int(w * 0.15)
-    center_region = hsv_img[margin_y:h-margin_y, margin_x:w-margin_x]
-    
+    center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
+
     if center_region.size == 0:
         center_region = hsv_img
-    
+
     mean_s = float(np.mean(center_region[:, :, 1]))
     mean_v = float(np.mean(center_region[:, :, 2]))
     median_s = float(np.median(center_region[:, :, 1]))
     median_v = float(np.median(center_region[:, :, 2]))
-    
-    black_mask = (center_region[:, :, 1] < s_thresh) & (center_region[:, :, 2] < v_thresh)
-    black_coverage = float(np.count_nonzero(black_mask)) / black_mask.size
-    
-    is_black = (
-        (mean_s < s_thresh and mean_v < v_thresh) or
-        (median_s < s_thresh * 0.8 and median_v < v_thresh * 0.8) or
-        (black_coverage > BLACK_MIN_COVERAGE)
+
+    black_mask = (center_region[:, :, 1] < s_thresh) & (
+        center_region[:, :, 2] < v_thresh
     )
-    
+    black_coverage = float(np.count_nonzero(black_mask)) / black_mask.size
+
+    is_black = (
+        (mean_s < s_thresh and mean_v < v_thresh)
+        or (median_s < s_thresh * 0.8 and median_v < v_thresh * 0.8)
+        or (black_coverage > BLACK_MIN_COVERAGE)
+    )
+
     confidence = black_coverage if is_black else 0.0
     return is_black, confidence
 
@@ -425,44 +469,45 @@ def _detect_yellow_special(hsv_img: np.ndarray) -> Tuple[bool, float]:
     """快速檢測黃色"""
     h, w = hsv_img.shape[:2]
     margin = int(min(h, w) * 0.15)
-    center = hsv_img[margin:h-margin, margin:w-margin]
-    
+    center = hsv_img[margin : h - margin, margin : w - margin]
+
     if center.size == 0:
         center = hsv_img
-    
+
     h_vals = center[:, :, 0]
     s_vals = center[:, :, 1]
     v_vals = center[:, :, 2]
-    
+
     yellow_mask_primary = (
-        (h_vals >= YELLOW_H_RANGE[0]) &
-        (h_vals <= YELLOW_H_RANGE[1]) &
-        (s_vals >= YELLOW_S_MIN) &
-        (v_vals >= YELLOW_V_MIN)
+        (h_vals >= YELLOW_H_RANGE[0])
+        & (h_vals <= YELLOW_H_RANGE[1])
+        & (s_vals >= YELLOW_S_MIN)
+        & (v_vals >= YELLOW_V_MIN)
     )
-    
+
     yellow_mask_secondary = (
-        (h_vals >= 18) & (h_vals <= 38) &
-        (s_vals >= 60) & (v_vals >= 180)
+        (h_vals >= 18) & (h_vals <= 38) & (s_vals >= 60) & (v_vals >= 180)
     )
-    
+
     yellow_mask = yellow_mask_primary | yellow_mask_secondary
     yellow_ratio = float(np.count_nonzero(yellow_mask)) / yellow_mask.size
-    
+
     orange_like_mask = (h_vals < 20) & (h_vals > 5) & (s_vals > 100)
     orange_ratio = float(np.count_nonzero(orange_like_mask)) / orange_like_mask.size
-    
+
     is_yellow = (yellow_ratio > 0.25) and (yellow_ratio > orange_ratio * 1.3)
     return is_yellow, yellow_ratio
 
 
-def _extract_center_pixels(img: np.ndarray, margin_ratio: float = CENTER_MARGIN_RATIO) -> np.ndarray:
+def _extract_center_pixels(
+    img: np.ndarray, margin_ratio: float = CENTER_MARGIN_RATIO
+) -> np.ndarray:
     """Return the center crop used for rule-based decisions."""
     h, w = img.shape[:2]
     margin = int(min(h, w) * margin_ratio)
     if margin == 0:
         return img
-    center = img[margin:h-margin, margin:w-margin]
+    center = img[margin : h - margin, margin : w - margin]
     return center if center.size else img
 
 
@@ -589,6 +634,7 @@ def _confidence_threshold_for(color: str, default_threshold: float) -> float:
 
 # ============= 載入與驗證函數 =============
 
+
 def _margin_vector(margin: Sequence[float] | float, default: float) -> np.ndarray:
     if isinstance(margin, Sequence) and not isinstance(margin, (str, bytes)):
         values = list(margin)
@@ -635,7 +681,9 @@ def load_color_ranges(
             lab_max,
             hsv_mean=_optional_array("hsv_mean"),
             lab_mean=_optional_array("lab_mean"),
-            coverage_mean=float(stats["coverage_mean"]) if "coverage_mean" in stats else None,
+            coverage_mean=float(stats["coverage_mean"])
+            if "coverage_mean" in stats
+            else None,
             hsv_p10=_optional_array("hsv_p10"),
             hsv_p90=_optional_array("hsv_p90"),
             lab_p10=_optional_array("lab_p10"),
@@ -686,6 +734,7 @@ def _resolve_expected_color(
 
 # ============= 主驗證函數 =============
 
+
 def verify_directory(
     input_dir: Path,
     color_stats: Path,
@@ -701,7 +750,7 @@ def verify_directory(
     debug_plot: bool = False,
     debug_dir: Optional[Path] = None,
     logger: Optional[logging.Logger] = None,
-    **kwargs
+    **kwargs,
 ) -> Tuple[Dict[str, object], List[ColorDecision]]:
     logger = logger or logging.getLogger(__name__)
     input_dir = input_dir.resolve()
@@ -722,16 +771,32 @@ def verify_directory(
 
     def iter_images() -> Iterable[Path]:
         if recursive:
-            yield from (p for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_FORMATS)
+            yield from (
+                p
+                for p in input_dir.rglob("*")
+                if p.is_file() and p.suffix.lower() in SUPPORTED_FORMATS
+            )
         else:
-            yield from (p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_FORMATS)
+            yield from (
+                p
+                for p in input_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in SUPPORTED_FORMATS
+            )
 
     images = sorted(iter_images())
     if not images:
-        raise FileNotFoundError(f"No images with suffix {SUPPORTED_FORMATS} in {input_dir}")
+        raise FileNotFoundError(
+            f"No images with suffix {SUPPORTED_FORMATS} in {input_dir}"
+        )
 
     results: List[ColorDecision] = []
-    counters = {"total": 0, "matched": 0, "mismatched": 0, "predicted_only": 0, "low_confidence": 0}
+    counters = {
+        "total": 0,
+        "matched": 0,
+        "mismatched": 0,
+        "predicted_only": 0,
+        "low_confidence": 0,
+    }
 
     for image_path in images:
         counters["total"] += 1
@@ -744,7 +809,11 @@ def verify_directory(
         lab_img = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
         if edge_margin > 0:
             margin_px = int(min(hsv_img.shape[:2]) * edge_margin)
-            if margin_px > 0 and hsv_img.shape[0] > 2 * margin_px and hsv_img.shape[1] > 2 * margin_px:
+            if (
+                margin_px > 0
+                and hsv_img.shape[0] > 2 * margin_px
+                and hsv_img.shape[1] > 2 * margin_px
+            ):
                 hsv_img = hsv_img[margin_px:-margin_px, margin_px:-margin_px]
                 lab_img = lab_img[margin_px:-margin_px, margin_px:-margin_px]
                 image = image[margin_px:-margin_px, margin_px:-margin_px]
@@ -765,9 +834,13 @@ def verify_directory(
             hsv_img=hsv_img,
             lab_img=lab_img,
         )
-        predicted_color, confidence = _apply_color_rules(predicted_color, confidence, context)
+        predicted_color, confidence = _apply_color_rules(
+            predicted_color, confidence, context
+        )
 
-        expected = _resolve_expected_color(image_path, expected_lookup, ranges.keys(), infer_expected_from_name)
+        expected = _resolve_expected_color(
+            image_path, expected_lookup, ranges.keys(), infer_expected_from_name
+        )
         status = "match"
         if expected is None:
             status = "predicted_only"
@@ -783,7 +856,11 @@ def verify_directory(
         if mask is None:
             mask = np.ones(hsv_img.shape[:2], dtype=bool)
         coverage_pixels = np.logical_and(mask, sat_mask)
-        coverage_ratio = float(np.count_nonzero(coverage_pixels)) / coverage_pixels.size if coverage_pixels.size else 0.0
+        coverage_ratio = (
+            float(np.count_nonzero(coverage_pixels)) / coverage_pixels.size
+            if coverage_pixels.size
+            else 0.0
+        )
         if coverage_ratio == 0.0:
             confidence = 0.0
         coverage_threshold = float(ratio_threshold)
@@ -849,12 +926,24 @@ def verify_directory(
             return obj
 
         report = _safe_convert(report)
-        output_json.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        output_json.write_text(
+            json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     if output_csv:
         output_csv.parent.mkdir(parents=True, exist_ok=True)
         with output_csv.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
-            writer.writerow(["image", "predicted_color", "expected_color", "status", "confidence", "match", "ratios_json"])
+            writer.writerow(
+                [
+                    "image",
+                    "predicted_color",
+                    "expected_color",
+                    "status",
+                    "confidence",
+                    "match",
+                    "ratios_json",
+                ]
+            )
             for item in results:
                 data = item.to_dict()
                 writer.writerow(
@@ -892,7 +981,9 @@ def visualize_debug(
     mask_uint8 = mask.astype(np.uint8) * 255 if mask.dtype != np.uint8 else mask
     mask_uint8 = mask_uint8 if mask_uint8.max() > 1 else mask_uint8 * 255
     overlay = cv2.applyColorMap(mask_uint8, cv2.COLORMAP_JET)
-    overlay = cv2.addWeighted(image_rgb, 0.7, cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 0.3, 0)
+    overlay = cv2.addWeighted(
+        image_rgb, 0.7, cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), 0.3, 0
+    )
 
     hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
     hue = hsv[:, :, 0].flatten()
@@ -927,12 +1018,14 @@ def visualize_debug(
     bars = ax4.bar(range(len(ratios)), values_list, tick_label=colors_list)
 
     max_idx = values_list.index(max(values_list))
-    bars[max_idx].set_color('red')
+    bars[max_idx].set_color("red")
     bars[max_idx].set_alpha(0.8)
 
     ax4.set_ylim(0, 1)
     ax4.set_title("Color Confidence", fontsize=10)
-    ax4.axhline(y=0.35, color='green', linestyle='--', linewidth=1, alpha=0.5, label='threshold')
+    ax4.axhline(
+        y=0.35, color="green", linestyle="--", linewidth=1, alpha=0.5, label="threshold"
+    )
     ax4.legend(fontsize=8)
 
     debug_text = f"Prediction: {predicted_color} (confidence={confidence:.3f})\n"
@@ -946,28 +1039,60 @@ def visualize_debug(
         if debug_info.get("green_correction"):
             debug_text += "Green correction applied\n"
 
-    fig.text(0.02, 0.02, debug_text, fontsize=8, verticalalignment='bottom',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    fig.text(
+        0.02,
+        0.02,
+        debug_text,
+        fontsize=8,
+        verticalalignment="bottom",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
 
-    fig.suptitle(f"Color decision: {predicted_color}", fontsize=14, fontweight='bold')
+    fig.suptitle(f"Color decision: {predicted_color}", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=(0, 0.05, 1, 0.96))
-    fig.savefig(str(output_path), dpi=150, bbox_inches='tight')
+    fig.savefig(str(output_path), dpi=150, bbox_inches="tight")
     plt.close(fig)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Improved LED color verification")
-    parser.add_argument("--input-dir", required=True, help="Directory containing inference images")
-    parser.add_argument("--color-stats", required=True, help="JSON file produced by color_inspection.collect")
-    parser.add_argument("--output-json", default="./reports/led_qc/color_verification_improved.json")
-    parser.add_argument("--output-csv", default="./reports/led_qc/color_verification_improved.csv")
-    parser.add_argument("--expected-map", help="CSV/JSON mapping from filename to expected color")
-    parser.add_argument("--recursive", action="store_true", help="Scan directories recursively")
-    parser.add_argument("--no-filename-expectation", action="store_true", help="Disable automatic expectation from filenames")
-    parser.add_argument("--hsv-margin", type=float, nargs="*", default=[8.0, 35.0, 40.0])
-    parser.add_argument("--lab-margin", type=float, nargs="*", default=[12.0, 8.0, 12.0])
-    parser.add_argument("--ratio-threshold", type=float, default=0.35, help="Base confidence threshold")
-    parser.add_argument("--debug-plot", action="store_true", help="Save per-image debug visualizations")
+    parser.add_argument(
+        "--input-dir", required=True, help="Directory containing inference images"
+    )
+    parser.add_argument(
+        "--color-stats",
+        required=True,
+        help="JSON file produced by color_inspection.collect",
+    )
+    parser.add_argument(
+        "--output-json", default="./reports/led_qc/color_verification_improved.json"
+    )
+    parser.add_argument(
+        "--output-csv", default="./reports/led_qc/color_verification_improved.csv"
+    )
+    parser.add_argument(
+        "--expected-map", help="CSV/JSON mapping from filename to expected color"
+    )
+    parser.add_argument(
+        "--recursive", action="store_true", help="Scan directories recursively"
+    )
+    parser.add_argument(
+        "--no-filename-expectation",
+        action="store_true",
+        help="Disable automatic expectation from filenames",
+    )
+    parser.add_argument(
+        "--hsv-margin", type=float, nargs="*", default=[8.0, 35.0, 40.0]
+    )
+    parser.add_argument(
+        "--lab-margin", type=float, nargs="*", default=[12.0, 8.0, 12.0]
+    )
+    parser.add_argument(
+        "--ratio-threshold", type=float, default=0.35, help="Base confidence threshold"
+    )
+    parser.add_argument(
+        "--debug-plot", action="store_true", help="Save per-image debug visualizations"
+    )
     parser.add_argument("--debug-dir", help="Directory to store debug visualizations")
 
     return parser
@@ -979,7 +1104,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     logger = logging.getLogger(__name__)
 

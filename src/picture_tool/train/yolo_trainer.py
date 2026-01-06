@@ -10,6 +10,7 @@ from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
 from picture_tool.tracking.experiment_tracker import get_tracker
 
+
 # Define a stop exception for cleaner handling
 class TrainingInterrupted(Exception):
     pass
@@ -19,6 +20,7 @@ try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover
     YOLO = None  # type: ignore
+
 
 def _ensure_data_yaml(
     dataset_dir: Path, names: List[str], out_path: Optional[Path] = None
@@ -50,23 +52,29 @@ def train_yolo(
     """
     logger = logger or logging.getLogger(__name__)
     ycfg = config.get("yolo_training", {})
-    
+
     # Use constant for default instead of hardcoded
     dataset_dir = Path(ycfg.get("dataset_dir", DEFAULT_SPLITS_DIR)).resolve()
     names = ycfg.get("class_names")
-    
+
     # Auto-detect class names if missing OR if set to default placeholder
-    can_autodetect = not names or (isinstance(names, list) and len(names) == 1 and names[0] == "object")
-    
+    can_autodetect = not names or (
+        isinstance(names, list) and len(names) == 1 and names[0] == "object"
+    )
+
     if can_autodetect:
         possible_classes = dataset_dir / "classes.txt"
         if possible_classes.exists():
             try:
                 content = possible_classes.read_text(encoding="utf-8")
-                detected = [line.strip() for line in content.splitlines() if line.strip()]
+                detected = [
+                    line.strip() for line in content.splitlines() if line.strip()
+                ]
                 if detected:
                     names = detected
-                    logger.info(f"Auto-detected class names from {possible_classes}: {names}")
+                    logger.info(
+                        f"Auto-detected class names from {possible_classes}: {names}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to read classes.txt: {e}")
 
@@ -106,21 +114,23 @@ def train_yolo(
     # Initialize Experiment Tracker
     tracker = get_tracker(config)
     tracker.start_run(run_name=name)
-    tracker.log_params({
-        "model": model_arg,
-        "epochs": epochs,
-        "imgsz": imgsz,
-        "batch": batch,
-        "device": device,
-        "dataset": str(dataset_dir)
-    })
+    tracker.log_params(
+        {
+            "model": model_arg,
+            "epochs": epochs,
+            "imgsz": imgsz,
+            "batch": batch,
+            "device": device,
+            "dataset": str(dataset_dir),
+        }
+    )
 
     model = YOLO(model_arg)
-
 
     # [NEW] Add Stop Callback if event provided
     stop_event = getattr(args, "stop_event", None)
     if stop_event:
+
         def on_train_epoch_end(trainer):
             if stop_event.is_set():
                 logger.info("Stop event detected. Stopping YOLO training gracefully.")
@@ -142,12 +152,12 @@ def train_yolo(
         )
     except TrainingInterrupted:
         logger.info("Training interrupted by user.")
-        return Path(project) / name # Return run dir even if partial
+        return Path(project) / name  # Return run dir even if partial
     except Exception as e:
         # Check if it was our interrupt disguised
         if "Training stopped by user" in str(e):
-             logger.info("Training interrupted by user.")
-             return Path(project) / name
+            logger.info("Training interrupted by user.")
+            return Path(project) / name
         raise e
 
     run_dir: Optional[Path] = None
@@ -169,7 +179,7 @@ def train_yolo(
         metadata = {
             "dataset_hash": data_hash,
             "config_hash": cfg_hash,
-            "dataset_dir": str(dataset_dir)
+            "dataset_dir": str(dataset_dir),
         }
         with open(run_dir / "last_run_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
@@ -179,13 +189,18 @@ def train_yolo(
     # Basic experiment logging (metrics only, artifacts handled by caller/pipeline now)
     try:
         metrics = _load_metrics_csv(run_dir / "results.csv")
-        
+
         # Log to MLflow/Tracker
         if metrics:
             # Take the last row of metrics
-            last_metrics = {k.strip(): float(v) for k, v in metrics.items() if isinstance(v, (int, float)) or (isinstance(v, str) and v.replace('.', '', 1).isdigit())}
+            last_metrics = {
+                k.strip(): float(v)
+                for k, v in metrics.items()
+                if isinstance(v, (int, float))
+                or (isinstance(v, str) and v.replace(".", "", 1).isdigit())
+            }
             tracker.log_metrics(last_metrics)
-        
+
         tracker.log_artifact(str(run_dir / "results.csv"))
         tracker.log_artifact(str(run_dir / "weights" / "best.pt"))
         if (run_dir / "confusion_matrix.png").exists():

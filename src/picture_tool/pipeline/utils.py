@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
+
 def detect_existing_weights(
     config: dict, prefer: str | None = None
 ) -> Tuple[Optional[Path], Optional[Path]]:

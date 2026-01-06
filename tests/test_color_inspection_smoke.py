@@ -58,6 +58,7 @@ def test_cmd_info(monkeypatch, tmp_path, capsys, dummy_model):
     out = capsys.readouterr().out
     assert "total_samples" in out
 
+
 def test_cmd_analyze_selects_directory(monkeypatch, tmp_path, dummy_model):
     called = {}
 

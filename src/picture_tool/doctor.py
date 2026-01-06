@@ -20,7 +20,9 @@ def _check_import(name: str) -> Tuple[bool, str]:
 
 def _check_command(cmd: List[str]) -> Tuple[bool, str]:
     try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+        )
         return True, ""
     except Exception as exc:
         return False, str(exc)
@@ -71,7 +73,9 @@ def run_doctor(create_demo: bool = False) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Environment checker for picture-tool.")
+    parser = argparse.ArgumentParser(
+        description="Environment checker for picture-tool."
+    )
     parser.add_argument(
         "--create-demo",
         action="store_true",

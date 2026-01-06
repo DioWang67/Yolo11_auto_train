@@ -20,7 +20,9 @@ class _SignalLoggingHandler(logging.Handler):
         super().__init__()
         self._emit_callback = emit_callback
 
-    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - thin wrapper
+    def emit(
+        self, record: logging.LogRecord
+    ) -> None:  # pragma: no cover - thin wrapper
         try:
             message = self.format(record)
         except Exception:
@@ -64,7 +66,9 @@ class WorkerThread(QThread):
         logger = logging.getLogger(f"picture_tool.gui.worker.{id(self)}")
         logger.setLevel(logging.INFO)
         handler = _SignalLoggingHandler(self.log_message.emit)
-        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        )
         logger.addHandler(handler)
         logger.propagate = False
 
@@ -74,15 +78,15 @@ class WorkerThread(QThread):
 
             # Using build_task_registry to get Task objects
             registry = pipeline.build_task_registry(config)
-            
+
             # Using Pipeline core to resolve dependencies correctly
             pipe_core = pipeline.Pipeline(registry, logger)
             collected = pipe_core._collect(self.tasks)
-            # The original logic expected `validate_dependencies` to return a list, 
+            # The original logic expected `validate_dependencies` to return a list,
             # but now we should trust Pipeline topological sort if possible.
             # However, to maintain incremental signal emission, we iterate manually on the sorted tasks.
             ordered_tasks = pipe_core._toposort(collected)
-            
+
             planned_tasks = [t.name for t in ordered_tasks]
             total = max(len(planned_tasks), 1)
 
@@ -93,17 +97,17 @@ class WorkerThread(QThread):
                     break
 
                 self.task_started.emit(task_name)
-                
+
                 # Apply overrides before each task (mimicking Pipeline logic)
                 pipeline._apply_cli_overrides(config, args, logger)  # type: ignore[attr-defined]
                 pipeline._auto_device(config, logger)  # type: ignore[attr-defined]
-                
+
                 skip_reason = None
                 if task_obj.skip_fn:
-                     try:
-                         skip_reason = task_obj.skip_fn(config, args)
-                     except Exception as exc:
-                         logger.warning(f"Skip check for {task_name} failed: {exc}")
+                    try:
+                        skip_reason = task_obj.skip_fn(config, args)
+                    except Exception as exc:
+                        logger.warning(f"Skip check for {task_name} failed: {exc}")
 
                 if skip_reason:
                     logger.info(f"Skipping {task_name}: {skip_reason}")
@@ -114,7 +118,7 @@ class WorkerThread(QThread):
                 logger.info(f"Running task: {task_name}")
                 task_obj.run(config, args)
                 logger.info(f"Finished task {task_name}")
-                
+
                 self.task_completed.emit(task_name)
                 self._emit_progress(index + 1, total)
 

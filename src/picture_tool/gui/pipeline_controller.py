@@ -36,7 +36,9 @@ class PipelineControllerMixin:
         candidates = [
             cwd / "configs" / "default_pipeline.yaml",
             cwd / "config.yaml",
-            Path(__file__).resolve().parent.parent / "resources" / "default_pipeline.yaml",
+            Path(__file__).resolve().parent.parent
+            / "resources"
+            / "default_pipeline.yaml",
             Path(__file__).resolve().parent.parent / "preset_config.yaml",
         ]
         for candidate in candidates:
@@ -113,7 +115,9 @@ class PipelineControllerMixin:
                 pass
         if hasattr(self, "config_text"):
             try:
-                dumped = yaml.safe_dump(self.config, allow_unicode=True, sort_keys=False)
+                dumped = yaml.safe_dump(
+                    self.config, allow_unicode=True, sort_keys=False
+                )
                 self.config_text.setPlainText(dumped)
             except Exception:
                 self.config_text.setPlainText("")
@@ -156,9 +160,11 @@ class PipelineControllerMixin:
                     target = Path(text)
             except Exception:
                 target = None
-        
+
         if not target:
-            self._show_warning("No config file", "Please select or enter a path to save the config.")
+            self._show_warning(
+                "No config file", "Please select or enter a path to save the config."
+            )
             return
 
         try:
@@ -189,7 +195,9 @@ class PipelineControllerMixin:
                 if item is not None:
                     item.setText(f"{task} - pending")
 
-    def _set_task_status(self, task: str, message: str, color: Any | None = None) -> None:
+    def _set_task_status(
+        self, task: str, message: str, color: Any | None = None
+    ) -> None:
         if hasattr(self, "task_status_items"):
             item = self.task_status_items.get(task)
             if item is not None:
@@ -205,7 +213,9 @@ class PipelineControllerMixin:
             return
 
         if self.worker_thread is not None and self.worker_thread.isRunning():
-            self._show_warning("Pipeline running", "A pipeline run is already in progress.")
+            self._show_warning(
+                "Pipeline running", "A pipeline run is already in progress."
+            )
             return
 
         validation_errors: Iterable[str] | None = None
@@ -215,7 +225,9 @@ class PipelineControllerMixin:
             except Exception:  # pragma: no cover - optional hook
                 validation_errors = None
         if validation_errors:
-            self._show_warning("Configuration check failed", "\n".join(validation_errors))
+            self._show_warning(
+                "Configuration check failed", "\n".join(validation_errors)
+            )
             return
 
         config_copy = copy.deepcopy(self.config)
@@ -236,7 +248,9 @@ class PipelineControllerMixin:
             except Exception:
                 pass
 
-        self.worker_thread = WorkerThread(tasks, config_copy, config_path or None, product=product_text)
+        self.worker_thread = WorkerThread(
+            tasks, config_copy, config_path or None, product=product_text
+        )
         self.worker_thread.task_started.connect(self.on_task_started)
         self.worker_thread.task_completed.connect(self.on_task_completed)
         self.worker_thread.progress_updated.connect(self.update_progress)
@@ -317,5 +331,7 @@ class PipelineControllerMixin:
     # ------------------------------------------------------------------
     # abstract hooks implemented by concrete GUI classes
     # ------------------------------------------------------------------
-    def log_message(self, message: str) -> None:  # pragma: no cover - provided by subclasses
+    def log_message(
+        self, message: str
+    ) -> None:  # pragma: no cover - provided by subclasses
         raise NotImplementedError

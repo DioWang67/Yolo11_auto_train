@@ -3,8 +3,14 @@ import pytest
 
 pytest.importorskip("pytestqt")
 
-if os.environ.get("DISPLAY", "") == "" and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
-    pytest.skip("Qt GUI tests require DISPLAY or QT_QPA_PLATFORM=offscreen", allow_module_level=True)
+if (
+    os.environ.get("DISPLAY", "") == ""
+    and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+):
+    pytest.skip(
+        "Qt GUI tests require DISPLAY or QT_QPA_PLATFORM=offscreen",
+        allow_module_level=True,
+    )
 
 from picture_tool.gui import pipeline_controller
 from picture_tool.gui.app import PictureToolGUI
@@ -32,7 +38,6 @@ def test_log_message_tracks_history(gui):
 
     assert gui._log_history[-1] == "hello world"
     assert "hello world" in gui.log_text.toPlainText()
-
 
     first_item = gui.status_list.item(0)
     assert first_item is not None

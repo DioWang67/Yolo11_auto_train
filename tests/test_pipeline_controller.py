@@ -192,8 +192,10 @@ def test_start_pipeline_creates_worker(monkeypatch, controller, tmp_path):
     class DummySignal:
         def __init__(self):
             self._callbacks = []
+
         def connect(self, callback):
             self._callbacks.append(callback)
+
         def emit(self, *args, **kwargs):
             for cb in self._callbacks:
                 cb(*args, **kwargs)

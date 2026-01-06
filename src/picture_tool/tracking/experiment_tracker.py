@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 try:
-    import mlflow # type: ignore
+    import mlflow  # type: ignore
 except ImportError:
-    mlflow = None # type: ignore
+    mlflow = None  # type: ignore
 
 
 class ExperimentTracker(ABC):
@@ -21,11 +21,15 @@ class ExperimentTracker(ABC):
         pass
 
     @abstractmethod
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
+    def log_metrics(
+        self, metrics: Dict[str, float], step: Optional[int] = None
+    ) -> None:
         pass
 
     @abstractmethod
-    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> None:
+    def log_artifact(
+        self, local_path: str, artifact_path: Optional[str] = None
+    ) -> None:
         pass
 
     @abstractmethod
@@ -36,13 +40,15 @@ class ExperimentTracker(ABC):
 class MLflowTracker(ExperimentTracker):
     """MLflow implementation of ExperimentTracker."""
 
-    def __init__(self, experiment_name: str = "yolo_training", tracking_uri: Optional[str] = None):
+    def __init__(
+        self, experiment_name: str = "yolo_training", tracking_uri: Optional[str] = None
+    ):
         self._enabled: bool = True
         if mlflow is None:
             logging.warning("mlflow not installed. Tracking will be disabled.")
             self._enabled = False
             return
-            
+
         self._enabled = True
         try:
             if tracking_uri:
@@ -51,7 +57,7 @@ class MLflowTracker(ExperimentTracker):
                 # Default to absolute path ./mlruns to avoid CWD issues with YOLO
                 mlruns = os.path.abspath("mlruns")
                 mlflow.set_tracking_uri(f"file:///{mlruns}")
-            
+
             mlflow.set_experiment(experiment_name)
         except Exception as e:
             logging.warning(f"Failed to setup MLflow: {e}")
@@ -71,7 +77,9 @@ class MLflowTracker(ExperimentTracker):
         except Exception as e:
             logging.warning(f"MLflow log_params failed: {e}")
 
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
+    def log_metrics(
+        self, metrics: Dict[str, float], step: Optional[int] = None
+    ) -> None:
         if not self._enabled:
             return
         try:
@@ -79,7 +87,9 @@ class MLflowTracker(ExperimentTracker):
         except Exception as e:
             logging.warning(f"MLflow log_metrics failed: {e}")
 
-    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> None:
+    def log_artifact(
+        self, local_path: str, artifact_path: Optional[str] = None
+    ) -> None:
         if not self._enabled:
             return
         if not os.path.exists(local_path):
@@ -98,11 +108,25 @@ class MLflowTracker(ExperimentTracker):
 
 class NullTracker(ExperimentTracker):
     """Dummy tracker when tracking is disabled."""
-    def start_run(self, run_name: Optional[str] = None) -> None: pass
-    def log_params(self, params: Dict[str, Any]) -> None: pass
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None: pass
-    def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> None: pass
-    def end_run(self) -> None: pass
+
+    def start_run(self, run_name: Optional[str] = None) -> None:
+        pass
+
+    def log_params(self, params: Dict[str, Any]) -> None:
+        pass
+
+    def log_metrics(
+        self, metrics: Dict[str, float], step: Optional[int] = None
+    ) -> None:
+        pass
+
+    def log_artifact(
+        self, local_path: str, artifact_path: Optional[str] = None
+    ) -> None:
+        pass
+
+    def end_run(self) -> None:
+        pass
 
 
 def get_tracker(config: Dict[str, Any]) -> ExperimentTracker:
@@ -110,12 +134,12 @@ def get_tracker(config: Dict[str, Any]) -> ExperimentTracker:
     track_cfg = config.get("tracking", {})
     if not track_cfg.get("enabled", False):
         return NullTracker()
-    
+
     backend = track_cfg.get("backend", "mlflow")
     if backend == "mlflow":
         return MLflowTracker(
             experiment_name=track_cfg.get("experiment_name", "Yolo11_Experiment"),
-            tracking_uri=track_cfg.get("uri")
+            tracking_uri=track_cfg.get("uri"),
         )
-    
+
     return NullTracker()

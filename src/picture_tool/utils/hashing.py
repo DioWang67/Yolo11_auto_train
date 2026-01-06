@@ -3,15 +3,16 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+
 def compute_dir_hash(directory: Path, glob_pattern: str = "**/*") -> str:
     """Compute a single hash for a directory structure (filenames + sizes + mtimes)."""
     if not directory.exists():
         return "empty"
-    
+
     hasher = hashlib.md5()
     # Sort for determinism
     files = sorted([p for p in directory.glob(glob_pattern) if p.is_file()])
-    
+
     for p in files:
         try:
             stat = p.stat()
@@ -21,8 +22,9 @@ def compute_dir_hash(directory: Path, glob_pattern: str = "**/*") -> str:
             hasher.update(str(stat.st_mtime).encode("utf-8"))
         except Exception:
             continue
-            
+
     return hasher.hexdigest()
+
 
 def compute_config_hash(config: Dict[str, Any]) -> str:
     """Compute hash of a configuration dictionary."""

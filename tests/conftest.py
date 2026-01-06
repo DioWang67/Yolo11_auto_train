@@ -2,6 +2,7 @@
 Pytest configuration to prevent CI environment conflicts.
 CRITICAL: This must execute before any test imports that use tqdm or matplotlib.
 """
+
 import os
 import gc
 import pytest
@@ -15,8 +16,14 @@ matplotlib.use("Agg")
 
 # Additional safeguard: completely disable tqdm monitor
 import tqdm.std
-tqdm.std.TMonitor = type('TMonitor', (), {'__init__': lambda *args, **kwargs: None, 'exit': lambda *args: None})
+
+tqdm.std.TMonitor = type(
+    "TMonitor",
+    (),
+    {"__init__": lambda *args, **kwargs: None, "exit": lambda *args: None},
+)
 tqdm.tqdm.monitor_interval = 0
+
 
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_resources():

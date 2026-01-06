@@ -16,11 +16,11 @@ from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_log
 # Global variable for worker processes
 _worker_augmentations = None
 
+
 def _init_worker(ops_config: dict[str, Any]) -> None:
     """Initialize the augmentation pipeline in the worker process."""
     global _worker_augmentations
     _worker_augmentations = ImageAugmentor._build_augmentations_from_ops(ops_config)
-
 
 
 class ImageAugmentor:
@@ -90,7 +90,11 @@ class ImageAugmentor:
                     "blur": {"kernel": (3, 5)},
                 },
             },
-            "processing": {"batch_size": 10, "num_workers": None, "use_process_pool": False},
+            "processing": {
+                "batch_size": 10,
+                "num_workers": None,
+                "use_process_pool": False,
+            },
         }
 
     @staticmethod
@@ -235,7 +239,9 @@ class ImageAugmentor:
         else:
             num_workers = cpu_count()
 
-        use_process_pool = bool(self.config["processing"].get("use_process_pool", False))
+        use_process_pool = bool(
+            self.config["processing"].get("use_process_pool", False)
+        )
 
         if use_process_pool:
             # Pass only necessary data, not the full config which might contain non-picklable items
@@ -279,9 +285,7 @@ class ImageAugmentor:
         self.logger.info(f"完成! 花費: {elapsed_time:.2f} 秒，成功 {ok}，失敗 {fail}")
 
 
-def _process_single_image_job(
-    args: tuple[str, str, str, int]
-) -> bool:
+def _process_single_image_job(args: tuple[str, str, str, int]) -> bool:
     img_file, input_dir, output_dir, num_images = args
     try:
         img_path = Path(input_dir) / img_file
@@ -292,7 +296,7 @@ def _process_single_image_job(
         # Use the global augmentations initialized in the worker
         global _worker_augmentations
         if _worker_augmentations is None:
-             return False
+            return False
 
         saved_any = False
         for i in range(num_images):

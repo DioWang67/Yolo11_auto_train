@@ -126,43 +126,32 @@ def test_should_skip_yolo_augmentation_when_outputs_newer(base_config, temp_dirs
 
 
 def test_should_skip_dataset_splitter_when_split_ready(base_config):
-    reason = quality.skip_dataset_splitter(
-        base_config, SimpleNamespace(force=False)
-    )
+    reason = quality.skip_dataset_splitter(base_config, SimpleNamespace(force=False))
     assert reason is not None
 
 
 def test_should_skip_yolo_train_when_weights_fresh(base_config, temp_dirs):
     # Ensure weights are newer than dataset files
     import time
+
     time.sleep(1.1)
     (temp_dirs["runs"] / "weights" / "best.pt").touch()
     (temp_dirs["runs"] / "last_run_metadata.json").write_text("{}", encoding="utf-8")
-    
-    reason = training.skip_yolo_train(
-        base_config, SimpleNamespace(force=False)
-    )
+
+    reason = training.skip_yolo_train(base_config, SimpleNamespace(force=False))
     assert reason is not None
 
 
 def test_should_skip_dataset_lint_when_csv_fresh(base_config):
-    reason = quality.skip_dataset_lint(
-        base_config, SimpleNamespace(force=False)
-    )
+    reason = quality.skip_dataset_lint(base_config, SimpleNamespace(force=False))
     assert reason is not None
 
 
 def test_should_skip_aug_preview_when_preview_exists(base_config):
-    reason = augmentation.skip_aug_preview(
-        base_config, SimpleNamespace(force=False)
-    )
+    reason = augmentation.skip_aug_preview(base_config, SimpleNamespace(force=False))
     assert reason is not None
 
 
 def test_should_skip_batch_inference_when_predictions_exist(base_config):
-    reason = quality.skip_batch_infer(
-        base_config, SimpleNamespace(force=False)
-    )
+    reason = quality.skip_batch_infer(base_config, SimpleNamespace(force=False))
     assert reason is not None
-
-

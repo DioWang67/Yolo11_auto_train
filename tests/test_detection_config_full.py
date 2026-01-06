@@ -2,6 +2,7 @@
 Comprehensive tests for utils/detection_config.py module.
 Coverage target: 4% → 70%+
 """
+
 import logging
 import yaml
 
@@ -23,117 +24,104 @@ class TestLoadClassNamesFromRun:
         run_dir.mkdir()
         args_file = run_dir / "args.yaml"
         args_file.write_text(
-            yaml.safe_dump({"names": ["class1", "class2", "class3"]}),
-            encoding="utf-8"
+            yaml.safe_dump({"names": ["class1", "class2", "class3"]}), encoding="utf-8"
         )
-        
+
         logger = logging.getLogger("test")
         result = _load_class_names_from_run(run_dir, logger, fallback=[])
-        
+
         assert result == ["class1", "class2", "class3"]
 
     def test_loads_from_data_yaml_via_args(self, tmp_path):
         """Should follow data path in args.yaml to load names."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
+
         # Create data.yaml
         data_file = run_dir / "data.yaml"
         data_file.write_text(
-            yaml.safe_dump({"names": ["dog", "cat", "bird"]}),
-            encoding="utf-8"
+            yaml.safe_dump({"names": ["dog", "cat", "bird"]}), encoding="utf-8"
         )
-        
+
         # Create args.yaml pointing to data.yaml
         args_file = run_dir / "args.yaml"
-        args_file.write_text(
-            yaml.safe_dump({"data": "data.yaml"}),
-            encoding="utf-8"
-        )
-        
+        args_file.write_text(yaml.safe_dump({"data": "data.yaml"}), encoding="utf-8")
+
         logger = logging.getLogger("test")
         result = _load_class_names_from_run(run_dir, logger, fallback=[])
-        
+
         assert result == ["dog", "cat", "bird"]
 
     def test_handles_absolute_data_path(self, tmp_path):
         """Should handle absolute path to data.yaml."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
+
         data_file = tmp_path / "external_data.yaml"
         data_file.write_text(
-            yaml.safe_dump({"names": ["item1", "item2"]}),
-            encoding="utf-8"
+            yaml.safe_dump({"names": ["item1", "item2"]}), encoding="utf-8"
         )
-        
+
         args_file = run_dir / "args.yaml"
-        args_file.write_text(
-            yaml.safe_dump({"data": str(data_file)}),
-            encoding="utf-8"
-        )
-        
+        args_file.write_text(yaml.safe_dump({"data": str(data_file)}), encoding="utf-8")
+
         logger = logging.getLogger("test")
         result = _load_class_names_from_run(run_dir, logger, fallback=[])
-        
+
         assert result == ["item1", "item2"]
 
     def test_falls_back_when_args_missing(self, tmp_path):
         """Should use fallback when args.yaml doesn't exist."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
+
         logger = logging.getLogger("test")
         fallback = ["fallback1", "fallback2"]
         result = _load_class_names_from_run(run_dir, logger, fallback=fallback)
-        
+
         assert result == fallback
 
     def test_falls_back_when_data_yaml_missing(self, tmp_path):
         """Should use fallback when data.yaml is referenced but missing."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
+
         args_file = run_dir / "args.yaml"
-        args_file.write_text(
-            yaml.safe_dump({"data": "missing.yaml"}),
-            encoding="utf-8"
-        )
-        
+        args_file.write_text(yaml.safe_dump({"data": "missing.yaml"}), encoding="utf-8")
+
         logger = logging.getLogger("test")
         fallback = ["fallback_class"]
         result = _load_class_names_from_run(run_dir, logger, fallback=fallback)
-        
+
         assert result == fallback
 
     def test_handles_corrupt_args_yaml(self, tmp_path):
         """Should handle corrupted args.yaml gracefully."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
+
         args_file = run_dir / "args.yaml"
         args_file.write_text("invalid: yaml: content: [[[", encoding="utf-8")
-        
+
         logger = logging.getLogger("test")
         fallback = ["safe"]
         result = _load_class_names_from_run(run_dir, logger, fallback=fallback)
-        
+
         assert result == fallback
 
     def test_handles_dict_names_format(self, tmp_path):
         """Should normalize dict-based names format."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
+
         args_file = run_dir / "args.yaml"
         args_file.write_text(
-            yaml.safe_dump({"names": {0: "zero", 1: "one", 2: "two"}}),
-            encoding="utf-8"
+            yaml.safe_dump({"names": {0: "zero", 1: "one", 2: "two"}}), encoding="utf-8"
         )
-        
+
         logger = logging.getLogger("test")
         result = _load_class_names_from_run(run_dir, logger, fallback=[])
-        
+
         assert result == ["zero", "one", "two"]
 
 
@@ -163,20 +151,19 @@ class TestLoadMappingFromSource:
         logger = logging.getLogger("test")
         source = {"key1": "value1", "key2": {"nested": "value"}}
         result = _load_mapping_from_source(source, logger)
-        
+
         assert result == {"key1": "value1", "key2": {"nested": "value"}}
 
     def test_loads_from_yaml_file(self, tmp_path):
         """Should load mapping from YAML file."""
         src_file = tmp_path / "config.yaml"
         src_file.write_text(
-            yaml.safe_dump({"product": "Cable1", "area": "A"}),
-            encoding="utf-8"
+            yaml.safe_dump({"product": "Cable1", "area": "A"}), encoding="utf-8"
         )
-        
+
         logger = logging.getLogger("test")
         result = _load_mapping_from_source(src_file, logger)
-        
+
         assert result == {"product": "Cable1", "area": "A"}
 
     def test_handles_missing_file(self, tmp_path):
@@ -184,27 +171,27 @@ class TestLoadMappingFromSource:
         missing_file = tmp_path / "nonexistent.yaml"
         logger = logging.getLogger("test")
         result = _load_mapping_from_source(missing_file, logger)
-        
+
         assert result == {}
 
     def test_handles_corrupt_yaml_file(self, tmp_path):
         """Should return empty dict for corrupted YAML."""
         bad_file = tmp_path / "bad.yaml"
         bad_file.write_text("invalid: [[[yaml", encoding="utf-8")
-        
+
         logger = logging.getLogger("test")
         result = _load_mapping_from_source(bad_file, logger)
-        
+
         assert result == {}
 
     def test_handles_non_mapping_yaml(self, tmp_path):
         """Should return empty dict if YAML doesn't contain mapping."""
         list_file = tmp_path / "list.yaml"
         list_file.write_text(yaml.safe_dump([1, 2, 3]), encoding="utf-8")
-        
+
         logger = logging.getLogger("test")
         result = _load_mapping_from_source(list_file, logger)
-        
+
         assert result == {}
 
 
@@ -217,9 +204,9 @@ class TestApplyAreaOverrides:
         export_cfg = {"tolerance": 10}
         logger = logging.getLogger("test")
         warned = {}
-        
+
         result = _apply_area_overrides(area_cfg, export_cfg, None, logger, warned)
-        
+
         assert result["tolerance"] == 10.0
 
     def test_applies_tolerance_unit_override(self):
@@ -228,9 +215,9 @@ class TestApplyAreaOverrides:
         export_cfg = {"tolerance_unit": "percent"}
         logger = logging.getLogger("test")
         warned = {}
-        
+
         result = _apply_area_overrides(area_cfg, export_cfg, None, logger, warned)
-        
+
         assert result["tolerance_unit"] == "percent"
 
     def test_applies_imgsz_override(self):
@@ -240,9 +227,9 @@ class TestApplyAreaOverrides:
         logger = logging.getLogger("test")
         warned = {}
         imgsz = [1280, 1280]
-        
+
         result = _apply_area_overrides(area_cfg, export_cfg, imgsz, logger, warned)
-        
+
         # Should be scalar when both dimensions equal
         assert result["imgsz"] == 1280
 
@@ -253,9 +240,9 @@ class TestApplyAreaOverrides:
         logger = logging.getLogger("test")
         warned = {}
         imgsz = [640, 480]
-        
+
         result = _apply_area_overrides(area_cfg, export_cfg, imgsz, logger, warned)
-        
+
         assert result["imgsz"] == [640, 480]
 
     def test_handles_invalid_tolerance(self):
@@ -264,9 +251,9 @@ class TestApplyAreaOverrides:
         export_cfg = {"tolerance": "invalid"}
         logger = logging.getLogger("test")
         warned = {}
-        
+
         result = _apply_area_overrides(area_cfg, export_cfg, None, logger, warned)
-        
+
         assert result["tolerance"] == 5  # Original unchanged
         assert warned.get("tolerance") is True
 
@@ -276,7 +263,7 @@ class TestApplyAreaOverrides:
         export_cfg = {"tolerance": "invalid"}
         logger = logging.getLogger("test")
         warned = {"tolerance": True}  # Already warned
-        
+
         # Should not raise or log again
         result = _apply_area_overrides(area_cfg, export_cfg, None, logger, warned)
         assert result["tolerance"] == 5
@@ -290,19 +277,22 @@ class TestPreparePositionConfig:
         raw_config = {
             "Cable1": {
                 "A": {"tolerance": 10, "expected_boxes": {}},
-                "B": {"tolerance": 15, "expected_boxes": {}}
+                "B": {"tolerance": 15, "expected_boxes": {}},
             },
-            "Cable2": {
-                "A": {"tolerance": 20, "expected_boxes": {}}
-            }
+            "Cable2": {"A": {"tolerance": 20, "expected_boxes": {}}},
         }
         export_cfg = {}
         logger = logging.getLogger("test")
-        
+
         result = _prepare_position_config(
-            raw_config, export_cfg, product="Cable1", area="A", imgsz=None, logger=logger
+            raw_config,
+            export_cfg,
+            product="Cable1",
+            area="A",
+            imgsz=None,
+            logger=logger,
         )
-        
+
         assert "Cable1" in result
         assert "A" in result["Cable1"]
         assert "B" not in result["Cable1"]
@@ -312,30 +302,38 @@ class TestPreparePositionConfig:
         """Should return all products when include_all_products=True."""
         raw_config = {
             "Product1": {"AreaA": {"tolerance": 5}},
-            "Product2": {"AreaB": {"tolerance": 10}}
+            "Product2": {"AreaB": {"tolerance": 10}},
         }
         export_cfg = {"include_all_products": True}
         logger = logging.getLogger("test")
-        
+
         result = _prepare_position_config(
-            raw_config, export_cfg, product="Product1", area="AreaA", imgsz=None, logger=logger
+            raw_config,
+            export_cfg,
+            product="Product1",
+            area="AreaA",
+            imgsz=None,
+            logger=logger,
         )
-        
+
         assert "Product1" in result
         assert "Product2" in result
 
     def test_returns_all_when_product_or_area_missing(self):
         """Should include all if product/area not specified."""
-        raw_config = {
-            "ProductX": {"Area1": {"tolerance": 8}}
-        }
+        raw_config = {"ProductX": {"Area1": {"tolerance": 8}}}
         export_cfg = {}
         logger = logging.getLogger("test")
-        
+
         result = _prepare_position_config(
-            raw_config, export_cfg, product=None, area="Area1", imgsz=None, logger=logger
+            raw_config,
+            export_cfg,
+            product=None,
+            area="Area1",
+            imgsz=None,
+            logger=logger,
         )
-        
+
         assert "ProductX" in result
 
     def test_returns_empty_when_product_not_found(self):
@@ -343,11 +341,16 @@ class TestPreparePositionConfig:
         raw_config = {"OtherProduct": {"A": {}}}
         export_cfg = {}
         logger = logging.getLogger("test")
-        
+
         result = _prepare_position_config(
-            raw_config, export_cfg, product="MissingProduct", area="A", imgsz=None, logger=logger
+            raw_config,
+            export_cfg,
+            product="MissingProduct",
+            area="A",
+            imgsz=None,
+            logger=logger,
         )
-        
+
         assert result == {}
 
     def test_returns_empty_when_area_not_found(self):
@@ -355,11 +358,16 @@ class TestPreparePositionConfig:
         raw_config = {"Cable1": {"AreaX": {}}}
         export_cfg = {}
         logger = logging.getLogger("test")
-        
+
         result = _prepare_position_config(
-            raw_config, export_cfg, product="Cable1", area="AreaY", imgsz=None, logger=logger
+            raw_config,
+            export_cfg,
+            product="Cable1",
+            area="AreaY",
+            imgsz=None,
+            logger=logger,
         )
-        
+
         assert result == {}
 
     def test_applies_overrides_to_selected_area(self):
@@ -367,11 +375,16 @@ class TestPreparePositionConfig:
         raw_config = {"P1": {"A1": {"tolerance": 5}}}
         export_cfg = {"tolerance": 12}
         logger = logging.getLogger("test")
-        
+
         result = _prepare_position_config(
-            raw_config, export_cfg, product="P1", area="A1", imgsz=[800, 800], logger=logger
+            raw_config,
+            export_cfg,
+            product="P1",
+            area="A1",
+            imgsz=[800, 800],
+            logger=logger,
         )
-        
+
         assert result["P1"]["A1"]["tolerance"] == 12.0
         assert result["P1"]["A1"]["imgsz"] == 800
 
@@ -383,18 +396,17 @@ class TestDetectionConfigExporter:
         """Should export basic detection config."""
         run_dir = tmp_path / "runs" / "detect" / "train"
         run_dir.mkdir(parents=True)
-        
+
         # Create weights
         weights_dir = run_dir / "weights"
         weights_dir.mkdir()
         (weights_dir / "best.pt").write_text("fake_weights")
-        
+
         # Create args.yaml
         (run_dir / "args.yaml").write_text(
-            yaml.safe_dump({"names": ["class1", "class2"]}),
-            encoding="utf-8"
+            yaml.safe_dump({"names": ["class1", "class2"]}), encoding="utf-8"
         )
-        
+
         config = {
             "yolo_training": {
                 "class_names": ["class1", "class2"],
@@ -405,20 +417,22 @@ class TestDetectionConfigExporter:
                     "weights_name": "best.pt",
                     "conf_thres": 0.3,
                     "iou_thres": 0.5,
-                }
+                },
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result_path = DetectionConfigExporter.export(config, run_dir, logger, include_position=False)
-        
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
         assert result_path is not None
         assert result_path.exists()
-        
+
         # Verify content
         with open(result_path, encoding="utf-8") as f:
             exported = yaml.safe_load(f)
-        
+
         assert exported["conf_thres"] == 0.3
         assert exported["iou_thres"] == 0.5
         assert exported["device"] == "cpu"
@@ -428,16 +442,14 @@ class TestDetectionConfigExporter:
         """Should return None when export is disabled."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
-        
-        config = {
-            "yolo_training": {
-                "export_detection_config": {"enabled": False}
-            }
-        }
-        
+
+        config = {"yolo_training": {"export_detection_config": {"enabled": False}}}
+
         logger = logging.getLogger("test")
-        result = DetectionConfigExporter.export(config, run_dir, logger, include_position=False)
-        
+        result = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
         assert result is None
 
     def test_skips_when_weights_missing(self, tmp_path):
@@ -445,19 +457,18 @@ class TestDetectionConfigExporter:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         (run_dir / "weights").mkdir()
-        
+
         config = {
             "yolo_training": {
-                "export_detection_config": {
-                    "enabled": True,
-                    "weights_name": "best.pt"
-                }
+                "export_detection_config": {"enabled": True, "weights_name": "best.pt"}
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result = DetectionConfigExporter.export(config, run_dir, logger, include_position=False)
-        
+        result = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
         assert result is None
 
     def test_includes_position_config_when_enabled(self, tmp_path):
@@ -467,21 +478,25 @@ class TestDetectionConfigExporter:
         weights_dir = run_dir / "weights"
         weights_dir.mkdir()
         (weights_dir / "best.pt").write_text("weights")
-        
+
         # Create position config file
         pos_file = tmp_path / "position.yaml"
         pos_file.write_text(
-            yaml.safe_dump({
-                "Cable1": {
-                    "A": {
-                        "tolerance": 10,
-                        "expected_boxes": {"Red": {"x1": 0, "y1": 0, "x2": 100, "y2": 100}}
+            yaml.safe_dump(
+                {
+                    "Cable1": {
+                        "A": {
+                            "tolerance": 10,
+                            "expected_boxes": {
+                                "Red": {"x1": 0, "y1": 0, "x2": 100, "y2": 100}
+                            },
+                        }
                     }
                 }
-            }),
-            encoding="utf-8"
+            ),
+            encoding="utf-8",
         )
-        
+
         config = {
             "yolo_training": {
                 "class_names": ["Red"],
@@ -489,23 +504,25 @@ class TestDetectionConfigExporter:
                     "enabled": True,
                     "current_product": "Cable1",
                     "area": "A",
-                    "position_config_path": str(pos_file)
+                    "position_config_path": str(pos_file),
                 },
                 "position_validation": {
                     "enabled": True,
                     "product": "Cable1",
-                    "area": "A"
-                }
+                    "area": "A",
+                },
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result_path = DetectionConfigExporter.export(config, run_dir, logger, include_position=True)
-        
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=True
+        )
+
         assert result_path is not None
         with open(result_path, encoding="utf-8") as f:
             exported = yaml.safe_load(f)
-        
+
         assert "position_config" in exported
         assert "Cable1" in exported["position_config"]
 
@@ -516,22 +533,24 @@ class TestDetectionConfigExporter:
         weights_dir = run_dir / "weights"
         weights_dir.mkdir()
         (weights_dir / "best.pt").write_text("weights")
-        
+
         custom_output = tmp_path / "custom" / "config.yaml"
-        
+
         config = {
             "yolo_training": {
                 "class_names": ["test"],
                 "export_detection_config": {
                     "enabled": True,
-                    "output_path": str(custom_output)
-                }
+                    "output_path": str(custom_output),
+                },
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result_path = DetectionConfigExporter.export(config, run_dir, logger, include_position=False)
-        
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
         assert result_path == custom_output.resolve()
         assert result_path.exists()
 
@@ -542,21 +561,23 @@ class TestDetectionConfigExporter:
         weights_dir = run_dir / "weights"
         weights_dir.mkdir()
         (weights_dir / "best.pt").write_text("weights")
-        
+
         config = {
             "yolo_training": {
                 "class_names": ["x"],
                 "imgsz": 1024,  # Scalar
-                "export_detection_config": {"enabled": True}
+                "export_detection_config": {"enabled": True},
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result_path = DetectionConfigExporter.export(config, run_dir, logger, include_position=False)
-        
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
         with open(result_path, encoding="utf-8") as f:
             exported = yaml.safe_load(f)
-        
+
         assert exported["imgsz"] == [1024, 1024]
 
     def test_extracts_expected_items_from_position_config(self, tmp_path):
@@ -566,7 +587,7 @@ class TestDetectionConfigExporter:
         weights_dir = run_dir / "weights"
         weights_dir.mkdir()
         (weights_dir / "best.pt").write_text("weights")
-        
+
         config = {
             "yolo_training": {
                 "class_names": ["A", "B"],
@@ -575,25 +596,20 @@ class TestDetectionConfigExporter:
                     "current_product": "P1",
                     "area": "Area1",
                     "position_config": {
-                        "P1": {
-                            "Area1": {
-                                "expected_boxes": {
-                                    "ItemA": {},
-                                    "ItemB": {}
-                                }
-                            }
-                        }
-                    }
-                }
+                        "P1": {"Area1": {"expected_boxes": {"ItemA": {}, "ItemB": {}}}}
+                    },
+                },
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result_path = DetectionConfigExporter.export(config, run_dir, logger, include_position=True)
-        
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=True
+        )
+
         with open(result_path, encoding="utf-8") as f:
             exported = yaml.safe_load(f)
-        
+
         assert "expected_items" in exported
         assert exported["expected_items"]["P1"]["Area1"] == ["ItemA", "ItemB"]
 
@@ -605,26 +621,31 @@ class TestDetectionConfigExporter:
         weights_dir.mkdir()
         (weights_dir / "best.pt").write_text("weights")
         (run_dir / "args.yaml").write_text(
-            yaml.safe_dump({"names": ["Red", "Green", "Blue"]}),
-            encoding="utf-8"
+            yaml.safe_dump({"names": ["Red", "Green", "Blue"]}), encoding="utf-8"
         )
-        
+
         config = {
             "yolo_training": {
                 "class_names": ["Red", "Green", "Blue"],
                 "export_detection_config": {
                     "enabled": True,
                     "current_product": "TestProduct",
-                    "area": "TestArea"
-                }
+                    "area": "TestArea",
+                },
             }
         }
-        
+
         logger = logging.getLogger("test")
-        result_path = DetectionConfigExporter.export(config, run_dir, logger, include_position=False)
-        
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
         with open(result_path, encoding="utf-8") as f:
             exported = yaml.safe_load(f)
-        
+
         assert "expected_items" in exported
-        assert exported["expected_items"]["TestProduct"]["TestArea"] == ["Red", "Green", "Blue"]
+        assert exported["expected_items"]["TestProduct"]["TestArea"] == [
+            "Red",
+            "Green",
+            "Blue",
+        ]

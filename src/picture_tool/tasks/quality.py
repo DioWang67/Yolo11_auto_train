@@ -76,19 +76,23 @@ def run_qc_summary(config, args):
     generate_qc_summary(config, logger=logging.getLogger(__name__))
 
 
-
 def _section_enabled(section) -> bool:
     if section is None:
         return False
     return section.get("enabled", True)
 
+
 def run_color_inspection(config, args):
     color_cfg = config.get("color_inspection")
     if not _section_enabled(color_cfg):
-        logging.getLogger(__name__).info("color_inspection disabled or missing; skipping.")
+        logging.getLogger(__name__).info(
+            "color_inspection disabled or missing; skipping."
+        )
         return
     input_dir = Path(color_cfg.get("input_dir", "./data/led_qc/samples"))
-    output_json = Path(color_cfg.get("output_json", "./reports/led_qc/color_stats.json"))
+    output_json = Path(
+        color_cfg.get("output_json", "./reports/led_qc/color_stats.json")
+    )
     colors = color_cfg.get("colors") or []
     sam_cfg = color_cfg.get("sam", {}) or {}
     checkpoint = sam_cfg.get("checkpoint")
@@ -119,7 +123,9 @@ def run_color_inspection(config, args):
     if colors:
         cmd += ["--colors", *colors]
     logging.getLogger(__name__).info(
-        "Launching SAM color selection GUI for %s (output -> %s)", input_dir, output_json
+        "Launching SAM color selection GUI for %s (output -> %s)",
+        input_dir,
+        output_json,
     )
     subprocess.run(cmd, check=True)
 
@@ -127,7 +133,9 @@ def run_color_inspection(config, args):
 def run_color_verification(config, args):
     color_cfg = config.get("color_verification")
     if not _section_enabled(color_cfg):
-        logging.getLogger(__name__).info("color_verification disabled or missing; skipping.")
+        logging.getLogger(__name__).info(
+            "color_verification disabled or missing; skipping."
+        )
         return
     input_dir = Path(color_cfg.get("input_dir", "./data/led_qc/infer"))
     stats_path = Path(color_cfg.get("color_stats", "./reports/led_qc/color_stats.json"))
@@ -150,17 +158,35 @@ def run_color_verification(config, args):
         ratio_threshold=float(strip_cfg.get("threshold", 0.25)),
         orientation=str(strip_cfg.get("orientation", "vertical")),
         min_strip_ratio=float(strip_cfg.get("min_width_ratio", 0.05)),
-        edge_margin=float(strip_cfg.get("edge_margin", color_verifier.DEFAULT_EDGE_MARGIN)),
-        sat_threshold=float(strip_cfg.get("sat_threshold", color_verifier.DEFAULT_SAT_THRESHOLD)),
-        val_threshold=float(strip_cfg.get("val_threshold", color_verifier.DEFAULT_VAL_THRESHOLD)),
+        edge_margin=float(
+            strip_cfg.get("edge_margin", color_verifier.DEFAULT_EDGE_MARGIN)
+        ),
+        sat_threshold=float(
+            strip_cfg.get("sat_threshold", color_verifier.DEFAULT_SAT_THRESHOLD)
+        ),
+        val_threshold=float(
+            strip_cfg.get("val_threshold", color_verifier.DEFAULT_VAL_THRESHOLD)
+        ),
         center_bias=strip_cfg.get("center_bias", True),
-        center_sigma=float(strip_cfg.get("center_sigma", color_verifier.DEFAULT_CENTER_SIGMA)),
-        min_valid_pixels=int(strip_cfg.get("min_valid_pixels", color_verifier.DEFAULT_MIN_VALID_PIXELS)),
+        center_sigma=float(
+            strip_cfg.get("center_sigma", color_verifier.DEFAULT_CENTER_SIGMA)
+        ),
+        min_valid_pixels=int(
+            strip_cfg.get("min_valid_pixels", color_verifier.DEFAULT_MIN_VALID_PIXELS)
+        ),
         top_k=int(strip_cfg.get("top_k", color_verifier.DEFAULT_TOPK)),
-        min_sat_ratio=float(strip_cfg.get("min_sat_ratio", color_verifier.DEFAULT_MIN_SAT_RATIO)),
-        max_edge_ratio=float(strip_cfg.get("max_edge_ratio", color_verifier.DEFAULT_MAX_EDGE_RATIO)),
-        black_s_threshold=float(strip_cfg.get("black_s_threshold", color_verifier.BLACK_S_THRESHOLD)),
-        black_v_threshold=float(strip_cfg.get("black_v_threshold", color_verifier.BLACK_V_THRESHOLD)),
+        min_sat_ratio=float(
+            strip_cfg.get("min_sat_ratio", color_verifier.DEFAULT_MIN_SAT_RATIO)
+        ),
+        max_edge_ratio=float(
+            strip_cfg.get("max_edge_ratio", color_verifier.DEFAULT_MAX_EDGE_RATIO)
+        ),
+        black_s_threshold=float(
+            strip_cfg.get("black_s_threshold", color_verifier.BLACK_S_THRESHOLD)
+        ),
+        black_v_threshold=float(
+            strip_cfg.get("black_v_threshold", color_verifier.BLACK_V_THRESHOLD)
+        ),
     )
 
     logger = logging.getLogger(__name__)
@@ -184,15 +210,25 @@ def run_color_verification(config, args):
         lab_margin=lab_margin,
         segments=int(color_cfg.get("segments", strip_opts.segments)),
         orientation=str(color_cfg.get("orientation", strip_opts.orientation)),
-        min_strip_ratio=float(color_cfg.get("min_strip_ratio", strip_opts.min_strip_ratio)),
-        ratio_threshold=float(color_cfg.get("ratio_threshold", strip_opts.ratio_threshold)),
+        min_strip_ratio=float(
+            color_cfg.get("min_strip_ratio", strip_opts.min_strip_ratio)
+        ),
+        ratio_threshold=float(
+            color_cfg.get("ratio_threshold", strip_opts.ratio_threshold)
+        ),
         edge_margin=float(color_cfg.get("edge_margin", strip_opts.edge_margin)),
         sat_threshold=float(color_cfg.get("sat_threshold", strip_opts.sat_threshold)),
         val_threshold=float(color_cfg.get("val_threshold", strip_opts.val_threshold)),
         min_sat_ratio=float(color_cfg.get("min_sat_ratio", strip_opts.min_sat_ratio)),
-        max_edge_ratio=float(color_cfg.get("max_edge_ratio", strip_opts.max_edge_ratio)),
-        black_s_threshold=float(color_cfg.get("black_s_threshold", strip_opts.black_s_threshold)),
-        black_v_threshold=float(color_cfg.get("black_v_threshold", strip_opts.black_v_threshold)),
+        max_edge_ratio=float(
+            color_cfg.get("max_edge_ratio", strip_opts.max_edge_ratio)
+        ),
+        black_s_threshold=float(
+            color_cfg.get("black_s_threshold", strip_opts.black_s_threshold)
+        ),
+        black_v_threshold=float(
+            color_cfg.get("black_v_threshold", strip_opts.black_v_threshold)
+        ),
         debug_plot=debug_plot,
         debug_dir=Path(debug_dir) if debug_dir else None,
         strip_options=strip_opts,

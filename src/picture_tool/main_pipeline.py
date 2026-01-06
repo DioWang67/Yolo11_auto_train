@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -9,7 +9,9 @@ from picture_tool.pipeline.core import Pipeline, Task
 from picture_tool.config_validation import validate_config_schema
 
 
-def _should_skip(task: str, config: dict, args, logger: Optional[logging.Logger] = None) -> Optional[str]:
+def _should_skip(
+    task: str, config: dict, args, logger: Optional[logging.Logger] = None
+) -> Optional[str]:
     # Deprecated: Logic moved to individual task definitions.
     return None
 
@@ -100,20 +102,22 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
     if getattr(args, "name", None):
         yt["name"] = args.name
         changed.append(("name", yt["name"]))
-    
+
     # [NEW] Product Override
     product = getattr(args, "product", None)
     if product:
         # 1. Update Augmentation Inputs
         ya = config.get("yolo_augmentation", {})
         inp = ya.get("input", {})
-        
+
         target_img_dir = f"./data/raw/{product}/images"
         target_lbl_dir = f"./data/raw/{product}/labels"
-        
+
         if not Path(target_img_dir).exists():
-             raise FileNotFoundError(f"Product directory not found: {target_img_dir}\n請確認 data/raw/{product} 是否存在。")
-        
+            raise FileNotFoundError(
+                f"Product directory not found: {target_img_dir}\n請確認 data/raw/{product} 是否存在。"
+            )
+
         inp["image_dir"] = target_img_dir
         inp["label_dir"] = target_lbl_dir
         ya["input"] = inp
@@ -147,9 +151,8 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
         changed.append(("infer.output", bi["output_dir"]))
     # Also apply product override to inference input if not manually specified?
     # For now, let's keep inference manual or assume default.
-    
-    config["batch_inference"] = bi
 
+    config["batch_inference"] = bi
 
     if changed:
         logger.info(
@@ -172,9 +175,6 @@ def _auto_device(config: dict, logger: logging.Logger) -> None:
         config["yolo_training"] = yt
 
 
-
-
-
 def build_task_registry(config: dict) -> dict[str, Task]:
     from picture_tool.tasks import (
         conversion,
@@ -191,7 +191,7 @@ def build_task_registry(config: dict) -> dict[str, Task]:
         augmentation,
         data_sync,
     ]
-    
+
     registry: dict[str, Task] = {}
     for mod in tasks_modules:
         if hasattr(mod, "TASKS"):
@@ -200,7 +200,9 @@ def build_task_registry(config: dict) -> dict[str, Task]:
     return registry
 
 
-def validate_dependencies(tasks: list[str], config: dict, logger: logging.Logger) -> list[str]:
+def validate_dependencies(
+    tasks: list[str], config: dict, logger: logging.Logger
+) -> list[str]:
     # Simplistic validation: just ensure tasks exist
     # Dependencies are handled by Pipeline core at runtime
     # We still want to warn about missing weights if possible, but the original
@@ -224,18 +226,22 @@ def interactive_task_selection(config, registry: dict[str, Task]):
     print("\nAvailable tasks:")
     all_tasks = sorted(registry.keys())
     # Try to get enabled status from config if possible
-    pipeline_tasks = {t.get("name"): t for t in config.get("pipeline", {}).get("tasks", [])}
-    
+    pipeline_tasks = {
+        t.get("name"): t for t in config.get("pipeline", {}).get("tasks", [])
+    }
+
     for i, task_name in enumerate(all_tasks, 1):
         # Default to enabled if not specified
         enabled = True
         if task_name in pipeline_tasks:
             enabled = pipeline_tasks[task_name].get("enabled", True)
-        
+
         status = "enabled" if enabled else "disabled"
         print(f"{i}. {task_name} ({status}) - {registry[task_name].description}")
 
-    print("\nEnter task numbers separated by spaces. Enter 0 to run all enabled tasks, or press Enter to accept defaults.")
+    print(
+        "\nEnter task numbers separated by spaces. Enter 0 to run all enabled tasks, or press Enter to accept defaults."
+    )
     user_input = input("> ").strip()
 
     if not user_input:
@@ -256,10 +262,10 @@ def interactive_task_selection(config, registry: dict[str, Task]):
 def run_pipeline(tasks, config, logger, args, stop_event=None):
     """Execute each task handler with dependency checks and skipping logic."""
     validate_config_schema(config, logger=logger, strict=False)
-    
+
     registry = build_task_registry(config)
-    
-    # If interactive selection was NOT used (tasks passed from CLI/groups), 
+
+    # If interactive selection was NOT used (tasks passed from CLI/groups),
     # ensuring they exist in registry:
     valid_tasks = []
     for t in tasks:
@@ -267,7 +273,7 @@ def run_pipeline(tasks, config, logger, args, stop_event=None):
             valid_tasks.append(t)
         else:
             logger.warning(f"Unknown task requested: {t}")
-    
+
     setattr(args, "stop_event", stop_event)
 
     def _before_task(task_obj: Task, cfg: dict) -> dict:
@@ -283,7 +289,9 @@ def run_pipeline(tasks, config, logger, args, stop_event=None):
 
 def main():
     from picture_tool.cli import app
+
     app()
+
 
 if __name__ == "__main__":
     main()

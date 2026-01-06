@@ -23,11 +23,11 @@ class AnnotationTracker:
         label_dir: Path,
     ) -> Dict:
         """Scan directories and get annotation statistics.
-        
+
         Args:
             image_dir: Directory containing images
             label_dir: Directory containing label files
-        
+
         Returns:
             Dictionary with statistics:
             - total_images: Total number of images
@@ -39,29 +39,25 @@ class AnnotationTracker:
         if not image_dir.exists():
             logger.warning(f"Image directory does not exist: {image_dir}")
             return self._empty_stats()
-        
+
         # Get all image files
         image_files: set[str] = set()
         for ext in self.image_extensions:
-            image_files.update(
-                f.stem for f in image_dir.glob(f"*{ext}")
-            )
-        
+            image_files.update(f.stem for f in image_dir.glob(f"*{ext}"))
+
         # Get all label files
         label_files = set()
         if label_dir.exists():
-            label_files = {
-                f.stem for f in label_dir.glob(f"*{self.label_extension}")
-            }
-        
+            label_files = {f.stem for f in label_dir.glob(f"*{self.label_extension}")}
+
         # Calculate statistics
-        annotated =image_files & label_files
+        annotated = image_files & label_files
         unannotated = image_files - label_files
-        
+
         total = len(image_files)
         annotated_count = len(annotated)
         progress = (annotated_count / total * 100) if total > 0 else 0
-        
+
         return {
             "total_images": total,
             "annotated_images": annotated_count,
@@ -76,26 +72,26 @@ class AnnotationTracker:
         num_classes: int,
     ) -> List[str]:
         """Validate annotation files for errors.
-        
+
         Args:
             label_dir: Directory containing label files
             num_classes: Number of valid classes
-        
+
         Returns:
             List of error messages (empty if all valid)
         """
         errors = []
-        
+
         if not label_dir.exists():
             return [f"Label directory does not exist: {label_dir}"]
-        
+
         label_files = list(label_dir.glob(f"*{self.label_extension}"))
-        
+
         for label_file in label_files:
             file_errors = self._validate_single_file(label_file, num_classes)
             if file_errors:
                 errors.extend([f"{label_file.name}: {err}" for err in file_errors])
-        
+
         return errors
 
     def _validate_single_file(
@@ -104,57 +100,62 @@ class AnnotationTracker:
         num_classes: int,
     ) -> List[str]:
         """Validate a single label file.
-        
+
         Args:
             label_file: Path to label file
             num_classes: Number of valid classes
-        
+
         Returns:
             List of error messages for this file
         """
         errors = []
-        
+
         try:
             with open(label_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-            
+
             for line_num, line in enumerate(lines, 1):
                 line = line.strip()
                 if not line:
                     continue
-                
+
                 parts = line.split()
                 if len(parts) < 5:
                     errors.append(
                         f"Line {line_num}: Expected 5 values (class x y w h), got {len(parts)}"
                     )
                     continue
-                
+
                 try:
                     class_id = int(parts[0])
                     x, y, w, h = map(float, parts[1:5])
-                    
+
                     # Validate class ID
                     if class_id < 0 or class_id >= num_classes:
                         errors.append(
                             f"Line {line_num}: Invalid class_id {class_id} "
-                            f"(must be 0-{num_classes-1})"
+                            f"(must be 0-{num_classes - 1})"
                         )
-                    
+
                     # Validate coordinates (should be normalized 0-1)
-                    for coord_name, coord_val in [("x", x), ("y", y), ("w", w), ("h", h)]:
+                    for coord_name, coord_val in [
+                        ("x", x),
+                        ("y", y),
+                        ("w", w),
+                        ("h", h),
+                    ]:
                         if not (0 <= coord_val <= 1):
                             errors.append(
                                 f"Line {line_num}: {coord_name}={coord_val} "
                                 f"out of range [0, 1]"
                             )
-                
+
                 except ValueError as e:
                     errors.append(f"Line {line_num}: Cannot parse values - {e}")
-        
+
         except Exception as e:
             errors.append(f"Cannot read file: {e}")
-        
+
         return errors
 
     def get_class_distribution(
@@ -163,19 +164,19 @@ class AnnotationTracker:
         class_names: List[str],
     ) -> Dict[str, int]:
         """Get distribution of classes across all annotations.
-        
+
         Args:
             label_dir: Directory containing label files
             class_names: List of class names (indexed by class_id)
-        
+
         Returns:
             Dictionary mapping class names to counts
         """
         if not label_dir.exists():
             return {}
-        
+
         class_counts: Counter = Counter()
-        
+
         for label_file in label_dir.glob(f"*{self.label_extension}"):
             try:
                 with open(label_file, "r", encoding="utf-8") as f:
@@ -191,7 +192,7 @@ class AnnotationTracker:
             except Exception as e:
                 logger.warning(f"Error reading {label_file}: {e}")
                 continue
-        
+
         return dict(class_counts)
 
     def _empty_stats(self) -> Dict:

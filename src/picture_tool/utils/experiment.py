@@ -112,7 +112,14 @@ def write_experiment(
         payload["extra"] = _jsonable(extra)
 
     yaml_path = out_dir / f"{run_id}.yaml"
-    yaml.safe_dump(payload, yaml_path.open("w", encoding="utf-8"), sort_keys=False, allow_unicode=True)
+    yaml.safe_dump(
+        payload,
+        yaml_path.open("w", encoding="utf-8"),
+        sort_keys=False,
+        allow_unicode=True,
+    )
     json_path = out_dir / f"{run_id}.json"
-    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     return yaml_path

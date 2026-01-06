@@ -170,7 +170,9 @@ def _letterbox_transform(
 
 
 @lru_cache(maxsize=128)
-def _letterbox_params(orig_w: int, orig_h: int, imgsz: int) -> Tuple[float, float, float]:
+def _letterbox_params(
+    orig_w: int, orig_h: int, imgsz: int
+) -> Tuple[float, float, float]:
     scale = min(imgsz / float(orig_w), imgsz / float(orig_h))
     new_w = float(orig_w) * scale
     new_h = float(orig_h) * scale
