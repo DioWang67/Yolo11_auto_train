@@ -216,7 +216,7 @@ yolo_training:
   - Red
   - Yellow
   model: ./models/yolo11n.pt
-  epochs: 10
+  epochs: 5
   imgsz: 640
   batch: 16
   device: cpu
