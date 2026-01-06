@@ -1,54 +1,61 @@
-from typing import Any, List, Sequence, Mapping
+"""Utilities for normalizing configuration values."""
+from typing import Any, List, Dict
 
-def normalize_imgsz(value: Any) -> Any:
-    """Normalize imgsz representations to [width, height]."""
-    if value in (None, "", []):
+def normalize_imgsz(value: Any) -> List[int] | None:
+    """
+    Normalize imgsz to [width, height].
+    
+    Args:
+        value: Can be int, str, list, tuple
+        
+    Returns:
+        [width, height] or None if invalid
+    """
+    if value is None:
         return None
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        ints: List[int] = []
-        for item in value:
-            if item in (None, ""):
-                continue
+    
+    if isinstance(value, (list, tuple)):
+        ints = []
+        for v in value:
             try:
-                ints.append(int(float(item)))
+                ints.append(int(float(v)))
             except (TypeError, ValueError):
-                continue
-        if not ints:
+                pass
+        if len(ints) >= 2:
+            return [ints[0], ints[1]]
+        elif len(ints) == 1:
+            return [ints[0], ints[0]]
+        else:
             return None
-        if len(ints) == 1:
-            ints *= 2
-        elif len(ints) >= 2:
-            ints = ints[:2]
-            if len(ints) == 1:
-                ints.append(ints[0])
-        if len(ints) < 2:
-            ints.append(ints[0])
-        return [ints[0], ints[1]]
+    
+    # Single value (int or string)
     try:
         val = int(float(value))
-    except (TypeError, ValueError):
-        value = None # Fallback
-    if isinstance(val, int):
         return [val, val]
-    return None
+    except (TypeError, ValueError):
+        return None
 
 def normalize_name_sequence(value: Any) -> List[str]:
-    """Convert various name representations (list or dict) to a string list."""
-    if isinstance(value, Mapping):
-        items = []
-        for key, val in value.items():
-            try:
-                sort_key = int(key)
-            except (TypeError, ValueError):
-                sort_key = key
-            items.append((sort_key, str(val)))
-        try:
-            items.sort(key=lambda item: item[0])
-        except TypeError:
-            items.sort(key=lambda item: str(item[0]))
-        return [name for _, name in items if name]
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [str(item) for item in value if item not in (None, "")]
-    if value not in (None, ""):
-        return [str(value)]
+    """
+    Normalize class names to a list of strings.
+    
+    Args:
+        value: Can be list, tuple, dict, or single value
+        
+    Returns:
+        List of string names
+    """
+    if value is None:
+        return []
+    
+    # Dict mapping {id: name}
+    if isinstance(value, dict):
+        sorted_items = sorted(value.items())
+        return [str(v) for k, v in sorted_items if v is not None]
+    
+    # List or tuple
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if v is not None]
+    
+    # Single value - return empty list (invalid type)
     return []
