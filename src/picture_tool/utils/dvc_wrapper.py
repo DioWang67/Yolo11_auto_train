@@ -6,9 +6,10 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+
 class DVCWrapper:
     """Helper to interact with DVC via subprocess."""
-    
+
     def __init__(self, cwd: Path = Path(".")):
         self.cwd = cwd
         self._dvc_cmd = shutil.which("dvc")
@@ -25,15 +26,15 @@ class DVCWrapper:
         if not self.is_installed:
             logger.warning("DVC is not installed or not in PATH.")
             return False
-            
+
         cmd = ["dvc"] + args
         try:
             logger.info(f"Running DVC command: {' '.join(cmd)}")
             subprocess.run(
-                cmd, 
-                cwd=self.cwd, 
-                check=True, 
-                capture_output=False  # Let output flow to stdout for user visibility
+                cmd,
+                cwd=self.cwd,
+                check=True,
+                capture_output=False,  # Let output flow to stdout for user visibility
             )
             return True
         except subprocess.CalledProcessError as e:

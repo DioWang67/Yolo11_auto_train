@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Any
 from picture_tool.pipeline.utils import detect_existing_weights
 
+
 def run_artifact_bundle(config, args):
     """Bundle training artifacts into a zip file for delivery."""
     logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ def run_artifact_bundle(config, args):
     product = config.get("yolo_training", {}).get("name", "train")
     if getattr(args, "product", None):
         product = args.product
-        
+
     out_dir = Path(bcfg.get("base_dir") or run_dir)
     dir_name = bcfg.get("dir_name", "bundle")
     zip_name = f"{product}_{dir_name}.zip"
@@ -37,20 +38,23 @@ def run_artifact_bundle(config, args):
             run_dir / "weights" / "best.onnx",
         ],
         "include_detection_config": [run_dir / "config.json"],
-        "include_position_config": [run_dir / "position_config.yaml", run_dir / "auto_position_config.yaml"],
+        "include_position_config": [
+            run_dir / "position_config.yaml",
+            run_dir / "auto_position_config.yaml",
+        ],
         "include_results_csv": [run_dir / "results.csv"],
         "include_args_yaml": [run_dir / "args.yaml"],
     }
 
     files_to_zip = []
-    
+
     # Always include explicit specific files if they exist
     for key, candidates in inclusion_map.items():
         if bcfg.get(key, True):
             for cand in candidates:
                 if cand.exists():
                     files_to_zip.append(cand)
-    
+
     # Create Zip
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -60,5 +64,6 @@ def run_artifact_bundle(config, args):
         logger.info(f"Bundle created successfully: {zip_path}")
     except Exception as e:
         logger.error(f"Failed to create bundle: {e}")
+
 
 TASKS: List[Any] = []

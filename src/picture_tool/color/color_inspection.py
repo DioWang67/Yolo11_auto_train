@@ -238,17 +238,17 @@ class SessionConfig:
         checkpoint = Path(sam_cfg.get("checkpoint", "./models/sam/sam_vit_b.pth"))
         model_type = sam_cfg.get("model_type", "vit_b")
         device = sam_cfg.get("device", "auto")
-        max_side = (
-            getattr(ns, "max_side", None)
-            or sam_cfg.get("max_side")
-            or 2048
-        )
+        max_side = getattr(ns, "max_side", None) or sam_cfg.get("max_side") or 2048
         colors = list(getattr(ns, "colors", []) or ["Default"])
         return SessionConfig(
             input_dir=Path(getattr(ns, "input_dir", "./data/led_qc/samples")),
-            output_json=Path(getattr(ns, "output_json", "./reports/led_qc/color_stats.json")),
+            output_json=Path(
+                getattr(ns, "output_json", "./reports/led_qc/color_stats.json")
+            ),
             colors=colors,
-            sam=SamSettings(checkpoint=checkpoint, model_type=model_type, device=device),
+            sam=SamSettings(
+                checkpoint=checkpoint, model_type=model_type, device=device
+            ),
             sam_infer_max_side=int(max_side),
         )
 
@@ -276,10 +276,18 @@ class RunningStats:
     count: int = 0
     hsv_sum: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
     lab_sum: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
-    hsv_p10_sum: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
-    hsv_p90_sum: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
-    lab_p10_sum: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
-    lab_p90_sum: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
+    hsv_p10_sum: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
+    hsv_p90_sum: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
+    lab_p10_sum: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
+    lab_p90_sum: np.ndarray = field(
+        default_factory=lambda: np.zeros(3, dtype=np.float64)
+    )
     coverage_sum: float = 0.0
     hsv_min: np.ndarray = field(
         default_factory=lambda: np.full(3, np.inf, dtype=np.float64)
@@ -388,7 +396,9 @@ class ColorStatsRecorder:
         )
 
     def to_json(self) -> Dict[str, object]:
-        return {"summary": {color: stats.as_dict() for color, stats in self.summary.items()}}
+        return {
+            "summary": {color: stats.as_dict() for color, stats in self.summary.items()}
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +557,9 @@ class SamPredictorWrapper:
 # ---------------------------------------------------------------------------
 
 
-def _compute_channel_stats(image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _compute_channel_stats(
+    image: np.ndarray, mask: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     masked = image[mask > 0]
     if masked.size == 0:
         raise ValueError("Empty mask; no pixels selected.")
@@ -564,8 +576,16 @@ def compute_hsv_lab_stats(
     hsv_image: Optional[np.ndarray] = None,
     lab_image: Optional[np.ndarray] = None,
 ) -> Dict[str, List[float] | float]:
-    hsv = hsv_image if hsv_image is not None else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
-    lab = lab_image if lab_image is not None else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+    hsv = (
+        hsv_image
+        if hsv_image is not None
+        else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    )
+    lab = (
+        lab_image
+        if lab_image is not None
+        else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+    )
     hsv_mean, hsv_min, hsv_max = _compute_channel_stats(hsv, mask)
     lab_mean, lab_min, lab_max = _compute_channel_stats(lab, mask)
     mask_bool = mask > 0
@@ -636,7 +656,7 @@ class _SamInferenceTask(QtCore.QRunnable):
                 point_coords=self.point_coords,
                 point_labels=self.point_labels,
             )
-            
+
             if self.cancel_event.is_set():
                 return
 
@@ -662,15 +682,15 @@ class _SamInferenceTask(QtCore.QRunnable):
                     stats = None
 
             inference_ms = (time.time() - t0) * 1000.0
-            
+
             if self.cancel_event.is_set():
                 return
             if self.progress_cb:
                 self.progress_cb("done", inference_ms)
-            
+
             # Return full-res mask AND computed stats
             self.callback(self.request_id, resized_mask, stats, inference_ms, None)
-            
+
         except Exception as exc:
             if self.cancel_event.is_set():
                 return
@@ -715,7 +735,6 @@ class ImageCanvas(QtWidgets.QLabel):
         self._update_scaled_pixmap()
         self._overlay_mask = None
         self.update()
-
 
     def set_overlay_mask(self, mask: Optional[np.ndarray]) -> None:
         self._overlay_mask = mask
@@ -832,7 +851,9 @@ class ImageCanvas(QtWidgets.QLabel):
             )
             painter.drawImage(0, 0, overlay_img)
 
-        if self._drawing or (not self._current_box.isNull() and self._current_box.isValid()):
+        if self._drawing or (
+            not self._current_box.isNull() and self._current_box.isValid()
+        ):
             pen = QtGui.QPen(QtGui.QColor(255, 165, 0))
             pen.setWidth(2)
             painter.setPen(pen)
@@ -851,7 +872,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.cfg = cfg
         self.setWindowTitle("🎨 SAM Color Selection Tool")
         self.setMinimumSize(1200, 800)
-        
+
         # Apply modern stylesheet
         self.setStyleSheet("""
             QWidget {
@@ -937,7 +958,11 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self._sam_request_id = 0
         self._active_sam_task: Optional[_SamInferenceTask] = None
         self._queued_sam_args: Optional[
-            Tuple[Optional[Tuple[int, int, int, int]], Optional[List[Tuple[float, float]]], Optional[List[int]]]
+            Tuple[
+                Optional[Tuple[int, int, int, int]],
+                Optional[List[Tuple[float, float]]],
+                Optional[List[int]],
+            ]
         ] = None
         self.samResultReady.connect(self._on_sam_result)
         self.samProgress.connect(self._on_sam_progress)
@@ -955,7 +980,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.current_hsv: Optional[np.ndarray] = None
         self.current_lab: Optional[np.ndarray] = None
         self.current_mask: Optional[np.ndarray] = None
-        self.current_stats: Optional[Dict[str, object]] = None # Cache for stats
+        self.current_stats: Optional[Dict[str, object]] = None  # Cache for stats
         self.current_box: Optional[Tuple[int, int, int, int]] = None
         self.point_coords: List[Tuple[float, float]] = []
         self.point_labels: List[int] = []
@@ -983,7 +1008,9 @@ class SamSelectionWindow(QtWidgets.QWidget):
             "🖌 拖曳矩形框選區域，左鍵增加正面點，右鍵增加負面點。"
         )
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #8b949e; font-size: 9pt; padding: 8px; background-color: #161b22; border-radius: 6px;")
+        self.info_label.setStyleSheet(
+            "color: #8b949e; font-size: 9pt; padding: 8px; background-color: #161b22; border-radius: 6px;"
+        )
 
         self.prompt_label = QtWidgets.QLabel("📍 Points: 0(+)/0(-)")
         self.prompt_label.setStyleSheet("font-weight: 600; color: #58a6ff;")
@@ -993,33 +1020,33 @@ class SamSelectionWindow(QtWidgets.QWidget):
         btn_prev.clicked.connect(self._prev_image)
         btn_next = QtWidgets.QPushButton("Next (Skip) ▶")
         btn_next.clicked.connect(self._next_image)
-        
+
         # Action buttons
         btn_save = QtWidgets.QPushButton("💾 Save Selection")
         btn_save.setObjectName("SuccessBtn")
         btn_save.clicked.connect(self._save_current_selection)
-        
+
         btn_finish = QtWidgets.QPushButton("✓ Finish & Export")
         btn_finish.setObjectName("PrimaryBtn")
         btn_finish.clicked.connect(self._finish_session)
-        
+
         # Edit buttons
         btn_undo_point = QtWidgets.QPushButton("↶ Undo Point")
         btn_undo_point.clicked.connect(self._undo_last_point)
-        
+
         btn_clear_points = QtWidgets.QPushButton("✕ Clear Points")
         btn_clear_points.clicked.connect(self._clear_points)
-        
+
         btn_clear_mask = QtWidgets.QPushButton("🗑 Clear Mask")
         btn_clear_mask.clicked.connect(self._clear_mask)
 
         # Zoom buttons
         zoom_in_btn = QtWidgets.QPushButton("🔍 Zoom +")
         zoom_in_btn.clicked.connect(self.canvas.zoom_in)
-        
+
         zoom_out_btn = QtWidgets.QPushButton("🔎 Zoom -")
         zoom_out_btn.clicked.connect(self.canvas.zoom_out)
-        
+
         zoom_reset_btn = QtWidgets.QPushButton("↺ Reset Zoom")
         zoom_reset_btn.clicked.connect(self.canvas.reset_zoom)
 
@@ -1100,7 +1127,11 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self._clear_points(update_info=False)
         self.canvas.set_image(image)
         self.canvas.set_overlay_mask(None)
-        rel = path.relative_to(self.cfg.input_dir) if path.is_relative_to(self.cfg.input_dir) else path
+        rel = (
+            path.relative_to(self.cfg.input_dir)
+            if path.is_relative_to(self.cfg.input_dir)
+            else path
+        )
         self.file_label.setText(f"File: {rel}")
         self.stats_label.setText("HSV/LAB stats: -")
         self.info_label.setText(
@@ -1171,13 +1202,17 @@ class SamSelectionWindow(QtWidgets.QWidget):
         # Use cached stats if available
         stats = self.current_stats
         if stats is None:
-             self.info_label.setText("Statistics not ready/failed. Try updating the mask.")
-             return
+            self.info_label.setText(
+                "Statistics not ready/failed. Try updating the mask."
+            )
+            return
 
         color = self.color_combo.currentText() or "Unknown"
         image_path = self.image_paths[self.current_index]
         coverage_val = stats.get("coverage", 0.0)
-        coverage = float(coverage_val) if isinstance(coverage_val, (int, float)) else 0.0
+        coverage = (
+            float(coverage_val) if isinstance(coverage_val, (int, float)) else 0.0
+        )
         self.recorder.record(
             image_path,
             color,
@@ -1211,7 +1246,9 @@ class SamSelectionWindow(QtWidgets.QWidget):
 
     def _finish_session(self) -> None:
         if not self.recorder.summary:
-            QtWidgets.QMessageBox.warning(self, "No data", "No selections have been saved yet.")
+            QtWidgets.QMessageBox.warning(
+                self, "No data", "No selections have been saved yet."
+            )
             return
         payload = self.recorder.to_json()
         self.cfg.output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -1235,7 +1272,9 @@ class SamSelectionWindow(QtWidgets.QWidget):
             self.stats_label.setText("HSV/LAB stats: -")
             return
         if self.sam_image_bgr is None:
-            self.info_label.setText("SAM input not ready yet. Reload the image and try again.")
+            self.info_label.setText(
+                "SAM input not ready yet. Reload the image and try again."
+            )
             return
         scaled_points = self._scaled_points_for_sam()
         point_labels = self.point_labels if scaled_points else None
@@ -1257,7 +1296,9 @@ class SamSelectionWindow(QtWidgets.QWidget):
     def _launch_sam_task(
         self,
         params: Tuple[
-            Optional[Tuple[int, int, int, int]], Optional[List[Tuple[float, float]]], Optional[List[int]]
+            Optional[Tuple[int, int, int, int]],
+            Optional[List[Tuple[float, float]]],
+            Optional[List[int]],
         ],
     ) -> None:
         # Capture to locals for type narrowing
@@ -1265,25 +1306,20 @@ class SamSelectionWindow(QtWidgets.QWidget):
         img_hsv = self.current_hsv
         img_lab = self.current_lab
         sam_bgr = self.sam_image_bgr
-        
-        if (
-            sam_bgr is None 
-            or img_bgr is None
-            or img_hsv is None
-            or img_lab is None
-        ):
+
+        if sam_bgr is None or img_bgr is None or img_hsv is None or img_lab is None:
             return
-            
+
         box, scaled_points, point_labels = params
         self._sam_request_id += 1
         request_id = self._sam_request_id
         self._sam_pending = True
         self.info_label.setText("Running SAM & Stats...")
         self.sam_status_label.setText("SAM: Running")
-        
+
         # Pass full-res logic to thread
         original_images = (img_bgr, img_hsv, img_lab)
-        
+
         task = _SamInferenceTask(
             request_id=request_id,
             predictor=self.sam,
@@ -1302,8 +1338,8 @@ class SamSelectionWindow(QtWidgets.QWidget):
     def _on_sam_result(
         self,
         request_id: int,
-        mask: Optional[np.ndarray], # Now already full-res
-        stats: Optional[Dict[str, object]], # Pre-computed stats
+        mask: Optional[np.ndarray],  # Now already full-res
+        stats: Optional[Dict[str, object]],  # Pre-computed stats
         inference_ms: float,
         error: Optional[BaseException],
     ) -> None:
@@ -1326,24 +1362,28 @@ class SamSelectionWindow(QtWidgets.QWidget):
         else:
             if self.current_image_bgr is None:
                 return
-            
+
             # mask is already resized in thread
             self.current_mask = mask
             self.canvas.set_overlay_mask(mask)
-            
+
             self.current_stats = stats
-            
+
             coverage = 0.0
             if stats:
                 coverage_val = stats.get("coverage", 0.0)
-                coverage = float(coverage_val) * 100.0 if isinstance(coverage_val, (int, float)) else 0.0
-                
+                coverage = (
+                    float(coverage_val) * 100.0
+                    if isinstance(coverage_val, (int, float))
+                    else 0.0
+                )
+
             self._render_stats_to_label(stats)
-            
+
             self.info_label.setText(
                 f"Mask & Stats updated in {inference_ms:.0f} ms (coverage {coverage:.2f}%). Save when satisfied."
             )
-            
+
         if self._queued_sam_args:
             pending = self._queued_sam_args
             self._queued_sam_args = None
@@ -1365,13 +1405,17 @@ class SamSelectionWindow(QtWidgets.QWidget):
 
     def _render_stats_to_label(self, stats: Optional[Dict[str, object]]) -> None:
         if not stats:
-             self.stats_label.setText("HSV/LAB stats: empty/failed")
-             return
-             
+            self.stats_label.setText("HSV/LAB stats: empty/failed")
+            return
+
         hsv_mean_val = stats.get("hsv_mean", [float("nan")] * 3)
         lab_mean_val = stats.get("lab_mean", [float("nan")] * 3)
-        hsv_mean = hsv_mean_val if isinstance(hsv_mean_val, list) else [float("nan")] * 3
-        lab_mean = lab_mean_val if isinstance(lab_mean_val, list) else [float("nan")] * 3
+        hsv_mean = (
+            hsv_mean_val if isinstance(hsv_mean_val, list) else [float("nan")] * 3
+        )
+        lab_mean = (
+            lab_mean_val if isinstance(lab_mean_val, list) else [float("nan")] * 3
+        )
         hsv_text = f"H= {hsv_mean[0]:.1f}, S= {hsv_mean[1]:.1f}, V= {hsv_mean[2]:.1f}"
         lab_text = f"L= {lab_mean[0]:.1f}, a= {lab_mean[1]:.1f}, b= {lab_mean[2]:.1f}"
         self.stats_label.setText(f"HSV/LAB stats: {hsv_text} | {lab_text}")
@@ -1402,6 +1446,8 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.info_label.setText(
             "Draw a box or click a few points to guide SAM, then adjust until the mask looks correct."
         )
+
+
 # ---------------------------------------------------------------------------
 # CLI / entrypoints
 # ---------------------------------------------------------------------------
@@ -1453,7 +1499,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         output_json=args.output_json,
         colors=args.colors,
         max_side=args.max_side,
-        sam={"checkpoint": args.sam_checkpoint, "model_type": args.sam_model, "device": args.device},
+        sam={
+            "checkpoint": args.sam_checkpoint,
+            "model_type": args.sam_model,
+            "device": args.device,
+        },
     )
     cmd_collect(ns)
     return 0

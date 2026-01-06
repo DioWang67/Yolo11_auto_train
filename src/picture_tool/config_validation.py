@@ -12,6 +12,7 @@ except ImportError:
 
 class _ManualConfigError(Exception):
     """Fallback error when Pydantic is missing."""
+
     def __init__(self, messages: List[str]) -> None:
         super().__init__("\n".join(messages))
         self.messages = messages
@@ -20,8 +21,11 @@ class _ManualConfigError(Exception):
 # --- Models ---
 
 if BaseModel is not None:
+
     class BaseSchema(BaseModel):
-        model_config = ConfigDict(extra="ignore")  # Ignore unknown keys by default for forward compatibility
+        model_config = ConfigDict(
+            extra="ignore"
+        )  # Ignore unknown keys by default for forward compatibility
 
     class AugmentationOperation(BaseSchema):
         probability: float = Field(..., ge=0.0, le=1.0)
@@ -31,7 +35,9 @@ if BaseModel is not None:
     class AugmentationSchema(BaseSchema):
         enabled: bool = True
         num_images: int = Field(default=0, ge=0)
-        operations: Dict[str, Union[AugmentationOperation, Dict[str, Any]]] = Field(default_factory=dict)
+        operations: Dict[str, Union[AugmentationOperation, Dict[str, Any]]] = Field(
+            default_factory=dict
+        )
 
     class ProcessingSchema(BaseSchema):
         batch_size: int = Field(default=16, gt=0)
@@ -45,7 +51,7 @@ if BaseModel is not None:
         area: Optional[str] = None
         tolerance: float = 0.0
         sample_dir: Optional[Path] = None
-        
+
         @field_validator("sample_dir")
         @classmethod
         def _path_exists(cls, v: Optional[Path]) -> Optional[Path]:
@@ -64,8 +70,10 @@ if BaseModel is not None:
         project: Optional[Path] = None
         name: str = "train"
         position_validation: Optional[PositionValidationSchema] = None
-        
-        model_config = ConfigDict(extra="allow") # Allow export_onnx, export_detection_config etc.
+
+        model_config = ConfigDict(
+            extra="allow"
+        )  # Allow export_onnx, export_detection_config etc.
 
         @field_validator("class_names")
         @classmethod
@@ -91,7 +99,7 @@ def _manual_validate(config: Dict[str, Any]) -> None:
     """Fallback manual validation."""
     errors = []
     ycfg = config.get("yolo_training") or {}
-    
+
     # Dataset Check
     ddir = ycfg.get("dataset_dir")
     if ddir and not Path(str(ddir)).exists():
@@ -108,18 +116,21 @@ def _manual_validate(config: Dict[str, Any]) -> None:
     for op, params in ops.items():
         prob = params.get("probability")
         if prob is not None and not (0 <= prob <= 1):
-             errors.append(f"augmentation.operations.{op}.probability must be 0-1")
+            errors.append(f"augmentation.operations.{op}.probability must be 0-1")
 
     if errors:
         raise _ManualConfigError(errors)
 
 
 def validate_config_schema(
-    config: Dict[str, Any], logger: Optional[logging.Logger] = None, *, strict: bool = False
+    config: Dict[str, Any],
+    logger: Optional[logging.Logger] = None,
+    *,
+    strict: bool = False,
 ) -> Dict[str, Any]:
     """
     Validate configuration using Pydantic (if available) or manual checks.
-    
+
     Args:
         config: The configuration dictionary.
         logger: Logger for warnings.

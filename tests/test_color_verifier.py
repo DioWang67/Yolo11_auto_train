@@ -28,7 +28,9 @@ def _make_color_stats(path: Path, mapping: dict[str, tuple[int, int, int]]) -> P
     return path
 
 
-def _roi(path: Path, color: tuple[int, int, int], bg: tuple[int, int, int] = (120, 120, 120)) -> None:
+def _roi(
+    path: Path, color: tuple[int, int, int], bg: tuple[int, int, int] = (120, 120, 120)
+) -> None:
     canvas = np.full((80, 80, 3), bg, dtype=np.uint8)
     cv2.rectangle(canvas, (20, 20), (60, 60), color, thickness=-1)
     cv2.imwrite(str(path), canvas)

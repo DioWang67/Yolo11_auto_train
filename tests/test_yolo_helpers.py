@@ -2,7 +2,6 @@ import os
 import time
 
 
-
 from picture_tool.eval.yolo_evaluator import (
     _candidate_runs,
     _resolve_weights,

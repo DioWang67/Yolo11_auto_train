@@ -212,9 +212,7 @@ class DataAugmentor:
             noise_scale = ops_config["noise"]["scale"]
             # 兼容不同版本 Albumentations，若 std_range 參數不可用則降級使用預設
             try:
-                aug_list.append(
-                    A.GaussNoise(std_range=(0, noise_scale[1]), p=0.2)
-                )
+                aug_list.append(A.GaussNoise(std_range=(0, noise_scale[1]), p=0.2))
             except TypeError:
                 aug_list.append(A.GaussNoise(p=0.2))
         self.logger.info(
@@ -236,7 +234,7 @@ class DataAugmentor:
         result = np.full((target_size, target_size, 3), 128, dtype=np.uint8)
         y_offset = (target_size - new_h) // 2
         x_offset = (target_size - new_w) // 2
-        result[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+        result[y_offset : y_offset + new_h, x_offset : x_offset + new_w] = resized
         transform_params = {
             "scale": scale,
             "x_offset": x_offset,
@@ -424,17 +422,15 @@ class DataAugmentor:
             self.logger.error(f"輸入資料夾不存在: {input_img_dir}")
             return
         img_files: List[str] = list_images(input_img_dir, DEFAULT_IMAGE_EXTS)
-        
+
         # Apply filename filter if configured
         filter_pattern = self.config.get("input", {}).get("filename_pattern", None)
         if filter_pattern and img_files:
             import fnmatch
+
             original_count = len(img_files)
             # Support wildcard matching like "*Cable1*"
-            img_files = [
-                f for f in img_files 
-                if fnmatch.fnmatch(f, filter_pattern)
-            ]
+            img_files = [f for f in img_files if fnmatch.fnmatch(f, filter_pattern)]
             self.logger.info(
                 f"套用過濾器 '{filter_pattern}': {original_count} -> {len(img_files)} 張影像"
             )

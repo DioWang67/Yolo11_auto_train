@@ -4,11 +4,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, MutableMapping
 
 try:
-    from ultralytics import YOLO # type: ignore
+    from ultralytics import YOLO  # type: ignore
 except ImportError:
-    YOLO = None # type: ignore
+    YOLO = None  # type: ignore
 
 from picture_tool.utils.normalization import normalize_imgsz
+
 
 def _resolve_sample_images(directory: Path, suffixes: set) -> List[Path]:
     if not directory.exists():
@@ -24,16 +25,19 @@ def _resolve_sample_images(directory: Path, suffixes: set) -> List[Path]:
         raise FileNotFoundError(f"No images available under {directory}")
     return images
 
+
 class PositionConfigGenerator:
     @staticmethod
-    def generate(config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger) -> Optional[Path]:
+    def generate(
+        config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger
+    ) -> Optional[Path]:
         """Automatically derive a position config from latest training results."""
         if YOLO is None:
             logger.info(
                 "Skipping auto position config generation: ultralytics not available."
             )
             return None
-            
+
         ycfg = config.get("yolo_training")
         if not isinstance(ycfg, MutableMapping):
             return None
@@ -64,15 +68,17 @@ class PositionConfigGenerator:
         if dataset_dir_val:
             dataset_dir = Path(str(dataset_dir_val))
         else:
-             # Fallback if key missing, though it usually has defaults
-             dataset_dir = Path("data/split") # Ideally use constant, but we are inside logic
-             
+            # Fallback if key missing, though it usually has defaults
+            dataset_dir = Path(
+                "data/split"
+            )  # Ideally use constant, but we are inside logic
+
         sample_dir_value = pos_cfg.get("sample_dir") or (dataset_dir / "val" / "images")
         sample_dir = Path(str(sample_dir_value)).resolve()
-        
+
         # Hardcoded suffixes for now or pass in
         ImageSuffixes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-        
+
         try:
             images = _resolve_sample_images(sample_dir, ImageSuffixes)
         except Exception as exc:
@@ -106,7 +112,8 @@ class PositionConfigGenerator:
             model = YOLO(str(weights_path))
         except Exception as exc:  # pragma: no cover
             logger.warning(
-                "Auto position config generation skipped: failed to load weights (%s)", exc
+                "Auto position config generation skipped: failed to load weights (%s)",
+                exc,
             )
             return None
 
@@ -115,14 +122,18 @@ class PositionConfigGenerator:
             try:
                 results = model(
                     str(img_path),
-                    imgsz=imgsz_norm[0], # Model inference usually implies square or stride
+                    imgsz=imgsz_norm[
+                        0
+                    ],  # Model inference usually implies square or stride
                     device=str(device_value),
                     conf=float(conf_value),
-                    verbose=False
+                    verbose=False,
                 )
             except Exception as exc:  # pragma: no cover
                 logger.warning(
-                    "Auto position config: inference failed for %s (%s)", img_path.name, exc
+                    "Auto position config: inference failed for %s (%s)",
+                    img_path.name,
+                    exc,
                 )
                 continue
             for res in results:

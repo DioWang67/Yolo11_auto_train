@@ -5,7 +5,9 @@ from picture_tool.report.qc_summary import generate_qc_summary
 
 def test_qc_summary_aggregates(tmp_path):
     color_json = tmp_path / "color.json"
-    color_json.write_text(json.dumps({"summary": {}, "records": [1, 2]}), encoding="utf-8")
+    color_json.write_text(
+        json.dumps({"summary": {}, "records": [1, 2]}), encoding="utf-8"
+    )
 
     pos_dir = tmp_path / "pos"
     pos_dir.mkdir()
@@ -17,7 +19,9 @@ def test_qc_summary_aggregates(tmp_path):
 
     infer_dir = tmp_path / "infer"
     infer_dir.mkdir()
-    (infer_dir / "predictions.csv").write_text("image,conf\nimg,0.9\n", encoding="utf-8")
+    (infer_dir / "predictions.csv").write_text(
+        "image,conf\nimg,0.9\n", encoding="utf-8"
+    )
 
     config = {
         "color_verification": {"output_json": str(color_json)},

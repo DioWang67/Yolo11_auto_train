@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from typing import Dict, Any, Optional
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, 
-    QSpinBox, QDoubleSpinBox, QScrollArea, QTabWidget, QCheckBox,
-    QLabel
+    QWidget,
+    QVBoxLayout,
+    QFormLayout,
+    QLineEdit,
+    QComboBox,
+    QSpinBox,
+    QDoubleSpinBox,
+    QScrollArea,
+    QTabWidget,
+    QCheckBox,
+    QLabel,
 )
+
 
 class ConfigEditor(QWidget):
     """
@@ -31,21 +40,21 @@ class ConfigEditor(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
-        
+
         # We will build tabs dynamically in _refresh_ui_from_config or just once here
         # For validation plan, we support: Training, Augmentation, Format
-        
+
         self.training_tab = QWidget()
         self.aug_tab = QWidget()
         self.general_tab = QWidget()
-        
+
         self.tabs.addTab(self.general_tab, "General / Paths")
         self.tabs.addTab(self.training_tab, "YOLO Training")
         self.tabs.addTab(self.aug_tab, "Augmentation")
-        
+
         self._setup_general_tab()
         self._setup_training_tab()
         self._setup_augmentation_tab()
@@ -56,20 +65,40 @@ class ConfigEditor(QWidget):
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QFormLayout(content)
-        
+
         # Pipeline Logs
-        self._add_input(layout, "pipeline.log_file", "Log File Path", 
-                        self.config.get("pipeline", {}).get("log_file", "logs/pipeline.log"))
+        self._add_input(
+            layout,
+            "pipeline.log_file",
+            "Log File Path",
+            self.config.get("pipeline", {}).get("log_file", "logs/pipeline.log"),
+        )
 
         # Format Conversion
         layout.addRow(QLabel("<b>Format Conversion</b>"))
         fc_cfg = self.config.get("format_conversion", {})
-        self._add_input(layout, "format_conversion.input_dir", "Input Dir", fc_cfg.get("input_dir", ""))
-        self._add_input(layout, "format_conversion.output_dir", "Output Dir", fc_cfg.get("output_dir", ""))
-        self._add_input(layout, "format_conversion.quality", "Quality (1-100)", fc_cfg.get("quality", 95), int)
-        
+        self._add_input(
+            layout,
+            "format_conversion.input_dir",
+            "Input Dir",
+            fc_cfg.get("input_dir", ""),
+        )
+        self._add_input(
+            layout,
+            "format_conversion.output_dir",
+            "Output Dir",
+            fc_cfg.get("output_dir", ""),
+        )
+        self._add_input(
+            layout,
+            "format_conversion.quality",
+            "Quality (1-100)",
+            fc_cfg.get("quality", 95),
+            int,
+        )
+
         scroll.setWidget(content)
-        
+
         main_layout = QVBoxLayout(self.general_tab)
         main_layout.addWidget(scroll)
 
@@ -79,14 +108,25 @@ class ConfigEditor(QWidget):
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QFormLayout(content)
-        
+
         yt_cfg = self.config.get("yolo_training", {})
-        
-        self._add_input(layout, "yolo_training.model", "Model Path", yt_cfg.get("model", "yolo11n.pt"))
-        self._add_input(layout, "yolo_training.epochs", "Epochs", yt_cfg.get("epochs", 50), int)
-        self._add_input(layout, "yolo_training.batch", "Batch Size", yt_cfg.get("batch", 16), int)
-        self._add_input(layout, "yolo_training.imgsz", "Image Size", yt_cfg.get("imgsz", 640), int)
-        
+
+        self._add_input(
+            layout,
+            "yolo_training.model",
+            "Model Path",
+            yt_cfg.get("model", "yolo11n.pt"),
+        )
+        self._add_input(
+            layout, "yolo_training.epochs", "Epochs", yt_cfg.get("epochs", 50), int
+        )
+        self._add_input(
+            layout, "yolo_training.batch", "Batch Size", yt_cfg.get("batch", 16), int
+        )
+        self._add_input(
+            layout, "yolo_training.imgsz", "Image Size", yt_cfg.get("imgsz", 640), int
+        )
+
         # Device selection
         device_combo = QComboBox()
         device_combo.addItems(["cpu", "0", "1", "auto"])
@@ -96,13 +136,22 @@ class ConfigEditor(QWidget):
             device_combo.setCurrentIndex(idx)
         else:
             device_combo.setCurrentText(current_device)
-        device_combo.currentTextChanged.connect(lambda v: self._update_config_value("yolo_training.device", v))
+        device_combo.currentTextChanged.connect(
+            lambda v: self._update_config_value("yolo_training.device", v)
+        )
         layout.addRow("Device", device_combo)
         self._inputs["yolo_training.device"] = device_combo
 
         # Project/Name
-        self._add_input(layout, "yolo_training.project", "Save Project", yt_cfg.get("project", "runs/detect"))
-        self._add_input(layout, "yolo_training.name", "Run Name", yt_cfg.get("name", "train"))
+        self._add_input(
+            layout,
+            "yolo_training.project",
+            "Save Project",
+            yt_cfg.get("project", "runs/detect"),
+        )
+        self._add_input(
+            layout, "yolo_training.name", "Run Name", yt_cfg.get("name", "train")
+        )
 
         scroll.setWidget(content)
         main_layout = QVBoxLayout(self.training_tab)
@@ -114,18 +163,25 @@ class ConfigEditor(QWidget):
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QFormLayout(content)
-        
+
         aug_cfg = self.config.get("yolo_augmentation", {}).get("augmentation", {})
-        self._add_input(layout, "yolo_augmentation.augmentation.num_images", "Num Images (per file)", 
-                        aug_cfg.get("num_images", 10), int)
-        
+        self._add_input(
+            layout,
+            "yolo_augmentation.augmentation.num_images",
+            "Num Images (per file)",
+            aug_cfg.get("num_images", 10),
+            int,
+        )
+
         # TODO: Add more granular augmentation controls if needed
-        
+
         scroll.setWidget(content)
         main_layout = QVBoxLayout(self.aug_tab)
         main_layout.addWidget(scroll)
 
-    def _add_input(self, layout: QFormLayout, key: str, label: str, value: Any, type_hint=str):
+    def _add_input(
+        self, layout: QFormLayout, key: str, label: str, value: Any, type_hint=str
+    ):
         """Helper to create an input widget and bind it to the config."""
         widget: QWidget
         if type_hint is int:
@@ -143,56 +199,58 @@ class ConfigEditor(QWidget):
         elif type_hint is bool:
             check = QCheckBox()
             check.setChecked(bool(value))
-            check.stateChanged.connect(lambda v: self._update_config_value(key, bool(v)))
+            check.stateChanged.connect(
+                lambda v: self._update_config_value(key, bool(v))
+            )
             widget = check
         else:
             line = QLineEdit(str(value) if value is not None else "")
             line.textChanged.connect(lambda v: self._update_config_value(key, v))
             widget = line
-        
+
         layout.addRow(label, widget)
         self._inputs[key] = widget
 
     def _update_config_value(self, key: str, value: Any):
         """Updates the nested config dictionary."""
-        keys = key.split('.')
+        keys = key.split(".")
         target = self.config
         for k in keys[:-1]:
             target = target.setdefault(k, {})
         target[keys[-1]] = value
-        
+
     def _refresh_ui_from_config(self):
         """Reloads UI values from self.config."""
         # This is a simplified refresh that just updates values of existing widgets
         # Re-building the whole UI might be safer if structure changes, but slower.
         for key, widget in self._inputs.items():
             val = self._get_config_value(key)
-            
+
             # Block signals to prevent feedback loop
             widget.blockSignals(True)
             if isinstance(widget, QSpinBox):
                 if val is not None:
                     widget.setValue(int(val))
             elif isinstance(widget, QDoubleSpinBox):
-                 if val is not None:
-                     widget.setValue(float(val))
+                if val is not None:
+                    widget.setValue(float(val))
             elif isinstance(widget, QCheckBox):
-                 if val is not None:
-                     widget.setChecked(bool(val))
+                if val is not None:
+                    widget.setChecked(bool(val))
             elif isinstance(widget, QLineEdit):
-                 if val is not None:
-                     widget.setText(str(val))
+                if val is not None:
+                    widget.setText(str(val))
             elif isinstance(widget, QComboBox):
-                 if val is not None: 
-                     idx = widget.findText(str(val))
-                     if idx >= 0:
-                         widget.setCurrentIndex(idx)
-                     else:
-                         widget.setCurrentText(str(val))
+                if val is not None:
+                    idx = widget.findText(str(val))
+                    if idx >= 0:
+                        widget.setCurrentIndex(idx)
+                    else:
+                        widget.setCurrentText(str(val))
             widget.blockSignals(False)
 
     def _get_config_value(self, key: str) -> Any:
-        keys = key.split('.')
+        keys = key.split(".")
         val = self.config
         try:
             for k in keys:

@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class ModelProtocol(Protocol):
     """Protocol for models managed by ModelManager."""
-    
+
     def to(self, device: str) -> None: ...
 
 
@@ -28,13 +28,15 @@ class ModelManager:
         self.cache: OrderedDict[str, Any] = OrderedDict()
         self.logger = logger
 
-    def get(self, model_path: str, loader_fn: Optional[Callable[[str], Any]] = None) -> Any:
+    def get(
+        self, model_path: str, loader_fn: Optional[Callable[[str], Any]] = None
+    ) -> Any:
         """
         Retrieve a model from cache or load it if not present.
 
         Args:
             model_path: Absolute path or identifier for the model.
-            loader_fn: Function to load the model if it's not in cache. 
+            loader_fn: Function to load the model if it's not in cache.
                        Must accept (model_path) as argument.
 
         Returns:
@@ -70,7 +72,7 @@ class ModelManager:
         oldest_key, _ = self.cache.popitem(last=False)
         self.logger.info(f"Evicted model from cache: {oldest_key}")
         # Explicit cleanup suggestions (optional, depending on backend)
-        # import gc; gc.collect() 
+        # import gc; gc.collect()
         # import torch; torch.cuda.empty_cache()
 
     def clear(self) -> None:
@@ -90,8 +92,10 @@ class ModelManager:
     def __len__(self) -> int:
         return len(self.cache)
 
+
 # Global instance for easy access
 _shared_manager = ModelManager()
+
 
 def get_shared_model_manager() -> ModelManager:
     return _shared_manager

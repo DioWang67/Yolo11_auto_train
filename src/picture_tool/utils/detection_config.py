@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, MutableMapping, Mapping, List, Sequence
 from picture_tool.utils.normalization import normalize_imgsz, normalize_name_sequence
 
+
 def _load_class_names_from_run(
     run_dir: Path,
     logger: logging.Logger,
@@ -14,7 +15,7 @@ def _load_class_names_from_run(
     if args_path.exists():
         try:
             args_data = yaml.safe_load(args_path.read_text(encoding="utf-8")) or {}
-        except Exception as exc: 
+        except Exception as exc:
             logger.warning(
                 "Detection config export: failed to read %s (%s)", args_path, exc
             )
@@ -51,6 +52,7 @@ def _load_class_names_from_run(
                     )
     return normalize_name_sequence(fallback)
 
+
 def _load_mapping_from_source(source: Any, logger: logging.Logger) -> Dict[str, Any]:
     if source in (None, "", {}):
         return {}
@@ -79,6 +81,7 @@ def _load_mapping_from_source(source: Any, logger: logging.Logger) -> Dict[str, 
     )
     return {}
 
+
 def _apply_area_overrides(
     area_cfg: Mapping[str, Any],
     export_cfg: Mapping[str, Any],
@@ -106,6 +109,7 @@ def _apply_area_overrides(
             imgsz[0] if len(imgsz) == 2 and imgsz[0] == imgsz[1] else imgsz
         )
     return area_dict
+
 
 def _prepare_position_config(
     raw_config: Mapping[str, Any],
@@ -157,6 +161,7 @@ def _prepare_position_config(
         if area_map:
             filtered[str(prod_key)] = area_map
     return filtered
+
 
 class DetectionConfigExporter:
     @staticmethod
@@ -214,7 +219,7 @@ class DetectionConfigExporter:
             logger,
             ycfg.get("class_names"),
         )
-        
+
         explicit_position = bool(
             export_cfg.get("position_config") or export_cfg.get("position_config_path")
         )
@@ -224,7 +229,7 @@ class DetectionConfigExporter:
 
         position_config: Dict[str, Any] = {}
         expected_items: Optional[Dict[str, Dict[str, List[str]]]] = None
-        
+
         if include_position_config:
             position_sources = [
                 export_cfg.get("position_config"),
@@ -244,7 +249,7 @@ class DetectionConfigExporter:
                 )
                 if not position_config:
                     position_config = raw_position_config
-            
+
             # Extract expected items from position config if available
             if not expected_items and position_config:
                 if product and area:
@@ -309,7 +314,7 @@ class DetectionConfigExporter:
             payload["current_area"] = str(area)
         if expected_items:
             payload["expected_items"] = expected_items
-        
+
         # 始終包含 position_config
         if include_position_config and position_config:
             payload["position_config"] = position_config
@@ -323,9 +328,9 @@ class DetectionConfigExporter:
                         "tolerance": 10,
                         "expected_boxes": {
                             "ClassName1": {"x1": 100, "y1": 100, "x2": 200, "y2": 200}
-                        }
+                        },
                     }
-                }
+                },
             }
             logger.info("Position validation not configured, added default template")
 
