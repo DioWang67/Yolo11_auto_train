@@ -3,10 +3,8 @@
 覆盖tasks模块中的所有任务函数
 预计提升覆盖率：+10%
 """
-import logging
 from pathlib import Path
 from types import SimpleNamespace
-import pytest
 
 
 class TestTasksFunctionality:
@@ -23,7 +21,7 @@ class TestTasksFunctionality:
         # 创建测试数据
         for i in range(20):
             (input_dir / "images" / f"img_{i}.jpg").write_text(f"img{i}")
-            (input_dir / "labels" / f"img_{i}.txt").write_text(f"0 0.5 0.5 0.1 0.1")
+            (input_dir / "labels" / f"img_{i}.txt").write_text("0 0.5 0.5 0.1 0.1")
         
         config = {
             "train_test_split": {
@@ -61,7 +59,7 @@ class TestTasksFunctionality:
         
         for i in range(10):
             (image_dir / f"img_{i}.jpg").write_text(f"img{i}")
-            (label_dir / f"img_{i}.txt").write_text(f"0 0.5 0.5 0.1 0.1")
+            (label_dir / f"img_{i}.txt").write_text("0 0.5 0.5 0.1 0.1")
         
         config = {
             "dataset_lint": {
@@ -239,7 +237,6 @@ class TestConfigValidationFunctionality:
     
     def test_validate_config_structure(self):
         """功能：验证配置结构"""
-        from picture_tool.config_validation import validate_config
         
         config = {
             "yolo_training": {
@@ -298,7 +295,7 @@ class TestEndToEndTaskWorkflow:
         
         for i in range(20):
             (raw_dir / "images" / f"img_{i}.jpg").write_text(f"img{i}")
-            (raw_dir / "labels" / f"img_{i}.txt").write_text(f"0 0.5 0.5 0.1 0.1")
+            (raw_dir / "labels" / f"img_{i}.txt").write_text("0 0.5 0.5 0.1 0.1")
         
         # 2. 数据集分割
         split_dir = tmp_path / "split"

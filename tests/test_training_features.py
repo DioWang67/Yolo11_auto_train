@@ -3,9 +3,7 @@
 覆盖功能：YOLO训练、模型评估、权重管理
 """
 import logging
-from pathlib import Path
 from types import SimpleNamespace
-import pytest
 from unittest.mock import MagicMock
 
 
@@ -74,12 +72,11 @@ names:
     
     def test_training_saves_weights(self, tmp_path, monkeypatch):
         """功能：训练后保存权重文件"""
-        from picture_tool.train.yolo_trainer import train_yolo
         
         dataset_dir = tmp_path / "data"
         dataset_dir.mkdir()
         
-        config = {
+        {
             "yolo_training": {
                 "model": "yolov11n.pt",
                 "dataset_dir": str(dataset_dir),
@@ -211,7 +208,6 @@ class TestModelExportFunctionality:
         onnx_file = weights_dir / "best.onnx"
         onnx_file.write_text("onnx_model" * 100)
         
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_yolo = MagicMock()
