@@ -401,7 +401,7 @@ python-multipart==0.0.21
     # via -r requirements.in
 pytz==2025.2
     # via pandas
-pywin32==311
+pywin32==306 ; sys_platform == 'win32'
     # via dvc-task
 pyyaml==6.0.3
     # via
