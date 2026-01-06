@@ -5,7 +5,6 @@ Coverage target: 0% → 70%+
 Note: Using monkeypatch instead of mocker for compatibility.
 """
 import logging
-from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
 
@@ -69,8 +68,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock onnx package existence
-        import importlib.util
-        original_find_spec = importlib.util.find_spec
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         logger = logging.getLogger("test")
@@ -94,7 +91,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock onnx not found
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: None)
         
         logger = logging.getLogger("test")
@@ -118,7 +114,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock onnx available but YOLO=None
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         monkeypatch.setattr("picture_tool.utils.onnx_exporter.YOLO", None)
         
@@ -145,7 +140,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock dependencies
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_model = MagicMock()
@@ -180,7 +174,6 @@ class TestOnnxExporterExport:
         }
         
         # Setup mocks
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_model = MagicMock()
@@ -216,7 +209,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock to raise error
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_model = MagicMock()
@@ -246,7 +238,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock successful export but file doesn't exist
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_model = MagicMock()
@@ -289,7 +280,6 @@ class TestOnnxExporterExport:
             runtime_called.append((path, kwargs))
         
         # Setup mocks
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_model = MagicMock()
@@ -324,7 +314,6 @@ class TestOnnxExporterExport:
         }
         
         # Setup mocks
-        import importlib.util
         monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
         
         mock_model = MagicMock()
@@ -364,8 +353,6 @@ class TestOnnxExporterExport:
         }
         
         # Mock: onnx available, onnxsim not
-        import importlib.util
-        original = importlib.util.find_spec
         def custom_find_spec(name):
             if name == "onnxsim":
                 return None

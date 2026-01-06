@@ -2,10 +2,6 @@
 功能测试：数据处理流程
 覆盖功能：数据集分割、数据增强、质量检查
 """
-import logging
-from pathlib import Path
-from types import SimpleNamespace
-import pytest
 
 
 class TestDatasetSplitFunctionality:
@@ -25,7 +21,7 @@ class TestDatasetSplitFunctionality:
         # 创建测试文件
         for i in range(20):
             (images_dir / f"img_{i:03d}.jpg").write_text(f"image{i}")
-            (labels_dir / f"img_{i:03d}.txt").write_text(f"0 0.5 0.5 0.1 0.1")
+            (labels_dir / f"img_{i:03d}.txt").write_text("0 0.5 0.5 0.1 0.1")
         
         output_dir = tmp_path / "split"
         
@@ -68,8 +64,8 @@ class TestDatasetSplitFunctionality:
         
         # 创建100个文件
         for i in range(100):
-            (images_dir / f"img_{i:03d}.jpg").write_text(f"img")
-            (labels_dir / f"img_{i:03d}.txt").write_text(f"label")
+            (images_dir / f"img_{i:03d}.jpg").write_text("img")
+            (labels_dir / f"img_{i:03d}.txt").write_text("label")
         
         output_dir = tmp_path / "split"
         
@@ -108,7 +104,6 @@ class TestDataAugmentationFunctionality:
     
     def test_augmentation_generates_new_images(self, tmp_path, monkeypatch):
         """功能：生成增强后的图像"""
-        from picture_tool.augment.image_augmentor import augment_images
         
         input_dir = tmp_path / "input"
         input_dir.mkdir()
@@ -118,7 +113,7 @@ class TestDataAugmentationFunctionality:
         for i in range(5):
             (input_dir / f"img_{i}.jpg").write_text(f"image{i}")
         
-        config = {
+        {
             "input_dir": str(input_dir),
             "output_dir": str(output_dir),
             "num_augmentations": 3,
@@ -156,7 +151,7 @@ class TestDatasetLintFunctionality:
         for i in range(10):
             (image_dir / f"img_{i}.jpg").write_text(f"image{i}")
         for i in range(8):  # 缺少2个标签
-            (label_dir / f"img_{i}.txt").write_text(f"0 0.5 0.5 0.1 0.1")
+            (label_dir / f"img_{i}.txt").write_text("0 0.5 0.5 0.1 0.1")
         
         output_dir = tmp_path / "lint_output"
         
@@ -222,18 +217,18 @@ class TestDataProcessingIntegration:
         
         for i in range(50):
             (images / f"img_{i}.jpg").write_text(f"img{i}")
-            (labels / f"img_{i}.txt").write_text(f"0 0.5 0.5 0.1 0.1")
+            (labels / f"img_{i}.txt").write_text("0 0.5 0.5 0.1 0.1")
         
         # 2. 质量检查
-        lint_output = tmp_path / "lint"
+        tmp_path / "lint"
         assert raw_dir.exists()
         
         # 3. 数据集分割
-        split_output = tmp_path / "split"
+        tmp_path / "split"
         # split_dataset会创建split_output
         
         # 4. 数据增强（可选）
-        aug_output = tmp_path / "augmented"
+        tmp_path / "augmented"
         
         # 验证目录结构
         assert raw_dir.exists()

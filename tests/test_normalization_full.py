@@ -2,7 +2,6 @@
 Comprehensive tests for utils/normalization.py module.
 Coverage target: 4% → 70%+
 """
-import pytest
 from picture_tool.utils.normalization import normalize_imgsz, normalize_name_sequence
 
 

@@ -3,9 +3,6 @@ Comprehensive tests for utils/detection_config.py module.
 Coverage target: 4% → 70%+
 """
 import logging
-from pathlib import Path
-from types import SimpleNamespace
-import pytest
 import yaml
 
 from picture_tool.utils.detection_config import (

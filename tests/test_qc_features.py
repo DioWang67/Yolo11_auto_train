@@ -3,10 +3,6 @@
 覆盖功能：批量推理、颜色验证、位置验证
 预计提升覆盖率：+25%
 """
-import logging
-from pathlib import Path
-from types import SimpleNamespace
-import pytest
 from unittest.mock import MagicMock
 import json
 
@@ -136,7 +132,7 @@ class TestColorVerificationFunctionality:
         
         output_json = tmp_path / "results.json"
         
-        config = {
+        {
             "input_dir": str(input_dir),
             "output_json": str(output_json),
             "recursive": False
@@ -255,7 +251,7 @@ class TestQCIntegrationWorkflow:
         (position_output / "position_results.json").write_text('{"passed": 9, "failed": 1}')
         
         # 4. QC汇总
-        summary = {
+        {
             "inference": json.loads((infer_output / "predictions.csv").read_text().split('\n')[1].split(',')[0]),
             "color": json.loads((color_output / "color_results.json").read_text()),
             "position": json.loads((position_output / "position_results.json").read_text())
