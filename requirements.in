@@ -1,16 +1,19 @@
 # Core production dependencies
-# Generated from pyproject.toml dependencies
+# Updated to match working environment versions (yolo_anomalib)
 
 # Deep Learning Framework
-ultralytics>=8.0.0
+# Note: numpy 1.26.x required for compatibility with torch 2.4.1
+ultralytics>=8.3.0  # Working: 8.3.156
+torch>=2.4.0,<2.5  # Working: 2.4.1
+torchvision>=0.19.0  # Working: 0.19.1
 
 # Computer Vision
-opencv-python>=4.8.0
+opencv-python>=4.9.0  # Working: 4.9.0.80
 Pillow>=10.0.0
 
 # Data Processing
-numpy>=1.24.0
-pandas>=2.0.0
+numpy>=1.26.0,<2.0  # Working: 1.26.4 (2.x may break compatibility)
+pandas>=2.0.0  # Working: 2.3.1
 pyyaml>=6.0
 
 # Image Augmentation
@@ -28,21 +31,24 @@ seaborn>=0.12.0
 # Progress Bars
 tqdm>=4.65.0
 
-# ML Model Export
+# ML Model Export (Required for ONNX validation)
 onnx>=1.14.0
 onnxsim>=0.4.0
 onnxruntime>=1.15.0
 
-# Web Framework (for inference server)
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-python-multipart>=0.0.6
+# GUI (PyQt5) - Required
+PyQt5>=5.15.0  # Working: 5.15.11
 
-# GUI (PyQt5)
-PyQt5>=5.15.0
+# ===== OPTIONAL DEPENDENCIES =====
+# Uncomment only if you need these features
 
-# Version Control / Data Management
-dvc[s3]>=3.0.0
+# Web Framework (for inference server - optional)
+# fastapi>=0.100.0
+# uvicorn[standard]>=0.23.0
+# python-multipart>=0.0.6
 
-# Optional: Experiment Tracking
-# mlflow>=2.5.0  # Uncomment if using MLflow
+# Version Control / Data Management (optional)
+# dvc[s3]>=3.0.0
+
+# Experiment Tracking (optional)
+# mlflow>=2.5.0
