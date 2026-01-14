@@ -21,7 +21,7 @@ def _count_csv_rows(path: Path) -> int:
             # Skip header if present
             rows = list(reader)
             return max(len(rows) - 1, 0) if rows else 0
-    except Exception:
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
         return 0
 
 

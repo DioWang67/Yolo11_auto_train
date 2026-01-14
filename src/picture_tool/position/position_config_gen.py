@@ -81,7 +81,7 @@ class PositionConfigGenerator:
 
         try:
             images = _resolve_sample_images(sample_dir, ImageSuffixes)
-        except Exception as exc:
+        except (FileNotFoundError, OSError) as exc:
             logger.warning("Auto position config generation skipped: %s", exc)
             return None
 
@@ -100,7 +100,7 @@ class PositionConfigGenerator:
             from picture_tool.position.yolo_position_validator import (
                 convert_results_to_detections,
             )
-        except Exception as exc:  # pragma: no cover
+        except (ImportError, AttributeError) as exc:  # pragma: no cover
             logger.warning("Auto position config generation skipped: %s", exc)
             return None
 
@@ -110,7 +110,7 @@ class PositionConfigGenerator:
             conf_value = 0.25
         try:
             model = YOLO(str(weights_path))
-        except Exception as exc:  # pragma: no cover
+        except (FileNotFoundError, RuntimeError, OSError) as exc:  # pragma: no cover
             logger.warning(
                 "Auto position config generation skipped: failed to load weights (%s)",
                 exc,
@@ -129,7 +129,7 @@ class PositionConfigGenerator:
                     conf=float(conf_value),
                     verbose=False,
                 )
-            except Exception as exc:  # pragma: no cover
+            except (RuntimeError, OSError, AttributeError) as exc:  # pragma: no cover
                 logger.warning(
                     "Auto position config: inference failed for %s (%s)",
                     img_path.name,
@@ -190,7 +190,7 @@ class PositionConfigGenerator:
         try:
             with open(out_path, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(position_config, fh, allow_unicode=True, sort_keys=False)
-        except Exception as exc:  # pragma: no cover
+        except (FileNotFoundError, OSError, yaml.YAMLError) as exc:  # pragma: no cover
             logger.warning("Auto position config generation failed: %s", exc)
             return None
 

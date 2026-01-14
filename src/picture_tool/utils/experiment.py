@@ -36,7 +36,7 @@ def _env_info() -> Dict[str, Any]:
         tv = getattr(torch, "__version__", None)
         info["torch_version"] = str(tv) if tv is not None else None
         info["cuda_available"] = torch.cuda.is_available()
-    except Exception:
+    except (ImportError, AttributeError):
         info["torch_version"] = None
         info["cuda_available"] = None
     try:
@@ -44,7 +44,7 @@ def _env_info() -> Dict[str, Any]:
 
         uv = getattr(ultralytics, "__version__", None)
         info["ultralytics_version"] = str(uv) if uv is not None else None
-    except Exception:
+    except (ImportError, AttributeError):
         info["ultralytics_version"] = None
     return info
 
@@ -75,7 +75,7 @@ def _jsonable(obj: Any) -> Any:
         return {str(k): _jsonable(v) for k, v in obj.items()}
     try:
         return str(obj)
-    except Exception:
+    except (TypeError, ValueError, AttributeError):
         return repr(obj)
 
 

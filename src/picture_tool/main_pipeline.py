@@ -169,7 +169,7 @@ def _auto_device(config: dict, logger: logging.Logger) -> None:
             import torch  # type: ignore
 
             yt["device"] = "0" if torch.cuda.is_available() else "cpu"
-        except Exception:
+        except (FileNotFoundError, yaml.YAMLError, OSError):
             yt["device"] = "cpu"
         logger.info(f"Auto-selected device: {yt['device']}")
         config["yolo_training"] = yt
