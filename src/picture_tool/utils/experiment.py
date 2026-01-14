@@ -18,7 +18,7 @@ def _git_rev() -> Optional[str]:
             check=True,
         )
         return result.stdout.strip() or None
-    except Exception:
+    except (FileNotFoundError, PermissionError, OSError):
         return None
 
 
@@ -57,7 +57,7 @@ def _load_metrics_csv(path: Path) -> Dict[str, Any]:
 
         rows = list(csv.DictReader(path.open("r", encoding="utf-8")))
         return rows[-1] if rows else {}
-    except Exception:
+    except (FileNotFoundError, ValueError, KeyError, OSError, TypeError):
         return {}
 
 

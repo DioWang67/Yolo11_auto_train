@@ -4,6 +4,8 @@ import shutil
 from pathlib import Path
 from typing import List
 
+from picture_tool.exceptions import DependencyError
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,9 +42,9 @@ class DVCWrapper:
         except subprocess.CalledProcessError as e:
             logger.error(f"DVC command failed: {e}")
             return False
-        except Exception as e:
-            logger.error(f"dvc execution error: {e}")
-            return False
+        except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
+            logger.error(f"DVC operation failed: {e}")
+            raise DependencyError(f"DVC operation failed: {e}") from e
 
     def init(self) -> bool:
         return self.run_cmd(["init"])
