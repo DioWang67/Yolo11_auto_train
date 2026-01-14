@@ -40,7 +40,7 @@ def _read_labels(label_path: Path) -> List[List[float]]:
                 cls = int(float(parts[0]))
                 x, y, w, h = map(float, parts[1:5])
                 labels.append([cls, x, y, w, h])
-            except Exception:
+            except (FileNotFoundError, OSError):
                 continue
     return labels
 
@@ -190,7 +190,7 @@ def preview_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Pa
     elif hasattr(axes, "ravel"):
         try:
             axes = list(axes.ravel())
-        except Exception:
+        except (FileNotFoundError, UnicodeDecodeError, ValueError, OSError):
             axes = [axes]
     else:
         axes = [axes]
