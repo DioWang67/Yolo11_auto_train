@@ -64,7 +64,7 @@ class DataAugmentor:
             else:
                 self.logger.warning(f"設定檔 {config_path} 不存在，使用預設設定")
                 return self._default_config()
-        except Exception as e:
+        except (FileNotFoundError, ValueError, OSError) as e:
             self.logger.error(f"讀取設定檔失敗: {e}")
             return self._default_config()
 
@@ -295,7 +295,7 @@ class DataAugmentor:
                     annotations = [
                         line.strip().split() for line in f.readlines() if line.strip()
                     ]
-            except Exception as e:
+            except (FileNotFoundError, OSError) as e:
                 self.logger.error(f"讀取標註案失敗 {label_path}: {e}")
                 return
             if not annotations:
@@ -405,10 +405,10 @@ class DataAugmentor:
                     self.logger.info(
                         f"輸出: {aug_img_filename} (含 {len(valid_bboxes)} 個框)"
                     )
-                except Exception as e:
+                except (OSError, ValueError) as e:
                     self.logger.error(f"套用增強發生錯誤 {img_file}_aug_{i + 1}: {e}")
                     continue
-        except Exception as e:
+        except (OSError, ValueError) as e:
             self.logger.error(f"處理單張影像出錯 {img_file}: {e}")
 
     def process_dataset(self):

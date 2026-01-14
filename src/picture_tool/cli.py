@@ -1,5 +1,6 @@
 from typing import Optional, List
 import typer  # type: ignore
+import yaml  # type: ignore
 from picture_tool.main_pipeline import (
     load_config,
     setup_logging,
@@ -12,9 +13,9 @@ app = typer.Typer(help="YOLO auto-train pipeline orchestration tools.")
 def _load_config_or_exit(config_path: str):
     try:
         return load_config(config_path)
-    except Exception as e:
+    except (FileNotFoundError, yaml.YAMLError, OSError) as e:
         typer.echo(f"Error loading config: {e}", err=True)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()

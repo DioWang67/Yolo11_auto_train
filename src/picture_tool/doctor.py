@@ -24,8 +24,12 @@ def _check_command(cmd: List[str]) -> Tuple[bool, str]:
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
         )
         return True, ""
+    except FileNotFoundError:
+        return False, f"Command '{cmd[0]}' not found. Is it installed and in PATH?"
+    except subprocess.CalledProcessError as exc:
+        return False, f"Command '{cmd[0]}' failed with exit code {exc.returncode}: {exc}"
     except Exception as exc:
-        return False, str(exc)
+        return False, f"Error running command '{cmd[0]}': {exc}"
 
 
 def _create_demo_dataset(root: Path) -> Dict[str, str]:

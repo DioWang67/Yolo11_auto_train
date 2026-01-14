@@ -54,7 +54,7 @@ class ImageAugmentor:
             output_img_dir = Path(self.config["output"]["image_dir"])
             output_img_dir.mkdir(parents=True, exist_ok=True)
             self.logger.info(f"已建輸出資料夾: {output_img_dir}")
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError) as e:
             self.logger.error(f"建立輸出目錄失敗: {e}")
             raise
 
@@ -68,7 +68,7 @@ class ImageAugmentor:
             else:
                 self.logger.warning(f"設定檔 {config_path} 不存在，使用預設設定")
                 return self._default_config()
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             self.logger.error(f"讀取設定檔失敗: {e}")
             return self._default_config()
 
@@ -208,11 +208,11 @@ class ImageAugmentor:
                     self.logger.info(f"輸出增強影像: {aug_img_path}")
                     saved_any = True
 
-                except Exception as e:
+                except (ValueError, RuntimeError, OSError) as e:
                     self.logger.error(f"處理增強發生錯誤 {img_file}, 索引 {i}: {e}")
                     continue
 
-        except Exception as e:
+        except (OSError, cv2.error, TypeError) as e:
             self.logger.error(f"處理單張影像發生錯誤 {img_file}: {e}")
             return False
         return saved_any
@@ -307,5 +307,5 @@ def _process_single_image_job(args: tuple[str, str, str, int]) -> bool:
             cv2.imwrite(str(aug_img_path), augmented_image)
             saved_any = True
         return saved_any
-    except Exception:
+    except (OSError, ValueError, TypeError):
         return False

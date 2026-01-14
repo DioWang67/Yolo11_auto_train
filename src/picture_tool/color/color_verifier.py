@@ -973,7 +973,7 @@ def visualize_debug(
     try:
         import matplotlib.pyplot as plt
         from matplotlib import gridspec
-    except Exception:
+    except (OSError, UnicodeDecodeError, ValueError):
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1142,8 +1142,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             logger.info(f"CSV report: {args.output_csv}")
         logger.info("=" * 60)
 
-    except Exception as exc:
-        logger.error(f"Verification failed: {exc}", exc_info=True)
+    except (OSError, ValueError) as exc:
+        logger.warning(f"Failed to write PASS images list: {exc}", exc_info=True)
         return 1
     return 0
 
