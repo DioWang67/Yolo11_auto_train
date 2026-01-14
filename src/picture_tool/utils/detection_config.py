@@ -15,7 +15,7 @@ def _load_class_names_from_run(
     if args_path.exists():
         try:
             args_data = yaml.safe_load(args_path.read_text(encoding="utf-8")) or {}
-        except Exception as exc:
+        except (FileNotFoundError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
             logger.warning(
                 "Detection config export: failed to read %s (%s)", args_path, exc
             )
@@ -34,7 +34,7 @@ def _load_class_names_from_run(
                         data_yaml = (
                             yaml.safe_load(data_path.read_text(encoding="utf-8")) or {}
                         )
-                    except Exception as exc:
+                    except (FileNotFoundError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
                         logger.warning(
                             "Detection config export: failed to read dataset yaml %s (%s)",
                             data_path,
@@ -60,7 +60,7 @@ def _load_mapping_from_source(source: Any, logger: logging.Logger) -> Dict[str, 
         return {str(k): v for k, v in source.items()}
     try:
         path = Path(str(source))
-    except Exception:
+    except (TypeError, ValueError, OSError):
         return {}
     if not path.exists():
         logger.warning(
@@ -69,7 +69,7 @@ def _load_mapping_from_source(source: Any, logger: logging.Logger) -> Dict[str, 
         return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception as exc:
+    except (FileNotFoundError, yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
         logger.error(
             "Detection config export skipped: failed to read %s (%s)", path, exc
         )

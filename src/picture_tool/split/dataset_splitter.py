@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split  # type: ignore[import-unty
 try:
     # Optional: iterative stratification for multi-label balance
     from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     MultilabelStratifiedShuffleSplit = None  # type: ignore
 
 
@@ -21,7 +21,7 @@ def _load_classes_from_label(label_path: Path) -> List[int]:
             for ln in label_path.read_text(encoding="utf-8").splitlines()
             if ln.strip()
         ]
-    except Exception:
+    except (FileNotFoundError, UnicodeDecodeError, OSError):
         return []
     classes: List[int] = []
     for ln in lines:
@@ -31,7 +31,7 @@ def _load_classes_from_label(label_path: Path) -> List[int]:
                 cls = int(float(parts[0]))
                 if cls not in classes:
                     classes.append(cls)
-            except Exception:
+            except (ValueError, TypeError):
                 continue
     return classes
 
@@ -132,7 +132,7 @@ def split_dataset(config, log_file=None, logger=None):
                             max_cls = cid
             if max_cls >= 0:
                 num_classes = max_cls + 1
-        except Exception:
+        except (ValueError, TypeError, UnicodeDecodeError, OSError):
             pass
 
     if (

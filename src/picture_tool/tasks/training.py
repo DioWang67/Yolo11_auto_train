@@ -22,13 +22,13 @@ def run_yolo_train(config, args):
     # 1. Position Config Generation
     try:
         PositionConfigGenerator.generate(config, run_dir, logger)
-    except Exception as e:
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
         logger.warning(f"Position config generation failed: {e}")
 
     # 2. ONNX Export
     try:
         OnnxExporter.export(config, run_dir, logger)
-    except Exception as e:
+    except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
         logger.warning(f"ONNX export failed: {e}")
 
     # 3. Detection Config Export
@@ -45,7 +45,7 @@ def run_yolo_train(config, args):
         DetectionConfigExporter.export(
             config, run_dir, logger, include_position=position_validation_active
         )
-    except Exception as e:
+    except (FileNotFoundError, ValueError, OSError) as e:
         logger.warning(f"Detection config export failed: {e}")
 
 
@@ -155,7 +155,7 @@ def skip_yolo_train(config, args):
         ):
             return "Skipping training: Source dataset and config match last run."
 
-    except Exception:
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError, OSError):
         # Fallback to mtime if hash check fails or file corrupt
         pass
 
