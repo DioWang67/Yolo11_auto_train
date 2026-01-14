@@ -97,7 +97,7 @@ class OnnxExporter:
                 model = YOLO(str(weights_path))
                 result_path = model.export(**export_kwargs)
                 logger.info(f"Ultralytics export returned: {result_path}")
-            except Exception as exc:  # Catch RuntimeError/Torchexport errors
+            except (RuntimeError, OSError, AttributeError) as exc:
                 logger.error(f"ONNX export runtime error: {exc}")
                 raise
 
@@ -108,7 +108,7 @@ class OnnxExporter:
             if result_path:
                 try:
                     candidates.append(Path(str(result_path)).resolve())
-                except Exception:
+                except (TypeError, ValueError, OSError):
                     pass
 
             # Candidate B: Derived from weights path
@@ -158,7 +158,7 @@ class OnnxExporter:
                 # Runtime smoke test (Strict/Fatal since we want robust pipelines)
                 validate_onnx_runtime(export_path, imgsz=imgsz, device=device)
 
-            except Exception as val_err:
+            except (RuntimeError, OSError, ValueError) as val_err:
                 logger.error(f"ONNX validation failed: {val_err}")
                 # Treat validation failure as fatal
                 raise RuntimeError(
@@ -167,6 +167,6 @@ class OnnxExporter:
 
             return export_path
 
-        except Exception as e:
+        except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
             logger.exception(f"ONNX export process failed: {e}")
             return None

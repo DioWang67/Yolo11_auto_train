@@ -1,5 +1,6 @@
 import io
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -20,14 +21,36 @@ except ImportError:
 app = FastAPI(title="YOLO11 Inference Service") if FastAPI is not None else None
 MODEL_INSTANCE = None
 STARTUP_MODEL_PATH: Optional[str] = None
+_MODEL_LOCK = threading.Lock()  # Thread-safe model loading
 
 
 def load_model(model_path: str):
+    """Load YOLO model with thread-safe locking.
+    
+    Args:
+        model_path: Path to model weights file
+        
+    Raises:
+        RuntimeError: If ultralytics is not installed
+        FileNotFoundError: If model file doesn't exist
+        OSError: If model file cannot be read
+    """
     global MODEL_INSTANCE
     if YOLO is None:
         raise RuntimeError("ultralytics not installed")
-    MODEL_INSTANCE = YOLO(model_path)
-    logging.info(f"Model loaded from {model_path}")
+    
+    # Validate path before locking
+    model_file = Path(model_path)
+    if not model_file.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    with _MODEL_LOCK:
+        try:
+            MODEL_INSTANCE = YOLO(model_path)
+            logging.info(f"Model loaded from {model_path}")
+        except (RuntimeError, OSError) as e:
+            logging.error(f"Failed to load model from {model_path}: {e}")
+            raise
 
 
 @asynccontextmanager
@@ -37,7 +60,7 @@ async def lifespan(app: FastAPI):
     if default_model.exists():
         try:
             load_model(str(default_model))
-        except Exception as e:
+        except (RuntimeError, FileNotFoundError, OSError) as e:
             logging.warning(f"Failed to auto-load default model: {e}")
     else:
         logging.warning(
@@ -63,24 +86,59 @@ def health_check():
 
 @app.post("/load_model")
 def api_load_model(path: str):
-    if not Path(path).exists():
-        raise HTTPException(status_code=404, detail="Model file not found")
+    """Load a YOLO model from specified path.
+    
+    Args:
+        path: File path to model weights
+        
+    Returns:
+        Success status and message
+        
+    Raises:
+        HTTPException: 404 if file not found, 500 if loading fails
+    """
     try:
         load_model(path)
         return {"status": "success", "message": f"Loaded {path}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (RuntimeError, OSError) as e:
+        logging.error(f"Model loading failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...), conf: float = 0.25):
+    """Run YOLO inference on uploaded image.
+    
+    Args:
+        file: Uploaded image file
+        conf: Confidence threshold (0.0-1.0)
+        
+    Returns:
+        Detection results with bounding boxes and confidence scores
+        
+    Raises:
+        HTTPException: 503 if model not loaded, 400 for invalid input, 500 for inference errors
+    """
+    # Input validation
+    if not 0.0 <= conf <= 1.0:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Confidence threshold must be between 0.0 and 1.0, got {conf}"
+        )
+    
     if MODEL_INSTANCE is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
+    except (OSError, ValueError) as e:
+        logging.warning(f"Invalid image file {file.filename}: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
+    try:
         # Inference
         results = MODEL_INSTANCE(image, conf=conf)
 
@@ -97,9 +155,9 @@ async def predict(file: UploadFile = File(...), conf: float = 0.25):
                 )
 
         return {"filename": file.filename, "detections": detections}
-    except Exception as e:
-        logging.error(f"Prediction failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except (RuntimeError, AttributeError) as e:
+        logging.error(f"Prediction failed for {file.filename}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
 
 
 def main():
