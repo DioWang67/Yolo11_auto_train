@@ -4,6 +4,8 @@ import logging
 from collections import OrderedDict
 from typing import Any, Optional, Protocol, Callable
 
+from picture_tool.exceptions import ModelError
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,9 +57,8 @@ class ModelManager:
         self.logger.info(f"Model cache miss: {key}. Loading...")
         try:
             model = loader_fn(key)
-        except Exception as e:
-            self.logger.error(f"Failed to load model {key}: {e}")
-            raise e
+        except (FileNotFoundError, RuntimeError, OSError, AttributeError) as e:
+            raise ModelError(f"Failed to load model from {key}: {e}") from e
 
         # Evict if full
         if len(self.cache) >= self.capacity:
