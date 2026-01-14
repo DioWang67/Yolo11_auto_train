@@ -7,7 +7,7 @@ from tqdm import tqdm  # type: ignore
 
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     YOLO = None  # type: ignore
 
 from picture_tool.eval.yolo_evaluator import _resolve_weights  # reuse weight resolution
@@ -96,8 +96,8 @@ def run_batch_inference(config: dict, logger: Optional[logging.Logger] = None) -
                 import cv2
 
                 cv2.imwrite(str(out_img), vis)
-            except Exception:
-                pass
+            except (OSError, RuntimeError, AttributeError):
+                continue
 
     logger.info(f"Batch inference completed. CSV: {csv_path}")
     return csv_path

@@ -109,8 +109,9 @@ class Pipeline:
             if not force and task.skip_fn:
                 try:
                     skip_reason = task.skip_fn(config, args)
-                except Exception as exc:  # pragma: no cover - defensive
-                    self.logger.warning(f"Skip check for {task.name} failed: {exc}")
+                except (TypeError, AttributeError, RuntimeError) as exc:  # pragma: no cover - defensive
+                    self.logger.warning("skip_fn for %s failed: %s", task.name, exc)
+                    skip_reason = None
             if skip_reason:
                 self.logger.info(f"Skipping task {task.name}: {skip_reason}")
                 continue

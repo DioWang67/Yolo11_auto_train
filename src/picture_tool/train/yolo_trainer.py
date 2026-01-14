@@ -18,7 +18,7 @@ class TrainingInterrupted(Exception):
 
 try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     YOLO = None  # type: ignore
 
 
