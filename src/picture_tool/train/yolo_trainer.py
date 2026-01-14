@@ -75,7 +75,7 @@ def train_yolo(
                     logger.info(
                         f"Auto-detected class names from {possible_classes}: {names}"
                     )
-            except Exception as e:
+            except (FileNotFoundError, UnicodeDecodeError, OSError) as e:
                 logger.warning(f"Failed to read classes.txt: {e}")
 
     if not isinstance(names, list) or not names:
@@ -183,7 +183,7 @@ def train_yolo(
         }
         with open(run_dir / "last_run_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
-    except Exception as e:
+    except (FileNotFoundError, OSError, ValueError) as e:
         logger.warning(f"Failed to save run metadata: {e}")
 
     # Basic experiment logging (metrics only, artifacts handled by caller/pipeline now)
@@ -220,7 +220,7 @@ def train_yolo(
             artifacts=artifacts,
             results_csv=run_dir / "results.csv",
         )
-    except Exception as e:
+    except (FileNotFoundError, KeyError, ValueError, OSError) as e:
         logger.warning(f"Failed to write experiment log: {e}")
     finally:
         tracker.end_run()
