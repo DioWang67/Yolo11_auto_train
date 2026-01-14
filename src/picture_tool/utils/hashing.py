@@ -20,7 +20,7 @@ def compute_dir_hash(directory: Path, glob_pattern: str = "**/*") -> str:
             hasher.update(str(p.relative_to(directory)).encode("utf-8"))
             hasher.update(str(stat.st_size).encode("utf-8"))
             hasher.update(str(stat.st_mtime).encode("utf-8"))
-        except Exception:
+        except (FileNotFoundError, PermissionError, OSError):
             continue
 
     return hasher.hexdigest()
@@ -32,5 +32,5 @@ def compute_config_hash(config: Dict[str, Any]) -> str:
         # sort_keys=True ensures consistent JSON serialization
         s = json.dumps(config, sort_keys=True)
         return hashlib.md5(s.encode("utf-8")).hexdigest()
-    except Exception:
+    except (TypeError, ValueError, OSError):
         return "unknown"

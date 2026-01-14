@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 def _load_json(path: Path) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
         return None
 
 
