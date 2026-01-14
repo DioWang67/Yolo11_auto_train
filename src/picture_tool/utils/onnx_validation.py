@@ -40,7 +40,7 @@ def validate_onnx_structure(onnx_path: Path) -> None:
         model = onnx.load(str(onnx_path))
         onnx.checker.check_model(model)
         logger.info("ONNX structural validation passed.")
-    except Exception as e:
+    except (ImportError, RuntimeError, AttributeError, OSError) as e:
         logger.error(f"ONNX structural validation failed: {e}")
         raise
 
@@ -155,6 +155,6 @@ def validate_onnx_runtime(
         logger.info("ONNX runtime smoke test passed successfully.")
         return True
 
-    except Exception as e:
+    except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
         logger.error(f"ONNX runtime smoke test failed: {e}")
         raise RuntimeError(f"ONNX runtime smoke test failed: {e}") from e

@@ -62,8 +62,8 @@ def run_artifact_bundle(config, args):
                 # Arcname relative to run_dir to keep structure flat-ish or clean
                 zf.write(f, arcname=f.name)
         logger.info(f"Bundle created successfully: {zip_path}")
-    except Exception as e:
-        logger.error(f"Failed to create bundle: {e}")
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logger.warning(f"Failed to create bundle: {e}")
 
 
 TASKS: List[Any] = []
