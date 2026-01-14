@@ -219,7 +219,7 @@ class SamSettings:
             return "cpu"
         try:
             return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:  # pragma: no cover - CUDA env issues
+        except (RuntimeError, ValueError):  # pragma: no cover - CUDA env issues
             return "cpu"
 
 
@@ -691,7 +691,7 @@ class _SamInferenceTask(QtCore.QRunnable):
             # Return full-res mask AND computed stats
             self.callback(self.request_id, resized_mask, stats, inference_ms, None)
 
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             if self.cancel_event.is_set():
                 return
             if self.progress_cb:
@@ -797,7 +797,7 @@ class ImageCanvas(QtWidgets.QLabel):
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton and self.pixmap():
             self._drawing = True
-            self._box_start = event.pos()
+            self._box_start = QtCore.QPoint()
             self._current_box = QtCore.QRect(self._box_start, self._box_start)
             self.update()
 
@@ -1289,7 +1289,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
             try:
                 self._active_sam_task.cancel()
                 self.sam_status_label.setText("SAM: Cancelling previous")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         self._launch_sam_task(params)
 

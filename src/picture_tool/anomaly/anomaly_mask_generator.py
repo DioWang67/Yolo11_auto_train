@@ -139,7 +139,7 @@ def _align_image(src_gray: np.ndarray, ref_gray: np.ndarray, mode: str) -> np.nd
         try:
             aligned, _ = _align_ecc(src_gray, ref_gray)
             return aligned
-        except Exception:
+        except (ValueError, OSError):
             if mode == "ecc":
                 raise
     aligned, _ = _align_orb(src_gray, ref_gray)
