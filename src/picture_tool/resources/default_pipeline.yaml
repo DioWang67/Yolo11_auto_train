@@ -331,7 +331,7 @@ color_inspection:
     - White
     - Blue
   sam:
-    checkpoint: sam2_b.pt
+    checkpoint: ./models/sam2_b.pt
     model_type: sam2_b
     device: auto
 

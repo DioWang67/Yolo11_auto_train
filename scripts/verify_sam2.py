@@ -13,7 +13,7 @@ def verify_sam2():
         print("❌ Ultralytics NOT found. Please run: pip install ultralytics")
         return
 
-    model_name = "sam2_b.pt"
+    model_name = "models/sam2_b.pt"
     print(f"Attempting to load SAM 2 model: {model_name}...")
     try:
         # This triggers auto-download if strictly necessary and allowed by library

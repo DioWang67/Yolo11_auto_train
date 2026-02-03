@@ -177,7 +177,7 @@ class ColorPanel(QWidget):
         settings = QtCore.QSettings()
         last_input = settings.value("sam_tool/input_dir", "")
         last_output = settings.value("sam_tool/output_json", "")
-        last_ckpt = settings.value("sam_tool/checkpoint", "sam2_b.pt")
+        last_ckpt = settings.value("sam_tool/checkpoint", "models/sam2_b.pt")
         last_type = settings.value("sam_tool/model_type", "sam2_b")
         last_colors = settings.value("sam_tool/target_colors", "Red, Green, Blue, Yellow, Black, White")
 
