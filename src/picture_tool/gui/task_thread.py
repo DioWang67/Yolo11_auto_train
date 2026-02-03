@@ -81,6 +81,25 @@ class WorkerThread(QThread):
             # Using build_task_registry to get Task objects
             registry = pipeline.build_task_registry(config)
 
+            # Ensure logging to file is set up for GUI runs too
+            log_file = config.get("pipeline", {}).get("log_file", "logs/pipeline.log")
+            # We don't want to re-configure basicConfig globally regarding handlers if already set,
+            # but we do want the file handler.
+            # pipeline.setup_logging uses basicConfig which might be ignored if root logger already has handlers.
+            # Instead, we manually attach a FileHandler to our logger if needed, OR just call setup_logging
+            # and hope it attaches handlers to the root logger which we might not be using directly?
+            # pipeline.Pipeline uses the passed 'logger'.
+            
+            # Let's attach a FileHandler to our local logger to ensure persistence
+            try:
+                log_path = Path(log_file)
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.FileHandler(log_path, encoding='utf-8')
+                file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+                logger.addHandler(file_handler)
+            except Exception as e:
+                logger.warning(f"Failed to setup file logging: {e}")
+
             # Using Pipeline core to resolve dependencies correctly
             pipe_core = pipeline.Pipeline(registry, logger)
             collected = pipe_core._collect(self.tasks)

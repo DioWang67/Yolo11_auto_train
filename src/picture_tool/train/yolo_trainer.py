@@ -93,10 +93,15 @@ def train_yolo(
     model_cfg = ycfg.get("model", "yolo11n.pt")
     model_path = Path(str(model_cfg))
     if model_path.exists():
-        model_arg = str(model_path)
+        model_arg = str(model_path.resolve())
     else:
-        # allow using model name directly (e.g., 'yolo11n.pt')
-        model_arg = str(model_cfg)
+        # Check if it exists in models/ dir as fallback (common project structure)
+        fallback = Path("models") / model_cfg
+        if fallback.exists():
+             model_arg = str(fallback.resolve())
+        else:
+             # allow using model name directly (e.g., 'yolo11n.pt')
+             model_arg = str(model_cfg)
 
     epochs = int(ycfg.get("epochs", 100))
     imgsz = int(ycfg.get("imgsz", 640))
@@ -132,7 +137,21 @@ def train_yolo(
     if stop_event:
 
         def on_train_epoch_end(trainer):
-            if stop_event.is_set():
+            # Log progress for GUI feedback
+            try:
+                current_epoch = trainer.epoch + 1
+                total_epochs = trainer.epochs
+                # Safe access to loss if available
+                loss_info = ""
+                if hasattr(trainer, "loss_names") and hasattr(trainer, "loss_items"):
+                    # Just grab the first loss (usually box_loss) for brevity
+                    loss_info = f" | {trainer.loss_names[0]}: {trainer.loss_items[0]:.4f}"
+                
+                logger.info(f"Training Progress: Epoch {current_epoch}/{total_epochs}{loss_info}")
+            except Exception:
+                pass # Don't break training for logging errors
+
+            if stop_event and stop_event.is_set():
                 logger.info("Stop event detected. Stopping YOLO training gracefully.")
                 trainer.stop = True
                 raise TrainingInterrupted("Training stopped by user.")

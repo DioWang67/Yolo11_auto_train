@@ -67,6 +67,13 @@ class MainWindow(QMainWindow):
         
         # Initialize PipelineManager (replaces Mixin)
         self.manager = PipelineManager(parent=self)
+        self.manager.pipeline_finished.connect(self.on_pipeline_finished)
+        self.manager.error_occurred.connect(self.on_pipeline_error)
+        self.manager.task_started.connect(self.on_task_started)
+        self.manager.task_completed.connect(self.on_task_completed)
+        self.manager.progress_updated.connect(self.on_progress_updated)
+        self.manager.log_message.connect(self.log_message)
+        
         # Initialize LogViewer for logs and config preview
         self.log_viewer = LogViewer(parent=self)
         self._log_history: List[str] = []
@@ -430,6 +437,46 @@ class MainWindow(QMainWindow):
     def on_tasks_changed(self, tasks: list) -> None:
         "Handle tasks changed signal from TaskControlPanel."
         self._rebuild_status_items(only=tasks)
+
+    # ------------------------------------------------------------------
+    # Signal Handlers
+    # ------------------------------------------------------------------
+    def on_pipeline_finished(self):
+        """Handle pipeline completion."""
+        self.log_message("[SUCCESS] Pipeline finished successfully.")
+        self._reset_ui_state()
+        if hasattr(self, "progress_bar"):
+            self.progress_bar.setValue(100)
+            self.status_label.setText("Pipeline Completed")
+
+    def on_pipeline_error(self, message: str):
+        """Handle pipeline error."""
+        self.log_message(f"[ERROR] Pipeline failed: {message}")
+        self._reset_ui_state()
+        if hasattr(self, "status_label"):
+            self.status_label.setText("Pipeline Error")
+
+    def on_task_started(self, task_name: str):
+        """Handle task start."""
+        self._set_task_status(task_name, "Running...", color="#4D96FF")
+        if hasattr(self, "status_label"):
+            self.status_label.setText(f"Running: {task_name}")
+
+    def on_task_completed(self, task_name: str):
+        """Handle task completion."""
+        self._set_task_status(task_name, "Done", color="#6BCB77")
+
+    def on_progress_updated(self, value: int):
+        """Handle progress update."""
+        if hasattr(self, "progress_bar"):
+            self.progress_bar.setValue(value)
+
+    def _reset_ui_state(self):
+        """Re-enable controls after run."""
+        if hasattr(self, "start_btn"):
+            self.start_btn.setEnabled(True)
+        if hasattr(self, "stop_btn"):
+            self.stop_btn.setEnabled(False)
 
     def _render_log_message(self, message: str) -> None:
         color = "#cccccc"

@@ -320,8 +320,8 @@ color_inspection:
   - Red
   - Yellow
   sam:
-    checkpoint: ./models/sam/sam_vit_h_4b8939.pth
-    model_type: vit_h
+    checkpoint: ./models/sam2_b.pt
+    model_type: sam2_b
     device: auto
 color_verification:
   enabled: true
