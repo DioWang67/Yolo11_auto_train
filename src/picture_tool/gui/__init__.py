@@ -5,12 +5,12 @@ To avoid double-import warnings when launching with
 lazily via ``__getattr__``.
 """
 
-from .pipeline_controller import PipelineControllerMixin
+from .pipeline_manager import PipelineManager
 from .task_thread import WorkerThread
 
 __all__ = [
     "PictureToolGUI",
-    "PipelineControllerMixin",
+    "PipelineManager",
     "WorkerThread",
     "main",
 ]

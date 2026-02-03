@@ -6,13 +6,15 @@ CRITICAL: This must execute before any test imports that use tqdm or matplotlib.
 import os
 import gc
 import pytest
-import matplotlib
+try:
+    import matplotlib
+    # Configure matplotlib to non-interactive backend (must be before pyplot import)
+    matplotlib.use("Agg")
+except ImportError:
+    pass
 
 # MUST be set before importing tqdm anywhere
 os.environ["TQDM_DISABLE"] = "1"
-
-# Configure matplotlib to non-interactive backend (must be before pyplot import)
-matplotlib.use("Agg")
 
 # Additional safeguard: completely disable tqdm monitor
 import tqdm.std

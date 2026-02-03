@@ -30,7 +30,7 @@ class LabelImgLauncher:
             if vendor_path.exists():
                 logger.info(f"Found vendored LabelImg at: {vendor_path}")
                 return str(vendor_path)
-        except Exception as e:
+        except (OSError, AttributeError) as e:
             logger.warning(f"Error checking vendor path: {e}")
 
         # 2. Try to find labelImg command
@@ -89,7 +89,7 @@ class LabelImgLauncher:
             logger.info(f"Classes: {classes}")
 
             return True
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:
             logger.error(f"Failed to prepare environment: {e}")
             return False
 
@@ -150,7 +150,7 @@ class LabelImgLauncher:
             logger.info(f"LabelImg launched with PID: {self.process.pid}")
             return True
 
-        except Exception as e:
+        except (OSError, RuntimeError, FileNotFoundError) as e:
             logger.error(f"Failed to launch LabelImg: {e}")
             return False
 

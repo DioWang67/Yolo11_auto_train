@@ -21,29 +21,39 @@ class AnnotationTracker:
         self,
         image_dir: Path,
         label_dir: Path,
+        progress_callback=None,
     ) -> Dict:
         """Scan directories and get annotation statistics.
 
         Args:
             image_dir: Directory containing images
             label_dir: Directory containing label files
+            progress_callback: Optional callable(current, total) for progress updates
 
         Returns:
-            Dictionary with statistics:
-            - total_images: Total number of images
-            - annotated_images: Number of annotated images
-            - unannotated_images: List of unannotated image names
-            - annotated_images_list: List of annotated image names
-            - progress_percent: Percentage of annotated images
+            Dictionary with statistics
         """
         if not image_dir.exists():
             logger.warning(f"Image directory does not exist: {image_dir}")
             return self._empty_stats()
 
         # Get all image files
-        image_files: set[str] = set()
-        for ext in self.image_extensions:
-            image_files.update(f.stem for f in image_dir.glob(f"*{ext}"))
+        image_files = set()
+        # Scan for images first to get total count
+        all_files = list(image_dir.glob("*"))
+        total_files = len(all_files)
+        
+        for i, f in enumerate(all_files):
+            if f.suffix.lower() in self.image_extensions:
+                image_files.add(f.stem)
+            
+            # Update progress periodically (e.g. every 10 files or 1%)
+            if progress_callback and i % 10 == 0:
+                progress_callback(i, total_files)
+
+        # Final progress update
+        if progress_callback:
+            progress_callback(total_files, total_files)
 
         # Get all label files
         label_files = set()
@@ -153,7 +163,7 @@ class AnnotationTracker:
                 except ValueError as e:
                     errors.append(f"Line {line_num}: Cannot parse values - {e}")
 
-        except Exception as e:
+        except (OSError, UnicodeDecodeError) as e:
             errors.append(f"Cannot read file: {e}")
 
         return errors
@@ -189,7 +199,7 @@ class AnnotationTracker:
                             class_id = int(parts[0])
                             if 0 <= class_id < len(class_names):
                                 class_counts[class_names[class_id]] += 1
-            except Exception as e:
+            except (OSError, ValueError, IndexError) as e:
                 logger.warning(f"Error reading {label_file}: {e}")
                 continue
 

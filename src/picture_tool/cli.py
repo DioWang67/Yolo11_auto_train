@@ -6,6 +6,7 @@ from picture_tool.main_pipeline import (
     setup_logging,
     run_pipeline,
 )
+from picture_tool.exceptions import ConfigurationError, PipelineError
 
 app = typer.Typer(help="YOLO auto-train pipeline orchestration tools.")
 
@@ -113,9 +114,9 @@ def run(
     logger.info(f"Starting pipeline with tasks: {selected_tasks}")
     try:
         run_pipeline(selected_tasks, cfg_data, logger, args)
-    except Exception:
+    except (ConfigurationError, PipelineError, RuntimeError) as e:
         logger.exception("Pipeline execution failed.")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
 
 
 @app.command()
@@ -127,7 +128,7 @@ def list_tasks(
     """List all available tasks."""
     try:
         cfg = load_config(config)
-    except Exception:
+    except (ConfigurationError, OSError, yaml.YAMLError):
         cfg = {}
 
     from picture_tool.main_pipeline import build_task_registry
@@ -146,7 +147,7 @@ def describe(
     """Show details for a specific task."""
     try:
         cfg = load_config(config)
-    except Exception:
+    except (ConfigurationError, OSError, yaml.YAMLError):
         cfg = {}
 
     from picture_tool.main_pipeline import build_task_registry

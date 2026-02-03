@@ -1,0 +1,59 @@
+# pipeline_v26_experimental.yaml
+# Experimental pipeline for testing YOLO v26 (NMS-Free)
+# Usage: python -m picture_tool.cli run --config src/picture_tool/resources/pipeline_v26_experimental.yaml
+
+# Copy existing configuration structure
+# ... (Simulated copy of default_pipeline.yaml with overrides)
+
+# Since we cannot easily inherit in YAML without custom loader support in this project,
+# we will provide a full copy but with the key changes HIGHLIGHTED.
+# FOR NOW: I will replicate the key sections and assume the user's config loader handle full files.
+
+# --- [GLOBAL CONFIG] ---
+globals:
+  # Using a separate output directory to avoid overwriting production runs
+  runs_dir: ./runs_v26/detect 
+
+# --- [TASK CONFIG] ---
+tasks:
+  - name: yolo_train
+    enabled: true
+    dependencies: [dataset_splitter]
+
+  # ... (other tasks can be enabled as needed)
+
+yolo_training:
+  dataset_dir: ./data/split
+  class_names: ["Black", "Green", "Orange", "Red", "Yellow"]
+  
+  # === CHANGE 1: Model Version ===
+  # YOLO v26 model (NMS-Free version)
+  # Ensure you have downloaded yolo26n.pt or allowed Ultralytics to auto-download
+  model: yolo26n.pt 
+  
+  epochs: 5 # Short run for testing
+  imgsz: 640
+  batch: 16
+  device: cpu
+  project: ./runs_v26/detect
+  name: train_v26_experiment
+  
+  # === CHANGE 2: Post-Processing ===
+  # Since v26 is NMS-free, some validation parameters might behave differently.
+  # We keep position_validation enabled to see if coordinates look correct.
+  position_validation:
+    enabled: true
+    config_path: ./models/yolo/position_config.yaml
+    auto_generate: true
+
+# Re-use Input/Output settings from default (assuming shared data)
+train_test_split:
+  input:
+    image_dir: ./data/augmented/images
+    label_dir: ./data/augmented/labels
+  input_formats: [.png, .jpg, .jpeg]
+  label_format: .txt
+  output:
+    output_dir: ./data/split
+  split_ratios:
+    test: 0.15

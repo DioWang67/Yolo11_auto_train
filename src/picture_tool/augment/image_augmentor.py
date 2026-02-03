@@ -46,7 +46,7 @@ class ImageAugmentor:
             random.seed(int(seed))
             np.random.seed(int(seed))
             self.logger.info(f"已設定隨機種子: {seed}")
-        except Exception as e:
+        except (ImportError, ValueError, TypeError) as e:
             self.logger.warning(f"設定隨機種子失敗: {e}")
 
     def _setup_output_dirs(self) -> None:

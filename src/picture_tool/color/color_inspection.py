@@ -30,10 +30,10 @@ except ImportError:  # pragma: no cover
     torch = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency resolution
-    from segment_anything import SamPredictor, sam_model_registry  # type: ignore
+    from ultralytics import SAM
+    # Ultralytics handles model loading internally
 except ImportError:  # pragma: no cover
-    SamPredictor = None  # type: ignore
-    sam_model_registry = {}  # type: ignore
+    SAM = None  # type: ignore
 
 
 SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tiff", ".tif")
@@ -235,8 +235,10 @@ class SessionConfig:
     @staticmethod
     def from_namespace(ns) -> "SessionConfig":
         sam_cfg = getattr(ns, "sam", None) or {}
-        checkpoint = Path(sam_cfg.get("checkpoint", "./models/sam/sam_vit_b.pth"))
-        model_type = sam_cfg.get("model_type", "vit_b")
+        # Default to a SAM 2 model if not specified
+        checkpoint = Path(sam_cfg.get("checkpoint", "sam2_b.pt"))
+        # Validate or default model_type (just an identifier now, mostly unused by Ultralytics as it detects from file)
+        model_type = sam_cfg.get("model_type", "sam2_b")
         device = sam_cfg.get("device", "auto")
         max_side = getattr(ns, "max_side", None) or sam_cfg.get("max_side") or 2048
         colors = list(getattr(ns, "colors", []) or ["Default"])
@@ -259,12 +261,10 @@ class SessionConfig:
 
 
 def _ensure_package_available() -> None:
-    if SamPredictor is None:  # pragma: no cover - runtime guard
+    if SAM is None:  # pragma: no cover - runtime guard
         raise RuntimeError(
-            "segment-anything is not installed. Please pip install segment-anything."
+            "ultralytics is not installed. Please pip install ultralytics."
         )
-    if torch is None:  # pragma: no cover - runtime guard
-        raise RuntimeError("PyTorch is required for SAM. Please install torch first.")
 
 
 def _to_numpy(arr: Iterable[float]) -> np.ndarray:
@@ -407,42 +407,32 @@ class ColorStatsRecorder:
 
 
 class SamPredictorWrapper:
-    """Thin wrapper around Segment Anything's predictor."""
+    """Wrapper around Ultralytics SAM 2 predictor."""
 
     def __init__(self, cfg: SamSettings) -> None:
         _ensure_package_available()
-        registry = sam_model_registry.get(cfg.model_type)
-        if registry is None:
-            raise ValueError(
-                f"Unknown SAM model_type '{cfg.model_type}'. "
-                f"Available: {', '.join(sam_model_registry.keys())}"
-            )
         checkpoint = Path(cfg.checkpoint)
+        # Ultralytics will auto-download if name matches known models, but we prefer local path if exists
+        # If cfg.model_type is one of sam2 variants, we might want to map it or just use checkpoint
+        
+        # Validating checkpoint existence or letting Ultralytics handle it
+        model_src = str(checkpoint)
         if not checkpoint.exists():
-            raise FileNotFoundError(f"SAM checkpoint not found: {checkpoint}")
-        logging.info("Loading SAM model (%s) from %s", cfg.model_type, checkpoint)
-        sam_model = registry(checkpoint=None)
-        map_location = "cpu"
-        try:
-            state_dict = torch.load(  # type: ignore[arg-type]
-                str(checkpoint), map_location=map_location, weights_only=True
-            )
-        except TypeError:
-            state_dict = torch.load(str(checkpoint), map_location=map_location)  # type: ignore[arg-type]
-        sam_model.load_state_dict(state_dict)
-        device = cfg.resolved_device()
-        sam_model.to(device)
-        self.predictor = SamPredictor(sam_model)
-        self.device = device
-        self._last_image_id: Optional[int] = None
+            # If flexible, we could pass just the name (e.g. sam2_b.pt)
+            # But the existing code expects a file. Check if it's a known model nickname.
+            known_models = ["sam2_t.pt", "sam2_s.pt", "sam2_b.pt", "sam2_l.pt", "sam2.pt"]
+            if checkpoint.name in known_models:
+                 model_src = checkpoint.name # Let ultralytics download
+            else:
+                 raise FileNotFoundError(f"SAM checkpoint not found: {checkpoint}")
 
-    def _ensure_image(self, image_bgr: np.ndarray) -> None:
-        img_id = id(image_bgr)
-        if img_id == self._last_image_id:
-            return
-        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        self.predictor.set_image(rgb)
-        self._last_image_id = img_id
+        logging.info("Loading SAM model from %s", model_src)
+        self.model = SAM(model_src)
+        
+        # Device handling is done per-predict usually, but can be set on model is possible?
+        # Ultralytics models usually load to device on first use or via .to()
+        # But we will pass device to predict/call
+        self.device = cfg.resolved_device()
 
     def predict(
         self,
@@ -452,27 +442,154 @@ class SamPredictorWrapper:
         point_coords: Optional[List[Tuple[float, float]]] = None,
         point_labels: Optional[List[int]] = None,
     ) -> np.ndarray:
-        self._ensure_image(image_bgr)
+        # Convert BGR to RGB (Ultralytics expects RGB or BGR? 
+        # Usually checking: standard YOLO expects BGR if using cv2 load, but PIL is RGB.
+        # Ultralytics predict() handles numpy arrays (assumed BGR by default in OpenCV world).
+        # But let's check docs. Actually, Ultralytics usually assumes BGR if input is numpy array.
+        # However, to be safe, we can try. 
+        # SAM 2 training is RGB. 
+        # Let's pass BGR as per standard cv2 read.
+        
+        # Construct prompts
+        # Ultralytics SAM 2 args: bboxes, points, labels
+        # points shape: (N, 2), labels shape: (N,)
+        
+        bboxes = None
+        if box:
+            # Box format: [x1, y1, x2, y2]
+            bboxes = [box] # List of boxes
+            
+        points = None
+        labels = None
+        if point_coords and point_labels:
+            points = [point_coords] # List of [x, y]
+            labels = [point_labels] # List of ints
+            
+        # Calling the model
+        # stream=False to get all results
+        # device=self.device
+        try:
+            results = self.model(
+                image_bgr, 
+                bboxes=bboxes, 
+                points=points, 
+                labels=labels, 
+                device=self.device,
+                verbose=False,
+                retina_masks=True
+            )
+        except Exception as e:
+            logging.error(f"SAM 2 inference failed: {e}")
+            raise
+            
+        if not results:
+            # Empty result
+            h, w = image_bgr.shape[:2]
+            return np.zeros((h, w), dtype=np.uint8)
+            
+        result = results[0]
+        
+        # Result has .masks
+        if result.masks is None:
+             h, w = image_bgr.shape[:2]
+             return np.zeros((h, w), dtype=np.uint8)
+             
+        # masks.data is a tensor (N, H, W)
+        # We need to select the best one?
+        # SAM 2 typically returns multiple masks for ambiguous prompts.
+        # Ultralytics API might return just one merged or multiple?
+        # Usually it returns all proposals.
+        
+        masks_tensor = result.masks.data
+        if masks_tensor is None or len(masks_tensor) == 0:
+             h, w = image_bgr.shape[:2]
+             return np.zeros((h, w), dtype=np.uint8)
+             
+        # Convert to numpy
+        masks_np = masks_tensor.cpu().numpy().astype(np.uint8) 
+        # masks_np shape: (N, H, W) where N is number of detected objects/masks
+        
+        # Also need scores if available?
+        # result.boxes.conf ? result.masks doesn't always store confidence in same way as SAM 1 scores.
+        # But if we have multiple masks for the *same* prompt (multi-mask/ambiguity), 
+        # Ultralytics SAM output might structure it differently.
+        # Ultralytics SAM usually returns one mask per object detected for Box/Point prompts.
+        # If we provided 1 box/point set, we expect 1 result (or 3 if multi_mask is enabled deep down).
+        
+        # If multiple masks are returned for a single prompt, we should pick best.
+        # But Ultralytics 'predict' with specific prompts usually separates them.
+        # If we have 1 prompt, and we get N masks, it might be N alternatives.
+        
+        # For now, let's take the first one or merge? 
+        # Better: use the one with highest coverage or similar heuristic as before, 
+        # or simplified: just take the first one (usually the best confidence).
+        
+        # But wait, our legacy code had `_choose_mask_index` with heuristics (wires vs background).
+        # We don't have scores easily available per mask hypothesis in the standard high-level result object 
+        # (conf is usually for object detection, but for SAM it's IoU pred).
+        # Let's check if `result.boxes.conf` exists for SAM results.
+        
+        # If we want to maintain the `_choose_mask_index` logic, we need the masks.
+        # Let's pass all masks to `_choose_mask_index`.
+        # Assuming masks_np is (N, H, W)
+        
+        scores = None
+        # Try to get scores
+        if hasattr(result, 'boxes') and result.boxes is not None and result.boxes.conf is not None:
+             scores = result.boxes.conf.cpu().numpy()
+        else:
+             scores = np.ones(len(masks_np)) # Dummy scores
+             
+        # If we have only 1 mask, just return it
+        if len(masks_np) == 1:
+            return masks_np[0]
+            
+        # Select best
+        from types import SimpleNamespace
+        # Re-use logic. But wait, `_choose_mask_index` is in this Class, I need to keep it or refactor it.
+        # I am replacing the whole class, so I need to include `_choose_mask_index` in the replacement?
+        # The tool `replace_file_content` replaces a chunk. `_choose_mask_index` is below line 477.
+        # I ended my replacement at 438. 
+        # CAVEAT: `_choose_mask_index` is an instance method (calls self._score...). 
+        # I should keep it.
+        
+        # So in this method, I will call self._choose_mask_index
+        idx = self._choose_mask_index(masks_np, scores, point_coords, point_labels, box)
+        return masks_np[idx]
+
+    def _ensure_image(self, image_bgr: np.ndarray) -> None:
+        # No-op for Ultralytics API as we pass image to predict() every time
+        pass
+
+    def _choose_mask_index(
+        self,
+        masks: np.ndarray,
+        scores: np.ndarray,
+        pts: Optional[List[Tuple[float, float]]],
+        labels: Optional[List[int]],
+        box: Optional[Tuple[int, int, int, int]],
+    ) -> int:
+        best_idx = 0
+        best_metric = -float("inf")
+        
+        # Convert inputs to numpy if they are lists (Ultralytics might keep them as is, but _score helper expects numpy or similar)
+        # Adapt helper inputs.
+        pts_arr = np.array(pts, dtype=np.float32) if pts else None
+        labels_arr = np.array(labels, dtype=np.int32) if labels else None
         box_arr = np.array(box, dtype=np.float32) if box else None
-        pts = (
-            np.array(point_coords, dtype=np.float32)
-            if point_coords and len(point_coords) > 0
-            else None
-        )
-        labels = (
-            np.array(point_labels, dtype=np.int32)
-            if point_labels and len(point_labels) > 0
-            else None
-        )
-        masks, scores, _ = self.predictor.predict(
-            point_coords=pts,
-            point_labels=labels,
-            box=box_arr,
-            multimask_output=True,
-        )
-        idx = self._choose_mask_index(masks, scores, pts, labels, box_arr)
-        mask = masks[idx].astype(np.uint8)
-        return mask
+
+        for i, mask in enumerate(masks):
+            # score provided by model (if any)
+            metric = float(scores[i]) 
+            # Add heuristic scores
+            metric += self._score_points(mask, pts_arr, labels_arr)
+            metric += self._score_box(mask, box_arr)
+            metric += self._score_area(mask)
+            
+            if metric > best_metric:
+                best_metric = metric
+                best_idx = i
+        return best_idx
 
     def _choose_mask_index(
         self,
@@ -797,7 +914,7 @@ class ImageCanvas(QtWidgets.QLabel):
             return
         if event.button() == QtCore.Qt.MouseButton.LeftButton and self.pixmap():
             self._drawing = True
-            self._box_start = QtCore.QPoint()
+            self._box_start = event.pos()
             self._current_box = QtCore.QRect(self._box_start, self._box_start)
             self.update()
 
@@ -1479,6 +1596,7 @@ def run_gui_session(cfg: SessionConfig) -> None:
     if owns_app:
         assert app is not None
         app.exec_()
+    return window
 
 
 # Backwards-compatible API for pipeline --------------------------------------

@@ -102,7 +102,7 @@ class NewProjectWizard(QDialog):
             )
             self.created_path = project_dir / "config.yaml"
             self.accept()
-        except Exception as e:
+        except (OSError, ValueError, yaml.YAMLError) as e:
             QMessageBox.critical(self, "Error", f"Failed to create project: {e}")
 
     def _create_structure(self, root: Path):

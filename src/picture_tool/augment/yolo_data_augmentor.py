@@ -50,7 +50,7 @@ class DataAugmentor:
             debug_dir.mkdir(parents=True, exist_ok=True)
 
             self.logger.info(f"已建輸出資料夾: {output_img_dir}, {output_label_dir}")
-        except Exception as e:
+        except (OSError, KeyError) as e:
             self.logger.error(f"建立輸出目錄失敗: {e}")
             raise
 

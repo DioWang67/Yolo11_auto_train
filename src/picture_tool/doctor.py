@@ -14,7 +14,7 @@ def _check_import(name: str) -> Tuple[bool, str]:
     try:
         __import__(name)
         return True, ""
-    except Exception as exc:
+    except ImportError as exc:
         return False, str(exc)
 
 
@@ -28,7 +28,7 @@ def _check_command(cmd: List[str]) -> Tuple[bool, str]:
         return False, f"Command '{cmd[0]}' not found. Is it installed and in PATH?"
     except subprocess.CalledProcessError as exc:
         return False, f"Command '{cmd[0]}' failed with exit code {exc.returncode}: {exc}"
-    except Exception as exc:
+    except (OSError, RuntimeError) as exc:
         return False, f"Error running command '{cmd[0]}': {exc}"
 
 

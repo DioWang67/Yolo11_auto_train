@@ -8,9 +8,11 @@ import threading
 from types import SimpleNamespace
 from typing import Iterable, Optional
 
+import yaml
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from picture_tool import main_pipeline as pipeline
+from picture_tool.exceptions import ConfigurationError, PipelineError
 
 
 class _SignalLoggingHandler(logging.Handler):
@@ -25,7 +27,7 @@ class _SignalLoggingHandler(logging.Handler):
     ) -> None:  # pragma: no cover - thin wrapper
         try:
             message = self.format(record)
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             message = record.getMessage()
         self._emit_callback(message)
 
@@ -106,7 +108,7 @@ class WorkerThread(QThread):
                 if task_obj.skip_fn:
                     try:
                         skip_reason = task_obj.skip_fn(config, args)
-                    except Exception as exc:
+                    except (TypeError, AttributeError, RuntimeError) as exc:
                         logger.warning(f"Skip check for {task_name} failed: {exc}")
 
                 if skip_reason:
@@ -125,7 +127,7 @@ class WorkerThread(QThread):
             if not self._cancel_requested:
                 logger.info("All tasks completed.")
             self.finished_signal.emit()
-        except Exception as exc:  # pragma: no cover - defensive guard
+        except (PipelineError, RuntimeError, OSError) as exc:  # pragma: no cover - defensive guard
             logger.exception(f"Pipeline execution failed: {exc}")
             self.error_occurred.emit(str(exc))
         finally:
@@ -140,7 +142,7 @@ class WorkerThread(QThread):
         if self.config_path:
             try:
                 return pipeline.load_config(self.config_path)
-            except Exception:
+            except (ConfigurationError, OSError, yaml.YAMLError):
                 pass
         return pipeline.load_config()
 
