@@ -242,6 +242,13 @@ class ImageAugmentor:
         use_process_pool = bool(
             self.config["processing"].get("use_process_pool", False)
         )
+        
+        # Calculate progress logging interval
+        total_images = len(img_files)
+        progress_interval = max(1, min(10, total_images // 10))
+        
+        self.logger.info(f"開始處理，使用 {num_workers} 個執行緒...")
+        processed_count = 0
 
         if use_process_pool:
             # Pass only necessary data, not the full config which might contain non-picklable items
@@ -260,24 +267,32 @@ class ImageAugmentor:
                 initializer=_init_worker,
                 initargs=(ops_config,),
             ) as executor:
-                results = list(
-                    tqdm(
-                        executor.map(_process_single_image_job, job_args),
-                        total=len(img_files),
-                        desc="處理進度",
-                        mininterval=0.2,
-                    )
-                )
+                results = []
+                for result in tqdm(
+                    executor.map(_process_single_image_job, job_args),
+                    total=len(img_files),
+                    desc="處理進度",
+                    mininterval=0.2,
+                ):
+                    results.append(result)
+                    processed_count += 1
+                    if processed_count % progress_interval == 0 or processed_count == total_images:
+                        percentage = int((processed_count / total_images) * 100)
+                        self.logger.info(f"進度: {processed_count}/{total_images} 張 ({percentage}%)")
         else:
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                results = list(
-                    tqdm(
-                        executor.map(self._process_single_image, img_files),
-                        total=len(img_files),
-                        desc="處理進度",
-                        mininterval=0.2,
-                    )
-                )
+                results = []
+                for result in tqdm(
+                    executor.map(self._process_single_image, img_files),
+                    total=len(img_files),
+                    desc="處理進度",
+                    mininterval=0.2,
+                ):
+                    results.append(result)
+                    processed_count += 1
+                    if processed_count % progress_interval == 0 or processed_count == total_images:
+                        percentage = int((processed_count / total_images) * 100)
+                        self.logger.info(f"進度: {processed_count}/{total_images} 張 ({percentage}%)")
 
         elapsed_time = time.time() - start_time
         ok = sum(1 for r in results if r)

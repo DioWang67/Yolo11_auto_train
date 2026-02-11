@@ -446,16 +446,28 @@ class DataAugmentor:
                 "請檢查 debug_visualizations 目錄中的結果，確認無誤再全量處理"
             )
             return
+        
+        # Calculate progress logging interval (every 10 images or 10% of total, whichever is smaller)
+        total_images = len(img_files)
+        progress_interval = max(1, min(10, total_images // 10))
+        
         num_workers = self.config["processing"].get("num_workers", None) or cpu_count()
+        self.logger.info(f"開始處理，使用 {num_workers} 個執行緒...")
+        
+        processed_count = 0
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            list(
-                tqdm(
-                    executor.map(self._process_single_image, img_files),
-                    total=len(img_files),
-                    desc="處理進度",
-                    mininterval=0.2,
-                )
-            )
+            for _ in tqdm(
+                executor.map(self._process_single_image, img_files),
+                total=len(img_files),
+                desc="處理進度",
+                mininterval=0.2,
+            ):
+                processed_count += 1
+                # Log progress at intervals
+                if processed_count % progress_interval == 0 or processed_count == total_images:
+                    percentage = int((processed_count / total_images) * 100)
+                    self.logger.info(f"進度: {processed_count}/{total_images} 張 ({percentage}%)")
+        
         elapsed_time = time.time() - start_time
         self.logger.info(f"完成! 花費: {elapsed_time:.2f} 秒")
 
