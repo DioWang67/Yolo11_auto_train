@@ -41,42 +41,35 @@ def _ensure_data_yaml(
     return out_path
 
 
-def train_yolo(
-    config: dict,
-    logger: Optional[logging.Logger] = None,
-    args: Optional[object] = None,
-) -> Path:
-    """Train YOLO using Ultralytics and return run directory.
-
-    Expects config['yolo_training'] block with keys:
-      - dataset_dir, class_names, model, epochs, imgsz, batch, device, project, name
-    """
-    logger = logger or logging.getLogger(__name__)
+def _parse_yolo_config(config: dict) -> dict:
+    """Extract and validate basic YOLO configurations."""
     ycfg = config.get("yolo_training", {})
+    return {
+        "dataset_dir": Path(ycfg.get("dataset_dir", DEFAULT_SPLITS_DIR)).resolve(),
+        "names": ycfg.get("class_names"),
+        "model_cfg": ycfg.get("model", "yolo11n.pt"),
+        "epochs": int(ycfg.get("epochs", 100)),
+        "imgsz": int(ycfg.get("imgsz", 640)),
+        "batch": int(ycfg.get("batch", 16)),
+        "device": str(ycfg.get("device", "cpu")),
+        "project": str(ycfg.get("project", DEFAULT_RUNS_DIR / "detect")),
+        "name": str(ycfg.get("name", "train")),
+    }
 
-    # Use constant for default instead of hardcoded
-    dataset_dir = Path(ycfg.get("dataset_dir", DEFAULT_SPLITS_DIR)).resolve()
-    names = ycfg.get("class_names")
 
-    # Auto-detect class names if missing OR if set to default placeholder
-    can_autodetect = not names or (
-        isinstance(names, list) and len(names) == 1 and names[0] == "object"
-    )
-
+def _prepare_dataset_names(dataset_dir: Path, names: Optional[List[str]], logger: logging.Logger) -> List[str]:
+    """Auto-detect class names or validate provided ones."""
+    can_autodetect = not names or (isinstance(names, list) and len(names) == 1 and names[0] == "object")
     if can_autodetect:
         possible_classes = dataset_dir / "classes.txt"
         if possible_classes.exists():
             try:
                 content = possible_classes.read_text(encoding="utf-8")
-                detected = [
-                    line.strip() for line in content.splitlines() if line.strip()
-                ]
+                detected = [line.strip() for line in content.splitlines() if line.strip()]
                 if detected:
-                    names = detected
-                    logger.info(
-                        f"Auto-detected class names from {possible_classes}: {names}"
-                    )
-            except (FileNotFoundError, UnicodeDecodeError, OSError) as e:
+                    logger.info(f"Auto-detected class names from {possible_classes}: {detected}")
+                    return detected
+            except (UnicodeDecodeError, OSError) as e:
                 logger.warning(f"Failed to read classes.txt: {e}")
 
     if not isinstance(names, list) or not names:
@@ -85,58 +78,23 @@ def train_yolo(
             "Please add it to config.yaml (e.g., class_names: ['dog', 'cat']) "
             "or ensure classes.txt exists in dataset_dir."
         )
+    return names
 
-    # Prepare data.yaml
-    data_yaml = _ensure_data_yaml(dataset_dir, names)
-    logger.info(f"Prepared data.yaml at: {data_yaml}")
 
-    # Resolve model weights
-    model_cfg = ycfg.get("model", "yolo11n.pt")
+def _build_yolo_model(model_cfg: str) -> str:
+    """Resolve correct YOLO model weights path."""
     model_path = Path(str(model_cfg))
     if model_path.exists():
-        model_arg = str(model_path.resolve())
-    else:
-        # Check if it exists in models/ dir as fallback (common project structure)
-        fallback = Path("models") / model_cfg
-        if fallback.exists():
-             model_arg = str(fallback.resolve())
-        else:
-             # allow using model name directly (e.g., 'yolo11n.pt')
-             model_arg = str(model_cfg)
+        return str(model_path.resolve())
+    
+    fallback = Path("models") / model_cfg
+    if fallback.exists():
+         return str(fallback.resolve())
+    return str(model_cfg)
 
-    epochs = int(ycfg.get("epochs", 100))
-    imgsz = int(ycfg.get("imgsz", 640))
-    batch = int(ycfg.get("batch", 16))
-    device = str(ycfg.get("device", "cpu"))
-    project = str(ycfg.get("project", DEFAULT_RUNS_DIR / "detect"))
-    name = str(ycfg.get("name", "train"))
 
-    if YOLO is None:
-        raise RuntimeError("ultralytics is not available. Please install ultralytics.")
-
-    logger.info(
-        f"Starting YOLO training | model={model_arg} epochs={epochs} imgsz={imgsz} batch={batch} device={device}"
-    )
-    # Initialize Experiment Tracker
-    tracker = get_tracker(config)
-    tracker.start_run(run_name=name)
-    tracker.log_params(
-        {
-            "model": model_arg,
-            "epochs": epochs,
-            "imgsz": imgsz,
-            "batch": batch,
-            "device": device,
-            "dataset": str(dataset_dir),
-        }
-    )
-
-    model = YOLO(model_arg)
-
-    # [NEW] Add Stop Callback and Detailed Progress Callbacks
-    stop_event = getattr(args, "stop_event", None)
-
-    # State container to persist simple counters safely
+def _attach_yolo_callbacks(model: Any, logger: logging.Logger, stop_event: Any) -> None:
+    """Attach required lifecycle callbacks for logging and cancellation to YOLO."""
     tb_state = {"batch": 0}
 
     def on_train_start(trainer):
@@ -151,92 +109,138 @@ def train_yolo(
             current_epoch = getattr(trainer, "epoch", 0) + 1
             total_epochs = getattr(trainer, "epochs", "?")
             logger.info(f"  [YOLO Lifecycle] Finished Epoch {current_epoch}/{total_epochs}")
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應針對 Ultralytics 內部物件結構錯誤捕捉 AttributeError 或 KeyError
-            logger.error(f"Error in on_train_epoch_end: {e}")
+        except AttributeError as e:
+            logger.error(f"Error in on_train_epoch_end (Missing attributes): {e}")
 
         if stop_event and stop_event.is_set():
             logger.info("Stop event detected. Stopping YOLO training gracefully.")
             trainer.stop = True
-            raise TrainingInterrupted("Training stopped by user.")
             
     def on_train_batch_end(trainer):
         try:
             tb_state["batch"] += 1
-            # We don't want to spam the GUI, log every 10 batches this time
             if tb_state["batch"] % 10 == 0:
                 epoch = getattr(trainer, "epoch", 0) + 1
-                
-                # Extract Losses if available
                 loss_str = ""
                 if hasattr(trainer, "loss_items") and hasattr(trainer, "loss_names"):
                     try:
                         lnames = [n.strip() for n in trainer.loss_names]
-                        # loss_items is a PyTorch tensor, unwrap it to float
                         lvals = [v.item() if hasattr(v, 'item') else float(v) for v in trainer.loss_items]
                         losses = [f"{n}: {v:.3f}" for n, v in zip(lnames, lvals)]
                         loss_str = f" | {' | '.join(losses)}"
-                    except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，此處應捕捉 ValueError 或 AttributeError
+                    except (ValueError, AttributeError, TypeError) as e:
                         loss_str = f" | (Loss parse error: {e})"
-
                 logger.info(f"  [YOLO Progress] Epoch {epoch} - Batch {tb_state['batch']}{loss_str}")
                 
             if stop_event and stop_event.is_set():
                 trainer.stop = True
-                raise TrainingInterrupted("Training stopped by user.")
-        except TrainingInterrupted:
-            raise
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，捕捉特定 YOLO 或 PyTorch 錯誤
-            logger.debug(f"Ignoring batch callback error: {e}")
+                
+        except (AttributeError, TypeError) as e:
+            logger.debug(f"Ignoring batch callback attribute error: {e}")
 
     try:
         model.add_callback("on_train_start", on_train_start)
         model.add_callback("on_train_epoch_start", on_train_epoch_start)
         model.add_callback("on_train_epoch_end", on_train_epoch_end)
         model.add_callback("on_train_batch_end", on_train_batch_end)
-    except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，預期為 AttributeError (如果 model 不支援 callbacks)
-        logger.warning(f"Could not attach progress callbacks to YOLO model: {e}")
+    except AttributeError as e:
+        logger.warning(f"Could not attach progress callbacks to YOLO model (not supported): {e}")
 
+
+def train_yolo(
+    config: dict,
+    logger: Optional[logging.Logger] = None,
+    args: Optional[object] = None,
+) -> Path:
+    """Train YOLO using Ultralytics and return run directory.
+
+    Expects config['yolo_training'] block.
+    """
+    logger = logger or logging.getLogger(__name__)
+    
+    # 1. Parse and Validate Configurations
+    params = _parse_yolo_config(config)
+    names = _prepare_dataset_names(params["dataset_dir"], params["names"], logger)
+    model_arg = _build_yolo_model(params["model_cfg"])
+    
+    # 2. Prepare data.yaml
+    data_yaml = _ensure_data_yaml(params["dataset_dir"], names)
+    logger.info(f"Prepared data.yaml at: {data_yaml}")
+
+    if YOLO is None:
+        raise RuntimeError("ultralytics is not available. Please install ultralytics.")
+
+    logger.info(
+        f"Starting YOLO training | model={model_arg} epochs={params['epochs']} imgsz={params['imgsz']} batch={params['batch']} device={params['device']}"
+    )
+    # 3. Initialize Experiment Tracker
+    tracker = get_tracker(config)
+    tracker.start_run(run_name=params["name"])
+    tracker.log_params(
+        {
+            "model": model_arg,
+            "epochs": params["epochs"],
+            "imgsz": params["imgsz"],
+            "batch": params["batch"],
+            "device": params["device"],
+            "dataset": str(params["dataset_dir"]),
+        }
+    )
+
+    # 4. Initialize YOLO and Attach Callbacks (DI Supported)
+    # Allows injecting a mock model class or pre-initialized instance via args for testing
+    model_factory = getattr(args, "model_factory", YOLO)
+    yolo_instance = getattr(args, "yolo_instance", None)
+    
+    model = yolo_instance if yolo_instance else model_factory(model_arg)
+    
+    stop_event = getattr(args, "stop_event", None)
+    _attach_yolo_callbacks(model, logger, stop_event)
+
+    # 5. Execute Training
     try:
         train_results = model.train(
             data=str(data_yaml),
-            epochs=epochs,
-            imgsz=imgsz,
-            batch=batch,
-            device=device,
-            project=project,
-            name=name,
+            epochs=params["epochs"],
+            imgsz=params["imgsz"],
+            batch=params["batch"],
+            device=params["device"],
+            project=params["project"],
+            name=params["name"],
             exist_ok=True,
         )
-    except TrainingInterrupted:
-        logger.info("Training interrupted by user.")
-        return Path(project) / name  # Return run dir even if partial
-    except Exception as e:
-        # Check if it was our interrupt disguised
-        if "Training stopped by user" in str(e):
-            logger.info("Training interrupted by user.")
-            return Path(project) / name
+    except RuntimeError as e:
+        # Pass up specific runtime errors from Ultralytics (e.g., CUDA OOM)
         raise e
+    except Exception as e:
+        logger.error(f"Unexpected training failure: {e}")
+        raise RuntimeError(f"YOLO training failed due to unforeseen error: {e}") from e
+
+    # 6. Finalize Outputs
+    if stop_event and stop_event.is_set():
+        logger.info("Training interrupted by user (graceful shutdown).")
+        return Path(params["project"]) / params["name"]
 
     run_dir: Optional[Path] = None
     if hasattr(train_results, "save_dir"):
         candidate = getattr(train_results, "save_dir")
         if candidate:
             run_dir = Path(str(candidate)).resolve()
-    trainer = getattr(model, "trainer", None)
-    if run_dir is None and trainer is not None and getattr(trainer, "save_dir", None):
-        run_dir = Path(str(trainer.save_dir)).resolve()
+    trainer_obj = getattr(model, "trainer", None)
+    if run_dir is None and trainer_obj is not None and getattr(trainer_obj, "save_dir", None):
+        run_dir = Path(str(trainer_obj.save_dir)).resolve()
     if run_dir is None:
-        run_dir = (Path(project) / name).resolve()
+        run_dir = (Path(params["project"]) / params["name"]).resolve()
     logger.info(f"Training completed. Run directory: {run_dir}")
 
     # Record Robust Caching Metadata
     try:
-        data_hash = compute_dir_hash(dataset_dir)
-        cfg_hash = compute_config_hash(ycfg)
+        data_hash = compute_dir_hash(params["dataset_dir"])
+        cfg_hash = compute_config_hash(config.get("yolo_training", {}))
         metadata = {
             "dataset_hash": data_hash,
             "config_hash": cfg_hash,
-            "dataset_dir": str(dataset_dir),
+            "dataset_dir": str(params["dataset_dir"]),
         }
         with open(run_dir / "last_run_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)

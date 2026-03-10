@@ -160,6 +160,7 @@ class WorkerThread(QThread):
             if file_handler:
                 base_logger.removeHandler(file_handler)
                 yolo_logger.removeHandler(file_handler)
+                file_handler.close()  # Fix: Ensure file handle is closed to avoid Windows locking
 
     # ------------------------------------------------------------------
     # helpers

@@ -54,8 +54,9 @@ class MLflowTracker(ExperimentTracker):
             if tracking_uri:
                 mlflow.set_tracking_uri(tracking_uri)
             else:
-                # Default to absolute path ./mlruns to avoid CWD issues with YOLO
-                mlruns = os.path.abspath("mlruns")
+                # Default to absolute path ./mlruns to avoid CWD issues with YOLO. Use POSIX for URI compatibility on Windows.
+                from pathlib import Path
+                mlruns = Path("mlruns").resolve().as_posix()
                 mlflow.set_tracking_uri(f"file:///{mlruns}")
 
             mlflow.set_experiment(experiment_name)

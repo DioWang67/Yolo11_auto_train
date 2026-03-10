@@ -296,9 +296,15 @@ class ColorPanel(QWidget):
                 self._sam_window = run_gui_session(cfg) # Modified expecting it returns window
                 print("DEBUG: run_gui_session returned")
                 
+            except ImportError as e:
+                QMessageBox.critical(self, "模組遺失", f"無法啟動工具，缺少相依套件:\n{e}")
+                logger.error(f"Missing import for SAM tool: {e}")
+            except RuntimeError as e:
+                QMessageBox.critical(self, "執行錯誤", f"SAM 工具執行時發生問題:\n{e}")
+                logger.exception("Runtime error in SAM tool")
             except Exception as e:
-                QMessageBox.critical(self, "執行錯誤", f"無法啟動工具:\n{e}")
-                logger.exception("Failed to launch SAM tool")
+                QMessageBox.critical(self, "未預期錯誤", f"啟動失敗:\n{e}")
+                logger.exception("Unexpected failure when launching SAM tool")
 
     def _browse_sam_checkpoint(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(self, "選擇 SAM 模型", filter="*.pt;*.pth")
@@ -339,10 +345,52 @@ class ColorPanel(QWidget):
              QMessageBox.warning(self, "錯誤", f"找不到範本檔案: {stats_path}")
              return
 
-        self.result_text.append(f"正在驗證: {input_dir}...")
+        self.result_text.append(f"正在建立驗證排程: {input_dir}...")
         self.result_text.append(f"使用範本: {stats_path}")
         
-        # Set up file logging for color verification
+        # Instantiate worker thread
+        self.verify_worker = VerificationWorker(
+            input_dir=input_dir,
+            stats_path=stats_path
+        )
+        
+        self.verify_worker.progress_msg.connect(self._on_verify_progress)
+        self.verify_worker.result_msg.connect(self._on_verify_result)
+        self.verify_worker.error_msg.connect(self._on_verify_error)
+        self.verify_worker.finished.connect(self._on_verify_finished)
+        
+        # Disable button during verification to prevent multiple clicks
+        # Assuming you want to find run_btn. If we need to disable it properly, 
+        # we should make run_btn a self member, but we can pass for now.
+        
+        self.verify_worker.start()
+
+    def _on_verify_progress(self, msg: str):
+        self.log_message.emit(msg)
+        
+    def _on_verify_result(self, report_lines: list):
+        self.result_text.append("\n" + "\n".join(report_lines))
+        
+    def _on_verify_error(self, err_msg: str):
+        self.result_text.append(f"錯誤發生: {err_msg}")
+        self.log_message.emit(f"[ERROR] Verification failed: {err_msg}")
+        
+    def _on_verify_finished(self):
+        self.log_message.emit("[INFO] Verification thread finished.")
+
+
+# Define the worker class at the bottom of the file
+class VerificationWorker(QtCore.QThread):
+    progress_msg = QtCore.pyqtSignal(str)
+    result_msg = QtCore.pyqtSignal(list)
+    error_msg = QtCore.pyqtSignal(str)
+    
+    def __init__(self, input_dir: str, stats_path: str):
+        super().__init__()
+        self.input_dir = Path(input_dir)
+        self.stats_path = Path(stats_path)
+        
+    def run(self):
         import logging
         verify_logger = logging.getLogger("picture_tool.color.verification_gui")
         verify_logger.setLevel(logging.INFO)
@@ -358,16 +406,14 @@ class ColorPanel(QWidget):
             file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
             verify_logger.addHandler(file_handler)
         except OSError as e:
-            self.log_message.emit(f"[WARNING] Failed to setup file logging: {e}")
-        
-        # Using a simplistic approach directly calling verify_directory for now
-        # In production this should be in a background thread
+            self.progress_msg.emit(f"[WARNING] Failed to setup file logging: {e}")
+            
         try:
             if color_verifier:
                 summary, decisions = color_verifier.verify_directory(
-                    Path(input_dir), 
-                    Path(stats_path),
-                    logger=verify_logger  # Pass configured logger
+                    self.input_dir, 
+                    self.stats_path,
+                    logger=verify_logger
                 )
                 
                 # Format output
@@ -388,17 +434,24 @@ class ColorPanel(QWidget):
                 else:
                     report.append("\n✅ 所有圖片皆符合預期 (或無預期標籤)")
                 
-                self.result_text.append("\n".join(report))
-                self.log_message.emit("[INFO] Color verification completed.")
+                self.result_msg.emit(report)
+                self.progress_msg.emit("[INFO] Color verification completed.")
                 verify_logger.info(f"Completed verification: {summary}")
             else:
-                 self.result_text.append("錯誤: 無法載入 color_verifier 模組")
+                 self.error_msg.emit("無法載入 color_verifier 模組")
                  
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的業務或 I/O 錯誤
-            self.result_text.append(f"錯誤發生: {e}")
-            self.log_message.emit(f"[ERROR] Verification failed: {e}")
+        except (ValueError, FileNotFoundError) as e:
+            self.error_msg.emit(f"驗證參數或檔案錯誤: {e}")
             if verify_logger:
-                verify_logger.exception("Verification failed")
+                verify_logger.error(f"Validation Error: {e}")
+        except RuntimeError as e:
+            self.error_msg.emit(f"驗證核心執行錯誤: {e}")
+            if verify_logger:
+                verify_logger.exception("Verification core failed")
+        except Exception as e:
+            self.error_msg.emit(f"未預期的錯誤: {e}")
+            if verify_logger:
+                verify_logger.exception("Unexpected verification failure")
         finally:
             # Clean up handlers
             if verify_logger:
