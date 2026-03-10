@@ -252,11 +252,35 @@ yolo_training:
     expected_items:
       Cable1:
         A:
-        - Black
+        - Red
         - Green
         - Orange
-        - Red
         - Yellow
+        - Black
+        - Black
+    
+    # 產線專屬的高級檢測管線 (Inference Payload)
+    pipeline:
+      - color_check
+      - count_check
+      - sequence_check
+      - save_results
+    steps:
+      count_check:
+        strict: true
+      sequence_check:
+        direction: left_to_right
+        expected:
+        - Red
+        - Green
+        - Orange
+        - Yellow
+        - Black
+        - Black
+    enable_color_check: true
+    color_checker_type: stats
+    color_model_path: color_stats.json
+
     tolerance: null
     tolerance_unit: percent
     position_config_path: null

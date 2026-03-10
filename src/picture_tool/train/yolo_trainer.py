@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -132,31 +133,68 @@ def train_yolo(
 
     model = YOLO(model_arg)
 
-    # [NEW] Add Stop Callback if event provided
+    # [NEW] Add Stop Callback and Detailed Progress Callbacks
     stop_event = getattr(args, "stop_event", None)
-    if stop_event:
 
-        def on_train_epoch_end(trainer):
-            # Log progress for GUI feedback
-            try:
-                current_epoch = trainer.epoch + 1
-                total_epochs = trainer.epochs
-                # Safe access to loss if available
-                loss_info = ""
-                if hasattr(trainer, "loss_names") and hasattr(trainer, "loss_items"):
-                    # Just grab the first loss (usually box_loss) for brevity
-                    loss_info = f" | {trainer.loss_names[0]}: {trainer.loss_items[0]:.4f}"
+    # State container to persist simple counters safely
+    tb_state = {"batch": 0}
+
+    def on_train_start(trainer):
+        logger.info("  [YOLO Lifecycle] Training successfully started.")
+
+    def on_train_epoch_start(trainer):
+        epoch = getattr(trainer, "epoch", 0) + 1
+        logger.info(f"  [YOLO Lifecycle] Starting Epoch {epoch}/{getattr(trainer, 'epochs', '?')}")
+
+    def on_train_epoch_end(trainer):
+        try:
+            current_epoch = getattr(trainer, "epoch", 0) + 1
+            total_epochs = getattr(trainer, "epochs", "?")
+            logger.info(f"  [YOLO Lifecycle] Finished Epoch {current_epoch}/{total_epochs}")
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應針對 Ultralytics 內部物件結構錯誤捕捉 AttributeError 或 KeyError
+            logger.error(f"Error in on_train_epoch_end: {e}")
+
+        if stop_event and stop_event.is_set():
+            logger.info("Stop event detected. Stopping YOLO training gracefully.")
+            trainer.stop = True
+            raise TrainingInterrupted("Training stopped by user.")
+            
+    def on_train_batch_end(trainer):
+        try:
+            tb_state["batch"] += 1
+            # We don't want to spam the GUI, log every 10 batches this time
+            if tb_state["batch"] % 10 == 0:
+                epoch = getattr(trainer, "epoch", 0) + 1
                 
-                logger.info(f"Training Progress: Epoch {current_epoch}/{total_epochs}{loss_info}")
-            except Exception:
-                pass # Don't break training for logging errors
+                # Extract Losses if available
+                loss_str = ""
+                if hasattr(trainer, "loss_items") and hasattr(trainer, "loss_names"):
+                    try:
+                        lnames = [n.strip() for n in trainer.loss_names]
+                        # loss_items is a PyTorch tensor, unwrap it to float
+                        lvals = [v.item() if hasattr(v, 'item') else float(v) for v in trainer.loss_items]
+                        losses = [f"{n}: {v:.3f}" for n, v in zip(lnames, lvals)]
+                        loss_str = f" | {' | '.join(losses)}"
+                    except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，此處應捕捉 ValueError 或 AttributeError
+                        loss_str = f" | (Loss parse error: {e})"
 
+                logger.info(f"  [YOLO Progress] Epoch {epoch} - Batch {tb_state['batch']}{loss_str}")
+                
             if stop_event and stop_event.is_set():
-                logger.info("Stop event detected. Stopping YOLO training gracefully.")
                 trainer.stop = True
                 raise TrainingInterrupted("Training stopped by user.")
+        except TrainingInterrupted:
+            raise
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，捕捉特定 YOLO 或 PyTorch 錯誤
+            logger.debug(f"Ignoring batch callback error: {e}")
 
+    try:
+        model.add_callback("on_train_start", on_train_start)
+        model.add_callback("on_train_epoch_start", on_train_epoch_start)
         model.add_callback("on_train_epoch_end", on_train_epoch_end)
+        model.add_callback("on_train_batch_end", on_train_batch_end)
+    except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，預期為 AttributeError (如果 model 不支援 callbacks)
+        logger.warning(f"Could not attach progress callbacks to YOLO model: {e}")
 
     try:
         train_results = model.train(
@@ -211,12 +249,12 @@ def train_yolo(
 
         # Log to MLflow/Tracker
         if metrics:
-            # Take the last row of metrics
+            # Take the last row of metrics, sanitize keys for MLflow
             last_metrics = {
-                k.strip(): float(v)
+                re.sub(r'[^a-zA-Z0-9_\-\.\ /]', '_', k.strip()): float(v)
                 for k, v in metrics.items()
                 if isinstance(v, (int, float))
-                or (isinstance(v, str) and v.replace(".", "", 1).isdigit())
+                or (isinstance(v, str) and v.lstrip("-").replace(".", "", 1).isdigit())
             }
             tracker.log_metrics(last_metrics)
 

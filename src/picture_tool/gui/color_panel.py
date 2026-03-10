@@ -342,13 +342,32 @@ class ColorPanel(QWidget):
         self.result_text.append(f"正在驗證: {input_dir}...")
         self.result_text.append(f"使用範本: {stats_path}")
         
+        # Set up file logging for color verification
+        import logging
+        verify_logger = logging.getLogger("picture_tool.color.verification_gui")
+        verify_logger.setLevel(logging.INFO)
+        
+        # Remove existing handlers to avoid duplication
+        verify_logger.handlers.clear()
+        
+        # Add file handler
+        log_file = Path("logs/color_verification.log")
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+            verify_logger.addHandler(file_handler)
+        except OSError as e:
+            self.log_message.emit(f"[WARNING] Failed to setup file logging: {e}")
+        
         # Using a simplistic approach directly calling verify_directory for now
         # In production this should be in a background thread
         try:
             if color_verifier:
                 summary, decisions = color_verifier.verify_directory(
                     Path(input_dir), 
-                    Path(stats_path)
+                    Path(stats_path),
+                    logger=verify_logger  # Pass configured logger
                 )
                 
                 # Format output
@@ -371,9 +390,18 @@ class ColorPanel(QWidget):
                 
                 self.result_text.append("\n".join(report))
                 self.log_message.emit("[INFO] Color verification completed.")
+                verify_logger.info(f"Completed verification: {summary}")
             else:
                  self.result_text.append("錯誤: 無法載入 color_verifier 模組")
                  
-        except Exception as e:
-            self.result_text.append(f"執行錯誤: {e}")
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的業務或 I/O 錯誤
+            self.result_text.append(f"錯誤發生: {e}")
             self.log_message.emit(f"[ERROR] Verification failed: {e}")
+            if verify_logger:
+                verify_logger.exception("Verification failed")
+        finally:
+            # Clean up handlers
+            if verify_logger:
+                for handler in verify_logger.handlers[:]:
+                    handler.close()
+                    verify_logger.removeHandler(handler)

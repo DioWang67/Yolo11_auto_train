@@ -59,7 +59,7 @@ class MLflowTracker(ExperimentTracker):
                 mlflow.set_tracking_uri(f"file:///{mlruns}")
 
             mlflow.set_experiment(experiment_name)
-        except (ImportError, AttributeError, OSError, ValueError) as e:
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
             logging.warning(f"Failed to setup MLflow: {e}")
             self._enabled = False
 
@@ -74,7 +74,7 @@ class MLflowTracker(ExperimentTracker):
         # Flatten dict if necessary, MLflow handles basic types
         try:
             mlflow.log_params(params)
-        except (ImportError, AttributeError, TypeError, ValueError) as e:
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
             logging.warning(f"MLflow log_params failed: {e}")
 
     def log_metrics(
@@ -84,7 +84,7 @@ class MLflowTracker(ExperimentTracker):
             return
         try:
             mlflow.log_metrics(metrics, step=step)
-        except (ImportError, AttributeError, TypeError, ValueError) as e:
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
             logging.warning(f"MLflow log_metrics failed: {e}")
 
     def log_artifact(
@@ -97,7 +97,7 @@ class MLflowTracker(ExperimentTracker):
             return
         try:
             mlflow.log_artifact(local_path, artifact_path)
-        except (ImportError, AttributeError, FileNotFoundError, OSError) as e:
+        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
             logging.warning(f"MLflow log_artifact failed: {e}")
 
     def end_run(self) -> None:

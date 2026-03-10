@@ -66,14 +66,22 @@ class WorkerThread(QThread):
     # QThread implementation
     # ------------------------------------------------------------------
     def run(self) -> None:  # pragma: no cover - exercised via GUI, hard to unit test
+        # Local logger for thread-level messages
         logger = logging.getLogger(f"picture_tool.gui.worker.{id(self)}")
         logger.setLevel(logging.INFO)
+        logger.propagate = True  # Ensure messages bubble up to 'picture_tool'
+
+        # Attach signal handler to the root 'picture_tool' logger so we capture
+        # logs emitted by submodules (like train.yolo_trainer, quality.dataset_linter)
+        base_logger = logging.getLogger("picture_tool")
+        yolo_logger = logging.getLogger("ultralytics")
+        
         handler = _SignalLoggingHandler(self.log_message.emit)
         handler.setFormatter(
             logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         )
-        logger.addHandler(handler)
-        logger.propagate = False
+        base_logger.addHandler(handler)
+        yolo_logger.addHandler(handler)
 
         try:
             config = self._resolve_config()
@@ -84,21 +92,17 @@ class WorkerThread(QThread):
 
             # Ensure logging to file is set up for GUI runs too
             log_file = config.get("pipeline", {}).get("log_file", "logs/pipeline.log")
-            # We don't want to re-configure basicConfig globally regarding handlers if already set,
-            # but we do want the file handler.
-            # pipeline.setup_logging uses basicConfig which might be ignored if root logger already has handlers.
-            # Instead, we manually attach a FileHandler to our logger if needed, OR just call setup_logging
-            # and hope it attaches handlers to the root logger which we might not be using directly?
-            # pipeline.Pipeline uses the passed 'logger'.
             
-            # Let's attach a FileHandler to our local logger to ensure persistence
+            # Attaching a FileHandler to the base_logger ensures persistence for all module logs
+            file_handler = None
             try:
                 log_path = Path(log_file)
                 log_path.parent.mkdir(parents=True, exist_ok=True)
                 file_handler = logging.FileHandler(log_path, encoding='utf-8')
                 file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-                logger.addHandler(file_handler)
-            except Exception as e:
+                base_logger.addHandler(file_handler)
+                yolo_logger.addHandler(file_handler)
+            except OSError as e:
                 logger.warning(f"Failed to setup file logging: {e}")
 
             # Using Pipeline core to resolve dependencies correctly
@@ -151,7 +155,11 @@ class WorkerThread(QThread):
             logger.exception(f"Pipeline execution failed: {exc}")
             self.error_occurred.emit(str(exc))
         finally:
-            logger.removeHandler(handler)
+            base_logger.removeHandler(handler)
+            yolo_logger.removeHandler(handler)
+            if file_handler:
+                base_logger.removeHandler(file_handler)
+                yolo_logger.removeHandler(file_handler)
 
     # ------------------------------------------------------------------
     # helpers

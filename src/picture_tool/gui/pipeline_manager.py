@@ -209,6 +209,9 @@ class PipelineManager(QObject):
             self.worker_thread.log_message.connect(self.log_message.emit)
             self.worker_thread.finished_signal.connect(self._on_worker_finished)
             self.worker_thread.error_occurred.connect(self._on_worker_error)
+            
+            # Rely on native Qt finished signal for safe cleanup of C++ object
+            self.worker_thread.finished.connect(self._cleanup_worker_thread)
 
             self.worker_thread.start()
             self.log_message.emit(f"Starting pipeline: {', '.join(tasks)}")
@@ -227,7 +230,11 @@ class PipelineManager(QObject):
     def _on_worker_finished(self) -> None:
         """Handler for worker thread completion."""
         self.pipeline_finished.emit()
+
+    def _cleanup_worker_thread(self) -> None:
+        """Native handler for when QThread actually finishes its run() method."""
         if self.worker_thread:
+            self.worker_thread.wait() # Ensure C++ thread is fully joined
             self.worker_thread.deleteLater()
             self.worker_thread = None
 

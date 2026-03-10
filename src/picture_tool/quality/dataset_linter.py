@@ -95,6 +95,12 @@ def lint_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     img_map = _list_files(image_dir, DEFAULT_IMAGE_EXTS)
     lbl_map = _list_files(label_dir, (".txt",))
     stems = sorted(set(img_map.keys()) | set(lbl_map.keys()))
+    
+    logger.info(f"開始檢查 {len(stems)} 個檔案...")
+    
+    # Calculate progress logging interval
+    total_files = len(stems)
+    progress_interval = max(1, min(50, total_files // 10))
 
     issues_path = output_dir / "lint.csv"
     counts: Dict[str, int] = {}
@@ -102,7 +108,7 @@ def lint_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
     with open(issues_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["stem", "issue", "detail"])
-        for stem in stems:
+        for idx, stem in enumerate(stems, 1):
             if stem not in img_map:
                 writer.writerow([stem, "missing_image", str(label_dir / f"{stem}.txt")])
                 counts["missing_image"] = counts.get("missing_image", 0) + 1
@@ -121,6 +127,11 @@ def lint_dataset(config: dict, logger: Optional[logging.Logger] = None) -> Path:
             for err in errors:
                 writer.writerow([stem, err, ""])
                 counts[err] = counts.get(err, 0) + 1
+            
+            # Log progress at intervals
+            if idx % progress_interval == 0 or idx == total_files:
+                percentage = int((idx / total_files) * 100)
+                logger.info(f"進度: {idx}/{total_files} 個檔案 ({percentage}%)")
 
     # Write summary
     summary_md = output_dir / "summary.md"

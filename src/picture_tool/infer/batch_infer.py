@@ -51,6 +51,12 @@ def run_batch_inference(config: dict, logger: Optional[logging.Logger] = None) -
         raise FileNotFoundError(f"No images in {input_dir}")
 
     csv_path = output_dir / "predictions.csv"
+    
+    # Calculate progress logging interval
+    total_images = len(images)
+    progress_interval = max(1, min(10, total_images // 10))
+    processed_count = 0
+    
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(
@@ -98,6 +104,12 @@ def run_batch_inference(config: dict, logger: Optional[logging.Logger] = None) -
                 cv2.imwrite(str(out_img), vis)
             except (OSError, RuntimeError, AttributeError):
                 continue
+            
+            # Log progress at intervals
+            processed_count += 1
+            if processed_count % progress_interval == 0 or processed_count == total_images:
+                percentage = int((processed_count / total_images) * 100)
+                logger.info(f"進度: {processed_count}/{total_images} 張圖片 ({percentage}%)")
 
-    logger.info(f"Batch inference completed. CSV: {csv_path}")
-    return csv_path
+    logger.info(f"✅ Batch inference complete. Results: {csv_path}")
+    return output_dir

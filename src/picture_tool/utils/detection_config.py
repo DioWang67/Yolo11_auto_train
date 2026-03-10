@@ -228,7 +228,8 @@ class DetectionConfigExporter:
         )
 
         position_config: Dict[str, Any] = {}
-        expected_items: Optional[Dict[str, Dict[str, List[str]]]] = None
+        # 1. First, try to get expected_items directly from export_cfg
+        expected_items: Optional[Dict[str, Dict[str, List[str]]]] = export_cfg.get("expected_items")
 
         if include_position_config:
             position_sources = [
@@ -299,7 +300,7 @@ class DetectionConfigExporter:
             }
 
         payload: Dict[str, Any] = {
-            "weights": str(weights_path),
+            "weights": weights_name,
             "device": device,
             "conf_thres": conf_thres,
             "iou_thres": iou_thres,
@@ -314,6 +315,18 @@ class DetectionConfigExporter:
             payload["current_area"] = str(area)
         if expected_items:
             payload["expected_items"] = expected_items
+
+        # Inject extra custom metadata/configurations defined in export_detection_config
+        # (e.g., pipeline, steps, enable_color_check, color_model_path, model_version)
+        reserved_keys = {
+            "enabled", "output_path", "weights_name", "device", "conf_thres",
+            "iou_thres", "timeout", "enable_yolo", "output_dir", "imgsz",
+            "current_product", "area", "position_config", "position_config_path",
+            "include_all_products", "tolerance", "tolerance_unit"
+        }
+        for k, v in export_cfg.items():
+            if k not in reserved_keys and k not in payload:
+                payload[k] = v
 
         # 始終包含 position_config
         if include_position_config and position_config:
