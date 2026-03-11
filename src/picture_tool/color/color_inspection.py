@@ -596,28 +596,6 @@ class SamPredictorWrapper:
                 best_idx = i
         return best_idx
 
-    def _choose_mask_index(
-        self,
-        masks: np.ndarray,
-        scores: np.ndarray,
-        pts: Optional[np.ndarray],
-        labels: Optional[np.ndarray],
-        box: Optional[np.ndarray],
-    ) -> int:
-        best_idx = 0
-        best_metric = -float("inf")
-        # Heuristic scoring so that thin / dark structures (like wires) win over
-        # large PCB background regions returned by SAM's default ranking.
-        for i, mask in enumerate(masks):
-            metric = float(scores[i])
-            metric += self._score_points(mask, pts, labels)
-            metric += self._score_box(mask, box)
-            metric += self._score_area(mask)
-            if metric > best_metric:
-                best_metric = metric
-                best_idx = i
-        return best_idx
-
     @staticmethod
     def _score_points(
         mask: np.ndarray,
@@ -1591,7 +1569,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_gui_session(cfg: SessionConfig) -> None:
+def run_gui_session(cfg: SessionConfig):
     app = QtWidgets.QApplication.instance()
     owns_app = app is None
     if owns_app:

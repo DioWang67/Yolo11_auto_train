@@ -102,7 +102,7 @@ class TaskControlPanel(QGroupBox):
 
             # Checkbox
             chk = QCheckBox(task_name)
-            chk.setCursor(Qt.PointingHandCursor)
+            chk.setCursor(Qt.PointingHandCursor)  # type: ignore[attr-defined]
             chk.stateChanged.connect(self._on_checkbox_changed)
             self.task_checkboxes[task_name] = chk
 

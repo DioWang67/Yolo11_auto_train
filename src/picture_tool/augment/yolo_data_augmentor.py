@@ -1,17 +1,17 @@
 import cv2
 
 import os
-if os.environ.get("PYTEST_IS_RUNNING") == "1":
-    A = None
-else:
+from typing import Any, List, Optional, TYPE_CHECKING
+A: Any = None
+if os.environ.get("PYTEST_IS_RUNNING") != "1":
     try:
-        import albumentations as A  # type: ignore[import]
+        import albumentations as _A  # type: ignore[import]
+        A = _A
     except ImportError as exc:
         raise ImportError("Albumentations is required for DataAugmentor.") from exc
 
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
-from typing import Any, List, Optional, TYPE_CHECKING
 from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger  # type: ignore[import]
 import yaml  # type: ignore[import]
 from pathlib import Path

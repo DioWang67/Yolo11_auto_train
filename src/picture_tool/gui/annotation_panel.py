@@ -454,7 +454,7 @@ class AnnotationPanel(QWidget):
             )
 
         # Update class distribution
-        if self.annotation_classes and stats["annotated_images"] > 0:
+        if self.annotation_classes and stats["annotated_images"] > 0 and self.annotation_output_dir is not None:
             class_dist = self.annotation_tracker.get_class_distribution(
                 self.annotation_output_dir,
                 self.annotation_classes,

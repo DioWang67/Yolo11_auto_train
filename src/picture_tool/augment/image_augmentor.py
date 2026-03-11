@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import os
-if os.environ.get("PYTEST_IS_RUNNING") == "1":
-    A = None
-else:
+A: Any = None
+if os.environ.get("PYTEST_IS_RUNNING") != "1":
     try:
-        import albumentations as A  # type: ignore[import-untyped]
+        import albumentations as _A  # type: ignore[import-untyped]
+        A = _A
     except (ImportError, OSError):
-        A = None
+        pass
 import cv2
 import yaml  # type: ignore[import-untyped]
 from tqdm import tqdm  # type: ignore[import-untyped]

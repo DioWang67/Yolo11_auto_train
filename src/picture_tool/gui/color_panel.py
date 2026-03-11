@@ -33,8 +33,8 @@ try:
     from picture_tool.color import color_inspection
     from picture_tool.color import color_verifier
 except ImportError:
-    color_inspection = None
-    color_verifier = None
+    color_inspection = None  # type: ignore[assignment]
+    color_verifier = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 

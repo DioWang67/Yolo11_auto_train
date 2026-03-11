@@ -106,7 +106,7 @@ class MainWindow(QMainWindow):
              from PyQt5.QtWidgets import QApplication
              app = QApplication.instance()
              if app:
-                 load_stylesheet(app)
+                 load_stylesheet(app)  # type: ignore[arg-type]
         except ImportError:
              pass
 
@@ -282,12 +282,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "config_path_edit") and self.manager.current_config_path:
             self.config_path_edit.setText(str(self.manager.current_config_path))
     
-        self._update_config_status()
+        # self._update_config_status()  # Method was removed during refactoring
         if hasattr(self, "config_editor"):
             self.config_editor.set_config(self.manager.config)
     
         # Update Config Preview tab
-        if hasattr(self, "config_text"):
+        if self.config_text is not None:
             try:
                 config_yaml = yaml.dump(self.manager.config, allow_unicode=True, sort_keys=False)
                 self.config_text.setPlainText(config_yaml)
@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
             self.config_editor.set_config(config)
     
         # Update Config Preview in LogViewer
-        if hasattr(self, "config_text"):
+        if self.config_text is not None:
             try:
                 config_yaml = yaml.dump(config, allow_unicode=True, sort_keys=False)
                 self.config_text.setPlainText(config_yaml)
@@ -489,7 +489,8 @@ class MainWindow(QMainWindow):
             color = "#6BCB77"
         elif "info" in lower:
             color = "#4D96FF"
-        self.log_text.append(f'<span style="color:{color};">{message}</span>')
+        if self.log_text is not None:
+            self.log_text.append(f'<span style="color:{color};">{message}</span>')
 
     def _should_display_log(self, message: str) -> bool:
         if not hasattr(self, "log_filter_combo"):
@@ -501,7 +502,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _refresh_log_view(self) -> None:
-        if not hasattr(self, "log_text"):
+        if self.log_text is None:
             return
         self.log_text.clear()
         for msg in self._log_history:
@@ -510,7 +511,7 @@ class MainWindow(QMainWindow):
 
     def _clear_logs(self) -> None:
         self._log_history.clear()
-        if hasattr(self, "log_text"):
+        if self.log_text is not None:
             self.log_text.clear()
 
 
