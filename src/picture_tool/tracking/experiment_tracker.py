@@ -5,8 +5,13 @@ from typing import Any, Dict, Optional
 
 try:
     import mlflow  # type: ignore
+    from mlflow.exceptions import MlflowException  # type: ignore
 except ImportError:
     mlflow = None  # type: ignore
+
+    # Create dummy exception classes if mlflow is not installed
+    class MlflowException(Exception):
+        pass
 
 
 class ExperimentTracker(ABC):
@@ -60,8 +65,12 @@ class MLflowTracker(ExperimentTracker):
                 mlflow.set_tracking_uri(f"file:///{mlruns}")
 
             mlflow.set_experiment(experiment_name)
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
-            logging.warning(f"Failed to setup MLflow: {e}")
+        except MlflowException as e:
+            logging.warning(f"Failed to setup MLflow tracking/experiment: {e}")
+            self._enabled = False
+        except OSError as e:
+            logging.warning(f"OS/Network error during MLflow setup: {e}")
+            self._enabled = False
             self._enabled = False
 
     def start_run(self, run_name: Optional[str] = None) -> None:
@@ -75,8 +84,10 @@ class MLflowTracker(ExperimentTracker):
         # Flatten dict if necessary, MLflow handles basic types
         try:
             mlflow.log_params(params)
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
+        except MlflowException as e:
             logging.warning(f"MLflow log_params failed: {e}")
+        except OSError as e:
+            logging.warning(f"OS/Network error during MLflow log_params: {e}")
 
     def log_metrics(
         self, metrics: Dict[str, float], step: Optional[int] = None
@@ -85,8 +96,10 @@ class MLflowTracker(ExperimentTracker):
             return
         try:
             mlflow.log_metrics(metrics, step=step)
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
+        except MlflowException as e:
             logging.warning(f"MLflow log_metrics failed: {e}")
+        except OSError as e:
+            logging.warning(f"OS/Network error during MLflow log_metrics: {e}")
 
     def log_artifact(
         self, local_path: str, artifact_path: Optional[str] = None
@@ -98,8 +111,10 @@ class MLflowTracker(ExperimentTracker):
             return
         try:
             mlflow.log_artifact(local_path, artifact_path)
-        except Exception as e:  # DEBT: [TICKET-TODO] 替換泛型 Exception，應捕捉具體的 MLflowException 或網路存取錯誤
+        except MlflowException as e:
             logging.warning(f"MLflow log_artifact failed: {e}")
+        except OSError as e:
+            logging.warning(f"OS/Network error during MLflow log_artifact: {e}")
 
     def end_run(self) -> None:
         if not self._enabled:
