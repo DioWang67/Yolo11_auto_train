@@ -1,6 +1,4 @@
-import pytest
 import yaml
-from PyQt5.QtWidgets import QApplication
 
 from picture_tool.gui.wizards import NewProjectWizard
 

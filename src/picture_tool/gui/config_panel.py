@@ -6,12 +6,10 @@ Maintains 100% visual consistency.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional
 
-from PyQt5 import QtCore
 from PyQt5.QtWidgets import (
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -23,7 +21,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import pyqtSignal
 
-import yaml
 from picture_tool.gui.wizards import NewProjectWizard
 
 class ConfigPanel(QWidget):

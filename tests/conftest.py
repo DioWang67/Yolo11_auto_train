@@ -4,10 +4,6 @@ CRITICAL: This must execute before any test imports that use tqdm or matplotlib.
 """
 
 import os
-import gc
-import pytest
-import sys
-from unittest.mock import MagicMock
 
 # Bypass fatal PyTorch/OpenMP DLL conflicts under Windows Pytest
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"

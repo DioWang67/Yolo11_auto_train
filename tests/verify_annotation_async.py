@@ -8,7 +8,8 @@ from PyQt5.QtCore import QTimer
 sys.path.append("src")
 
 # Mock cv2 and other potential heavy dependencies
-import pytest
+
+from unittest.mock import MagicMock  # noqa: E402
 
 # Mock internal modules that trigger heavy imports
 sys.modules["picture_tool.anomaly"] = MagicMock()
@@ -18,8 +19,8 @@ sys.modules["picture_tool.main_pipeline"] = MagicMock()
 sys.modules["picture_tool.split"] = MagicMock()
 sys.modules["picture_tool.gui.pipeline_manager"] = MagicMock()
 
-from picture_tool.gui.annotation_panel import AnnotationWorker
-from picture_tool.gui.annotation_tracker import AnnotationTracker
+from picture_tool.gui.annotation_panel import AnnotationWorker  # noqa: E402
+from picture_tool.gui.annotation_tracker import AnnotationTracker  # noqa: E402
 
 def verify_async_worker():
     app = QApplication(sys.argv)
@@ -66,7 +67,6 @@ def verify_async_worker():
         app.quit()
 
     worker.progress_updated.connect(on_progress)
-    self_completed = False
     worker.scan_completed.connect(on_completed)
     worker.error_occurred.connect(on_error)
     
@@ -81,7 +81,7 @@ def verify_async_worker():
     # Cleanup
     try:
         shutil.rmtree(test_dir)
-    except:
+    except Exception:
         pass
 
 if __name__ == "__main__":

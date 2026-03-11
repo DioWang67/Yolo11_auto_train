@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 from picture_tool.gui.wizards import NewProjectWizard
 from picture_tool.tasks import augmentation, conversion, quality, training
 
-from PyQt5.QtWidgets import QApplication
 
 MODULES_TO_TEST = [augmentation, conversion, quality, training]
 

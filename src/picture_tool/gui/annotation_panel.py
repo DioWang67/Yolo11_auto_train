@@ -5,7 +5,6 @@ Maintains 100% visual consistency with the original implementation.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,7 +27,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtCore import pyqtSignal
 
 from picture_tool.gui.annotation_tracker import AnnotationTracker
 from picture_tool.gui.labelimg_launcher import LabelImgLauncher

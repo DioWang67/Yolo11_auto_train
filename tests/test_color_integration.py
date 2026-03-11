@@ -2,10 +2,8 @@
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
-from pathlib import Path
 
 # Shield C++ fatal DLLs explicitly for GUI mock resolution
-import sys
 sys.modules["torch"] = MagicMock()
 sys.modules["ultralytics"] = MagicMock()
 sys.modules["segment_anything"] = MagicMock()
@@ -21,8 +19,8 @@ sys.modules["albumentations"] = MagicMock()
 # For integration test of the GUI Panel, we can mock it.
 sys.modules["picture_tool.color.color_verifier"] = MagicMock()
 
-from PyQt5.QtWidgets import QApplication
-from picture_tool.gui.color_panel import ColorPanel
+from PyQt5.QtWidgets import QApplication  # noqa: E402
+from picture_tool.gui.color_panel import ColorPanel  # noqa: E402
 
 class TestColorIntegration(unittest.TestCase):
     @classmethod

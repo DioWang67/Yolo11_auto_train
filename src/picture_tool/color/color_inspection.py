@@ -551,7 +551,6 @@ class SamPredictorWrapper:
             return masks_np[0]
             
         # Select best
-        from types import SimpleNamespace
         # Re-use logic. But wait, `_choose_mask_index` is in this Class, I need to keep it or refactor it.
         # I am replacing the whole class, so I need to include `_choose_mask_index` in the replacement?
         # The tool `replace_file_content` replaces a chunk. `_choose_mask_index` is below line 477.

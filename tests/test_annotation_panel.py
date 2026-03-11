@@ -1,6 +1,5 @@
-import sys
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from PyQt5.QtWidgets import QMessageBox
 from picture_tool.gui.annotation_panel import AnnotationPanel
 
@@ -31,7 +30,7 @@ def test_add_class_success(panel, monkeypatch, qtbot):
         lambda *args, **kwargs: ("NewClass", True)
     )
     
-    with qtbot.waitSignal(panel.message_logged) as blocker:
+    with qtbot.waitSignal(panel.message_logged):
         panel._add_annotation_class()
     
     assert "NewClass" in panel.annotation_classes

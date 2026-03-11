@@ -17,7 +17,7 @@ class TrainingInterrupted(Exception):
     pass
 
 
-import os
+import os  # noqa: E402
 try:
     if os.environ.get("PYTEST_IS_RUNNING") == "1":
         raise ImportError("Bypass ultralytics during pytest to avoid Windows PyTorch DLL crashes")

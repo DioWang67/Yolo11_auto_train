@@ -6,12 +6,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional
 
-from PyQt5 import QtCore, QtGui
+from PyQt5 import QtCore
 from PyQt5.QtWidgets import (
     QFileDialog,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -80,7 +78,7 @@ class ColorPanel(QWidget):
                 import os
                 if os.environ.get("PYTEST_IS_RUNNING") == "1":
                     raise ImportError("Bypass ultralytics during pytest")
-                import ultralytics
+                import ultralytics  # noqa: F401
                 sam_status = "已就緒 (SAM 2 Supported)"
                 sam_color = "#6BCB77" # Green
             except ImportError:
@@ -320,10 +318,14 @@ class ColorPanel(QWidget):
             # Auto-detect type
             lower = Path(file_path).name.lower()
             if "sam2" in lower:
-                if "_t" in lower: self._sam_type_combo.setCurrentText("sam2_t")
-                elif "_s" in lower: self._sam_type_combo.setCurrentText("sam2_s")
-                elif "_b" in lower: self._sam_type_combo.setCurrentText("sam2_b")
-                elif "_l" in lower: self._sam_type_combo.setCurrentText("sam2_l")
+                if "_t" in lower: 
+                    self._sam_type_combo.setCurrentText("sam2_t")
+                elif "_s" in lower: 
+                    self._sam_type_combo.setCurrentText("sam2_s")
+                elif "_b" in lower: 
+                    self._sam_type_combo.setCurrentText("sam2_b")
+                elif "_l" in lower: 
+                    self._sam_type_combo.setCurrentText("sam2_l")
             elif "vit_h" in lower:
                 self._sam_type_combo.setCurrentText("vit_h")
             elif "vit_l" in lower:

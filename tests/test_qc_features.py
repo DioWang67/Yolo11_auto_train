@@ -259,7 +259,7 @@ class TestQCIntegrationWorkflow:
         )
 
         # 4. QC汇总
-        report = {
+        _ = {
             "inference": (infer_output / "predictions.csv").read_text().split("\n")[1].split(",")[0],
             "color": json.loads((color_output / "color_results.json").read_text()),
             "position": json.loads((position_output / "position_results.json").read_text()),
