@@ -8,12 +8,7 @@ from PyQt5.QtCore import QTimer
 sys.path.append("src")
 
 # Mock cv2 and other potential heavy dependencies
-from unittest.mock import MagicMock
-sys.modules["cv2"] = MagicMock()
-sys.modules["ultralytics"] = MagicMock()
-sys.modules["albumentations"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["yaml"] = MagicMock()
+import pytest
 
 # Mock internal modules that trigger heavy imports
 sys.modules["picture_tool.anomaly"] = MagicMock()

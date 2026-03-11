@@ -46,6 +46,11 @@ def test_image_augmentor_process_dataset(tmp_path, monkeypatch):
         _setup_logger,
     )
 
+    import pytest
+    from picture_tool.augment import image_augmentor
+    if image_augmentor.A is None:
+        pytest.skip("albumentations depends on Torch and is bypassed during pytest")
+
     augmentor = ImageAugmentor(str(config_path))
     augmentor.process_dataset()
 

@@ -52,8 +52,8 @@ class TestNormalizeImgsz:
         assert normalize_imgsz([]) is None
 
     def test_returns_none_for_oversized_list(self):
-        """Should return None for list with >2 elements."""
-        assert normalize_imgsz([640, 480, 320]) is None
+        """Should return the first two elements for list with >2 elements."""
+        assert normalize_imgsz([640, 480, 320]) == [640, 480]
 
 
 class TestNormalizeNameSequence:
@@ -87,17 +87,17 @@ class TestNormalizeNameSequence:
         assert result == ["one", "two", "three"]
 
     def test_converts_non_string_values_to_strings(self):
-        """Should convert all values to strings."""
+        """Should convert all values to strings and ignore None."""
         names = [1, 2, "three", None]
         result = normalize_name_sequence(names)
-        assert result == ["1", "2", "three", "None"]
+        assert result == ["1", "2", "three"]
 
     def test_filters_out_none_values(self):
         """Should not include literal None."""
         names = ["a", None, "b"]
         result = normalize_name_sequence(names)
-        # None gets converted to "None" string based on current implementation
-        assert len(result) == 3
+        assert result == ["a", "b"]
+        assert len(result) == 2
 
     def test_handles_tuple_input(self):
         """Should handle tuple input."""

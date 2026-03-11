@@ -61,10 +61,12 @@ def test_model_manager_loader_error():
     """Test error handling when loader fails."""
     manager = ModelManager(capacity=1)
 
-    def failing_loader(path):
-        raise RuntimeError("Load failed")
+    from picture_tool.exceptions import ModelError
 
-    with pytest.raises(RuntimeError):
+    def failing_loader(path):
+        raise ModelError("Load failed")
+
+    with pytest.raises(ModelError):
         manager.get("bad_path", failing_loader)
 
     assert len(manager) == 0

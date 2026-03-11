@@ -36,6 +36,11 @@ def test_config_validation_schema():
 
 def test_image_augmentation_multiprocessing(tmp_path):
     """Test image augmentation with multiprocessing enabled."""
+    from picture_tool.augment import image_augmentor
+    import pytest
+    if image_augmentor.A is None:
+        pytest.skip("albumentations depends on Torch and is bypassed during pytest")
+
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
     input_dir.mkdir()

@@ -21,8 +21,11 @@ from typing import (
 )
 
 import yaml
+import os
 
 try:
+    if os.environ.get("PYTEST_IS_RUNNING") == "1":
+        raise ImportError("Bypass ultralytics during pytest")
     from ultralytics import YOLO  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
     YOLO = None  # type: ignore

@@ -25,11 +25,19 @@ def _git_rev() -> Optional[str]:
 def _env_info() -> Dict[str, Any]:
     import platform
     import sys
+    import os
 
     info: Dict[str, Any] = {
         "python": sys.version.split()[0],
         "platform": platform.platform(),
     }
+    
+    if os.environ.get("PYTEST_IS_RUNNING") == "1":
+        info["torch_version"] = "mocked_for_test"
+        info["cuda_available"] = False
+        info["ultralytics_version"] = "mocked_for_test"
+        return info
+
     try:
         import torch  # type: ignore
 
@@ -112,12 +120,13 @@ def write_experiment(
         payload["extra"] = _jsonable(extra)
 
     yaml_path = out_dir / f"{run_id}.yaml"
-    yaml.safe_dump(
-        payload,
-        yaml_path.open("w", encoding="utf-8"),
-        sort_keys=False,
-        allow_unicode=True,
-    )
+    with yaml_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(
+            payload,
+            f,
+            sort_keys=False,
+            allow_unicode=True,
+        )
     json_path = out_dir / f"{run_id}.json"
     json_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"

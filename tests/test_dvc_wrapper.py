@@ -33,5 +33,6 @@ def test_dvc_fail(mock_run, mock_which):
     dvc = DVCWrapper()
 
     # force exception
-    mock_run.side_effect = Exception("Boom")
+    import subprocess
+    mock_run.side_effect = subprocess.CalledProcessError(1, ["dvc", "pull"])
     assert not dvc.pull()

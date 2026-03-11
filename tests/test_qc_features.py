@@ -39,9 +39,20 @@ class TestBatchInferenceFunctionality:
         # Mock YOLO推理
         mock_yolo = MagicMock()
         mock_model = MagicMock()
+        import numpy as np
         mock_result = MagicMock()
         mock_result.save_dir = output_dir
+        mock_result.plot.return_value = np.zeros((10, 10, 3), dtype=np.uint8)
+        
+        # Configure boxes
+        mock_boxes = MagicMock()
+        mock_boxes.xyxy.cpu.return_value.numpy.return_value = [[10, 10, 20, 20]]
+        mock_boxes.conf.cpu.return_value.numpy.return_value.tolist.return_value = [0.9]
+        mock_boxes.cls.cpu.return_value.numpy.return_value.tolist.return_value = [0]
+        mock_result.boxes = mock_boxes
+        
         mock_model.predict.return_value = [mock_result] * 10
+        mock_model.return_value = [mock_result]
         mock_yolo.return_value = mock_model
 
         monkeypatch.setattr("picture_tool.infer.batch_infer.YOLO", mock_yolo)
@@ -248,17 +259,10 @@ class TestQCIntegrationWorkflow:
         )
 
         # 4. QC汇总
-        {
-            "inference": json.loads(
-                (infer_output / "predictions.csv")
-                .read_text()
-                .split("\n")[1]
-                .split(",")[0]
-            ),
+        report = {
+            "inference": (infer_output / "predictions.csv").read_text().split("\n")[1].split(",")[0],
             "color": json.loads((color_output / "color_results.json").read_text()),
-            "position": json.loads(
-                (position_output / "position_results.json").read_text()
-            ),
+            "position": json.loads((position_output / "position_results.json").read_text()),
         }
 
         # 验证所有步骤都有输出

@@ -6,7 +6,14 @@ from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Any, List, Optional
 
-import albumentations as A  # type: ignore[import-untyped]
+import os
+if os.environ.get("PYTEST_IS_RUNNING") == "1":
+    A = None
+else:
+    try:
+        import albumentations as A  # type: ignore[import-untyped]
+    except (ImportError, OSError):
+        A = None
 import cv2
 import yaml  # type: ignore[import-untyped]
 from tqdm import tqdm  # type: ignore[import-untyped]

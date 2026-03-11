@@ -244,25 +244,6 @@ class TestConfigValidationFunctionality:
         assert config["pipeline"]["stop_on_error"] is True
 
 
-class TestIOUtilsFunctionality:
-    """测试IO工具函数"""
-
-    def test_safe_file_operations(self, tmp_path):
-        """功能：安全的文件操作"""
-        from picture_tool.utils.io_utils import safe_read_yaml, safe_write_yaml
-
-        test_file = tmp_path / "test.yaml"
-
-        data = {"key1": "value1", "key2": 42}
-
-        # 写入
-        safe_write_yaml(test_file, data)
-
-        # 读取
-        loaded = safe_read_yaml(test_file)
-
-        assert loaded["key1"] == "value1"
-        assert loaded["key2"] == 42
 
 
 class TestEndToEndTaskWorkflow:

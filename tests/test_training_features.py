@@ -65,7 +65,7 @@ names:
         logger = logging.getLogger("test")
 
         # 执行训练
-        run_dir = train_yolo(config, args, logger)
+        run_dir = train_yolo(config, logger=logger, args=args)
 
         # 验证训练执行
         assert mock_model.train.called
@@ -116,6 +116,7 @@ class TestYoloEvaluationFunctionality:
 
         dataset_dir = tmp_path / "data"
         dataset_dir.mkdir()
+        (dataset_dir / "data.yaml").write_text("dummy: data")
 
         config = {
             "yolo_training": {
@@ -134,8 +135,11 @@ class TestYoloEvaluationFunctionality:
         # Mock评估
         mock_yolo = MagicMock()
         mock_model = MagicMock()
+        mock_result = MagicMock(spec=["results_file", "results_dict"])
+        mock_result.results_file = str(tmp_path / "results.csv")
+        mock_result.results_dict = {}
         mock_yolo.return_value = mock_model
-        mock_model.val.return_value = MagicMock()
+        mock_model.val.return_value = mock_result
 
         monkeypatch.setattr("picture_tool.eval.yolo_evaluator.YOLO", mock_yolo)
 
@@ -152,6 +156,7 @@ class TestYoloEvaluationFunctionality:
 
         weights_file = tmp_path / "best.pt"
         weights_file.write_text("weights")
+        (tmp_path / "data.yaml").write_text("dummy: data")
 
         config = {
             "yolo_training": {"dataset_dir": str(tmp_path), "class_names": ["test"]},
@@ -161,7 +166,8 @@ class TestYoloEvaluationFunctionality:
         # Mock评估结果
         mock_yolo = MagicMock()
         mock_model = MagicMock()
-        mock_result = MagicMock()
+        mock_result = MagicMock(spec=["results_file", "results_dict"])
+        mock_result.results_file = str(tmp_path / "results.csv")
         mock_result.results_dict = {
             "metrics/precision": 0.95,
             "metrics/recall": 0.92,
@@ -211,10 +217,10 @@ class TestModelExportFunctionality:
 
         # Mock验证
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_structure", lambda x: None
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", lambda x: None
         )
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_runtime",
+            "picture_tool.utils.onnx_validation.validate_onnx_runtime",
             lambda x, **kwargs: None,
         )
 

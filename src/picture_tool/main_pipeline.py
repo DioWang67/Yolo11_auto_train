@@ -166,10 +166,13 @@ def _auto_device(config: dict, logger: logging.Logger) -> None:
     device = str(yt.get("device", "auto"))
     if device.lower() == "auto":
         try:
+            import os
+            if os.environ.get("PYTEST_IS_RUNNING") == "1":
+                raise ImportError("Bypass torch during pytest")
             import torch  # type: ignore
 
             yt["device"] = "0" if torch.cuda.is_available() else "cpu"
-        except (FileNotFoundError, yaml.YAMLError, OSError):
+        except (FileNotFoundError, yaml.YAMLError, OSError, ImportError):
             yt["device"] = "cpu"
         logger.info(f"Auto-selected device: {yt['device']}")
         config["yolo_training"] = yt

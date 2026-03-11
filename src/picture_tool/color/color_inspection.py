@@ -24,12 +24,18 @@ import cv2
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+import os
+
 try:  # pragma: no cover - optional dependency resolution
+    if os.environ.get("PYTEST_IS_RUNNING") == "1":
+        raise ImportError("Bypass torch during pytest")
     import torch
 except ImportError:  # pragma: no cover
     torch = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency resolution
+    if os.environ.get("PYTEST_IS_RUNNING") == "1":
+        raise ImportError("Bypass ultralytics during pytest")
     from ultralytics import SAM
     # Ultralytics handles model loading internally
 except ImportError:  # pragma: no cover

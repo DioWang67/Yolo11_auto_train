@@ -1,9 +1,12 @@
 import logging
 import yaml
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, MutableMapping
 
 try:
+    if os.environ.get("PYTEST_IS_RUNNING") == "1":
+        raise ImportError("Bypass ultralytics during pytest")
     from ultralytics import YOLO  # type: ignore
 except ImportError:
     YOLO = None  # type: ignore

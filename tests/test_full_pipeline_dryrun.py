@@ -9,16 +9,9 @@ from PyQt5.QtWidgets import QApplication
 MODULES_TO_TEST = [augmentation, conversion, quality, training]
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    if not QApplication.instance():
-        # Use offscreen platform for headless CI environments
-        return QApplication(["test_run", "-platform", "offscreen"])
-    return QApplication.instance()
-
 
 @pytest.fixture
-def default_config(qapp, tmp_path):
+def default_config(qtbot, tmp_path):
     """Generate the exact config AND structure that the Wizard produces."""
     wizard = NewProjectWizard()
     # Actually create the folders so exist() checks pass

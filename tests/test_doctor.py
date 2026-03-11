@@ -24,10 +24,11 @@ def test_check_command_success():
 
 
 def test_check_command_failure():
-    with patch("subprocess.run", side_effect=Exception("Command failed")):
+    import subprocess
+    with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "dummy")):
         ok, msg = doctor._check_command(["dummy"])
         assert ok is False
-        assert "Command failed" in msg
+        assert "exit status 1" in msg
 
 
 def test_create_demo_dataset(tmp_path):

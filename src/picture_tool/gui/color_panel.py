@@ -77,6 +77,9 @@ class ColorPanel(QWidget):
         sam_color = "#ff6b6b" # Red
         if color_inspection:
             try:
+                import os
+                if os.environ.get("PYTEST_IS_RUNNING") == "1":
+                    raise ImportError("Bypass ultralytics during pytest")
                 import ultralytics
                 sam_status = "已就緒 (SAM 2 Supported)"
                 sam_color = "#6BCB77" # Green
@@ -262,12 +265,16 @@ class ColorPanel(QWidget):
                 # We construct SessionConfig manually or via a dict
                 # Note: color_inspection.SessionConfig expects specific types
                 from picture_tool.color.color_inspection import SessionConfig, SamSettings, run_gui_session
-                import torch
-                
                 # Check actual CUDA availability
                 use_cuda_pref = QtCore.QSettings().value("use_cuda", True, type=bool)
                 device = "cpu"
-                if use_cuda_pref and torch.cuda.is_available():
+                use_cuda = False
+                import os
+                if os.environ.get("PYTEST_IS_RUNNING") != "1":
+                    import torch
+                    use_cuda = torch.cuda.is_available()
+                    
+                if use_cuda_pref and use_cuda:
                     device = "cuda"
                 elif use_cuda_pref:
                     logger.warning("CUDA requested but not available in Torch. Falling back to CPU.")

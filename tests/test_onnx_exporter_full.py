@@ -131,10 +131,10 @@ class TestOnnxExporterExport:
 
         # Mock validation functions
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_structure", lambda x: None
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", lambda x: None
         )
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_runtime",
+            "picture_tool.utils.onnx_validation.validate_onnx_runtime",
             lambda x, **kwargs: None,
         )
 
@@ -164,10 +164,10 @@ class TestOnnxExporterExport:
         mock_yolo_class = MagicMock(return_value=mock_model)
         monkeypatch.setattr("picture_tool.utils.onnx_exporter.YOLO", mock_yolo_class)
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_structure", lambda x: None
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", lambda x: None
         )
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_runtime",
+            "picture_tool.utils.onnx_validation.validate_onnx_runtime",
             lambda x, **kwargs: None,
         )
 
@@ -269,10 +269,10 @@ class TestOnnxExporterExport:
         mock_yolo_class = MagicMock(return_value=mock_model)
         monkeypatch.setattr("picture_tool.utils.onnx_exporter.YOLO", mock_yolo_class)
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_structure", mock_structure
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", mock_structure
         )
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_runtime", mock_runtime
+            "picture_tool.utils.onnx_validation.validate_onnx_runtime", mock_runtime
         )
 
         logger = logging.getLogger("test")
@@ -308,7 +308,7 @@ class TestOnnxExporterExport:
             raise RuntimeError("Validation failed")
 
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_structure", fail_validation
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", fail_validation
         )
 
         logger = logging.getLogger("test")
@@ -342,10 +342,10 @@ class TestOnnxExporterExport:
         mock_yolo_class = MagicMock(return_value=mock_model)
         monkeypatch.setattr("picture_tool.utils.onnx_exporter.YOLO", mock_yolo_class)
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_structure", lambda x: None
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", lambda x: None
         )
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_exporter.validate_onnx_runtime",
+            "picture_tool.utils.onnx_validation.validate_onnx_runtime",
             lambda x, **kwargs: None,
         )
 

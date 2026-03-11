@@ -1,15 +1,4 @@
 import sys
-from unittest.mock import MagicMock
-
-# Mock missing dependencies to allow import
-for mod in [
-    "cv2", "numpy", "ultralytics", "albumentations", 
-    "pandas", "torch", "torchvision", "imgaug", 
-    "scipy", "seaborn", "sklearn", "sklearn.model_selection", "matplotlib", "matplotlib.pyplot", "matplotlib.patches",
-    "yaml", "ruamel.yaml"
-]:
-    sys.modules[mod] = MagicMock()
-
 import pytest
 from unittest.mock import MagicMock, patch
 from PyQt5.QtWidgets import QMessageBox
@@ -67,8 +56,10 @@ def test_add_duplicate_class_warning(panel, monkeypatch, qtbot):
     warning_mock.assert_called_once()
     assert len(panel.annotation_classes) == 1
 
-def test_import_classes_from_config(panel, qtbot):
+def test_import_classes_from_config(panel, qtbot, monkeypatch):
     # manager_mock has ["cat", "dog"]
+    info_mock = MagicMock()
+    monkeypatch.setattr("PyQt5.QtWidgets.QMessageBox.information", info_mock)
     
     with qtbot.waitSignal(panel.message_logged):
         panel._import_classes_from_config()

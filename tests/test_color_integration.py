@@ -4,32 +4,18 @@ import unittest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
-# Mock dependencies to allow import in CI/Headless environments
-sys.modules["cv2"] = MagicMock()
-sys.modules["segment_anything"] = MagicMock()
+# Shield C++ fatal DLLs explicitly for GUI mock resolution
+import sys
 sys.modules["torch"] = MagicMock()
+sys.modules["ultralytics"] = MagicMock()
+sys.modules["segment_anything"] = MagicMock()
 sys.modules["albumentations"] = MagicMock()
-sys.modules["ultralytics"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["ultralytics"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["yaml"] = MagicMock()
-
-# Mock matplotlib structure
-mpl = MagicMock()
-sys.modules["matplotlib"] = mpl
-sys.modules["matplotlib.pyplot"] = MagicMock()
-sys.modules["matplotlib.patches"] = MagicMock()
-
-sys.modules["scipy"] = MagicMock()
-
 # Mock sklearn structure
-sklearn = MagicMock()
-sys.modules["sklearn"] = sklearn
-sys.modules["sklearn.model_selection"] = MagicMock()
+# sklearn = MagicMock()
+# sys.modules["sklearn"] = sklearn
+# sys.modules["sklearn.model_selection"] = MagicMock()
 
 # Mock internal heavy modules
-sys.modules["picture_tool.color.color_inspection"] = MagicMock()
 # We want to test color_verifier logic, so we might not want to mock it entirely, 
 # but if it depends on cv2, we have to rely on mocks or careful imports.
 # For integration test of the GUI Panel, we can mock it.
@@ -66,12 +52,12 @@ class TestColorIntegration(unittest.TestCase):
         self.assertTrue(hasattr(panel, "verify_stats_edit"))
         self.assertTrue(hasattr(panel, "result_text"))
 
-    @patch("picture_tool.gui.color_panel.color_inspection")
+    @patch("picture_tool.color.color_inspection.run_gui_session")
     @patch("PyQt5.QtWidgets.QDialog.exec_", return_value=1) # 1 is QDialog.Accepted
     @patch("PyQt5.QtWidgets.QMessageBox.warning")
     @patch("PyQt5.QtWidgets.QMessageBox.critical")
     @patch("PyQt5.QtCore.QSettings")
-    def test_sam_launch_memory(self, mock_settings_cls, mock_crit, mock_warn, mock_exec, mock_insp):
+    def test_sam_launch_memory(self, mock_settings_cls, mock_crit, mock_warn, mock_exec, mock_run_session):
         """Test that SAM launcher loads and saves settings."""
         manager = MagicMock()
         panel = ColorPanel(manager)
@@ -90,8 +76,7 @@ class TestColorIntegration(unittest.TestCase):
         }.get(key, default)
         
         # Mock Path.exists for checkpoint check
-        with patch("pathlib.Path.exists", return_value=True), \
-             patch("torch.cuda.is_available", return_value=False):
+        with patch("pathlib.Path.exists", return_value=True):
             
             # This triggers the dialog logic
             # We need to access the dialog inputs to 'simulate' user typing if values weren't loaded
@@ -121,8 +106,8 @@ class TestColorIntegration(unittest.TestCase):
             mock_crit.assert_not_called()
 
             # Verify run_gui_session called with correct config
-            mock_insp.run_gui_session.assert_called_once()
-            call_args = mock_insp.run_gui_session.call_args[0][0]
+            mock_run_session.assert_called_once()
+            call_args = mock_run_session.call_args[0][0]
             self.assertEqual(call_args.sam.model_type, "vit_l")
             self.assertEqual(call_args.colors, ["Gold", "Silver"])
 
@@ -143,6 +128,11 @@ class TestColorIntegration(unittest.TestCase):
             
             # Trigger
             panel._run_verification()
+            
+            # Wait for thread completion to avoid mock timing assertion failure
+            if hasattr(panel, "verify_worker"):
+                panel.verify_worker.wait()
+            QApplication.processEvents()
             
             # Check call
             mock_verifier.verify_directory.assert_called_once()

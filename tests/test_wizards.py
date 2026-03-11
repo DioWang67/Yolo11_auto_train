@@ -5,13 +5,9 @@ from PyQt5.QtWidgets import QApplication
 from picture_tool.gui.wizards import NewProjectWizard
 
 
-# Ensure QApplication exists for widgets
-@pytest.fixture(scope="session")
-def qapp():
-    return QApplication([])
 
 
-def test_wizard_create_structure(qapp, tmp_path):
+def test_wizard_create_structure(qtbot, tmp_path):
     """Test standard project creation."""
     wizard = NewProjectWizard()
 
@@ -41,7 +37,7 @@ def test_wizard_create_structure(qapp, tmp_path):
     assert "augmented" in img_dir
 
 
-def test_wizard_chinese_path(qapp, tmp_path):
+def test_wizard_chinese_path(qtbot, tmp_path):
     """Test project creation with Chinese characters in path."""
     wizard = NewProjectWizard()
 
@@ -61,7 +57,7 @@ def test_wizard_chinese_path(qapp, tmp_path):
     assert "測試專案" in log_file
 
 
-def test_wizard_validation(qapp, tmp_path, monkeypatch):
+def test_wizard_validation(qtbot, tmp_path, monkeypatch):
     """Test input validation."""
     wizard = NewProjectWizard()
 
