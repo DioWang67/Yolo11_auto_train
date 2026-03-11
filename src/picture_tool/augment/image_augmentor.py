@@ -14,11 +14,11 @@ if os.environ.get("PYTEST_IS_RUNNING") != "1":
         A = _A
     except (ImportError, OSError):
         pass
-import cv2
-import yaml  # type: ignore[import-untyped]
-from tqdm import tqdm  # type: ignore[import-untyped]
+import cv2  # noqa: E402
+import yaml  # type: ignore[import-untyped] # noqa: E402
+from tqdm import tqdm  # type: ignore[import-untyped] # noqa: E402
 
-from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger
+from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger  # noqa: E402
 
 # Global variable for worker processes
 _worker_augmentations = None

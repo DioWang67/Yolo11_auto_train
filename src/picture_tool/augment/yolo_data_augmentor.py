@@ -10,16 +10,16 @@ if os.environ.get("PYTEST_IS_RUNNING") != "1":
     except ImportError as exc:
         raise ImportError("Albumentations is required for DataAugmentor.") from exc
 
-from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import cpu_count
-from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger  # type: ignore[import]
-import yaml  # type: ignore[import]
-from pathlib import Path
-from tqdm import tqdm  # type: ignore[import]
-import time
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+from concurrent.futures import ThreadPoolExecutor  # noqa: E402
+from multiprocessing import cpu_count  # noqa: E402
+from picture_tool.utils import list_images, DEFAULT_IMAGE_EXTS, setup_module_logger  # type: ignore[import] # noqa: E402
+import yaml  # type: ignore[import] # noqa: E402
+from pathlib import Path  # noqa: E402
+from tqdm import tqdm  # type: ignore[import] # noqa: E402
+import time  # noqa: E402
+import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.patches as patches  # noqa: E402
 
 
 if TYPE_CHECKING:
