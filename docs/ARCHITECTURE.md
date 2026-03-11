@@ -50,6 +50,8 @@ Config → Pipeline → Task Collection → Dependency Resolution → Execution
 **Eval** (`eval/`): Model evaluation
 **Infer** (`infer/`): Batch inference
 **Train** (`train/`): YOLO model training
+**Data Sync** (`data_sync.py`): DVC raw dataset synchronization
+**Conversion** (`conversion.py`): Image format and resizing conversion
 
 ### 5. GUI (`gui/`)
 **Purpose**: User interface for pipeline configuration and execution
@@ -64,7 +66,9 @@ Config → Pipeline → Task Collection → Dependency Resolution → Execution
 
 ```mermaid
 graph TD
-    A[Raw Data] --> B[Dataset Splitter]
+    Z[DVC Remote] -->|data_sync| A[Raw Data]
+    A -->|conversion| B[Dataset Splitter]
+    A --> B
     B --> C[Data Augmentation]
     C --> D[Dataset Linter]
     D --> E[YOLO Training]

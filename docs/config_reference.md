@@ -1,4 +1,4 @@
-﻿# Configuration Reference
+# Configuration Reference
 
 This document summarises the keys expected in `picture_tool/resources/default_pipeline.yaml`, the
 default values, and typical usage patterns so new frontends or automation can
@@ -16,7 +16,8 @@ yolo_training:           # Ultralytics YOLO training / export
 batch_inference:         # Bulk inference after training
 dataset_lint (optional)  # Dataset lint/preview helpers
 aug_preview (optional)   # Augmentation preview output
-color_inspection (opt.)   # Colour inspection workflow configuration
+color_inspection (opt.)  # Colour inspection workflow configuration
+data_sync (optional)     # DVC data synchronization
 ```
 
 Below sections outline the most frequently adjusted blocks. All paths are
@@ -141,6 +142,17 @@ This block controls the LED/顏色檢測 workflow. Important keys:
 
 ---
 
+## Data Sync (`data_sync`)
+
+Optional configuration block for synchronising raw datasets via DVC before the pipeline starts.
+
+| Key | Type | Description |
+|---|---|---|
+| `enabled` | bool | Whether to execute the data_sync task when implicitly called in a group. |
+| `remote` (opt.) | str | Specifies a particular DVC remote to pull from. |
+
+---
+
 ## Console entry points
 
 Once installed (`pip install -e .`), the following interfaces are
@@ -151,6 +163,19 @@ available:
 | `picture-tool-pipeline --config CONFIG --tasks TASK1 TASK2` | Run the pipeline from the CLI. |
 | `python -m picture_tool.main_pipeline --config CONFIG ...` | Module form of the same CLI. |
 | `picture-tool-gui` or `python -m picture_tool.gui.app` | Launch the Qt GUI. |
+
+### CLI Overrides and Product Shortcut
+The CLI supports overriding specific configuration values dynamically:
+- `--device`, `--epochs`, `--imgsz`, `--batch`: Overrides fields under `yolo_training`.
+- `--weights`, `--model`, `--project`, `--name`: Overrides paths for models and run names.
+- `--infer-input`, `--infer-output`: Overrides inference targets.
+
+**The `--product` Flag (Extremely Useful)**
+The `--product <name>` argument is a powerful override shortcut that configures the entire pipeline for a specific product without rewriting the YAML. It implicitly performs the following rebindings:
+1. `yolo_augmentation.input.image_dir` -> `data/raw/<product>/images`
+2. `yolo_augmentation.input.label_dir` -> `data/raw/<product>/labels`
+3. `yolo_training.name` -> `<product>`
+4. `yolo_training.position_validation.product` -> `<product>`
 
 ---
 

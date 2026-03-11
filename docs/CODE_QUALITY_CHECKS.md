@@ -66,7 +66,7 @@ python scripts/check_code.py
 
 #### VS Code 設置
 
-在 `.vscode/settings.json` 中添加：
+在專案根目錄的 `.vscode/settings.json` 中添加（如果資料夾或檔案不存在，請自行建立）：
 
 ```json
 {
