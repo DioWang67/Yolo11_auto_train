@@ -1,4 +1,4 @@
-from typing import Dict, Type
+from typing import Dict
 from picture_tool.color.strategies.base import ColorStrategy
 from picture_tool.color.strategies.generic import GenericStrategy
 from picture_tool.color.strategies.black import BlackStrategy
