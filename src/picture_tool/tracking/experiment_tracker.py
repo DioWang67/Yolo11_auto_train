@@ -10,7 +10,7 @@ except ImportError:
     mlflow = None  # type: ignore
 
     # Create dummy exception classes if mlflow is not installed
-    class MlflowException(Exception):
+    class MlflowException(Exception):  # type: ignore[no-redef]
         pass
 
 
