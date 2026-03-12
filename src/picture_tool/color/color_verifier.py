@@ -11,20 +11,13 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    MutableMapping,
-    Optional,
-    Sequence,
-    Tuple,
-)
+from typing import Any, Callable, Dict, Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
+
+from picture_tool.color.strategies.base import ColorRange
+from picture_tool.color.strategies.registry import ColorStrategyRegistry
 
 SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
 
@@ -58,22 +51,6 @@ COLOR_CONF_THRESHOLDS = {
     "Red": 0.25,
     "Green": 0.30,
 }
-
-
-@dataclass
-class ColorRange:
-    name: str
-    hsv_min: np.ndarray
-    hsv_max: np.ndarray
-    lab_min: np.ndarray
-    lab_max: np.ndarray
-    hsv_mean: Optional[np.ndarray] = None
-    lab_mean: Optional[np.ndarray] = None
-    coverage_mean: Optional[float] = None
-    hsv_p10: Optional[np.ndarray] = None
-    hsv_p90: Optional[np.ndarray] = None
-    lab_p10: Optional[np.ndarray] = None
-    lab_p90: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -137,196 +114,6 @@ DecisionRule = Callable[[str, float, "DecisionContext"], Optional[Tuple[str, flo
 # ============= 新增: 核心改進函數 =============
 
 
-def circular_hue_distance(h1: float, h2: float) -> float:
-    """計算色相的循環距離 (0-180 度)"""
-    diff = abs(h1 - h2)
-    return min(diff, 180 - diff)
-
-
-def improved_match_ratio(
-    hsv_vals: np.ndarray, lab_vals: np.ndarray, color_range: ColorRange, color_name: str
-) -> Tuple[float, Dict[str, float]]:
-    """改進的匹配比例計算"""
-    if hsv_vals.size == 0 or lab_vals.size == 0:
-        return 0.0, {}
-
-    debug = {}
-    h_vals = hsv_vals[:, 0]
-    s_vals = hsv_vals[:, 1]
-    v_vals = hsv_vals[:, 2]
-
-    # 針對不同顏色的特殊邏輯
-    if color_name == "Red":
-        h_mask = (
-            ((h_vals <= 10) | (h_vals >= 170))
-            & (s_vals >= max(color_range.hsv_min[1], 130))
-            & (v_vals >= max(color_range.hsv_min[2], 80))
-        )
-    elif color_name == "Orange":
-        h_mask = (
-            (h_vals >= 5)
-            & (h_vals <= 20)
-            & (s_vals >= max(color_range.hsv_min[1], 130))
-            & (v_vals >= max(color_range.hsv_min[2], 100))
-        )
-    elif color_name == "Yellow":
-        h_mask = (h_vals >= 20) & (h_vals <= 35) & (s_vals >= 80) & (v_vals >= 150)
-    elif color_name == "Green":
-        h_mask = (
-            (h_vals >= 70)
-            & (h_vals <= 100)
-            & (s_vals >= 75)
-            & (v_vals >= 30)
-            & (v_vals <= 100)
-        )
-    elif color_name == "Black":
-        h_mask = (s_vals < BLACK_S_THRESHOLD) & (v_vals < BLACK_V_THRESHOLD)
-    else:
-        h_mask = (
-            (h_vals >= color_range.hsv_min[0])
-            & (h_vals <= color_range.hsv_max[0])
-            & (s_vals >= color_range.hsv_min[1])
-            & (s_vals <= color_range.hsv_max[1])
-            & (v_vals >= color_range.hsv_min[2])
-            & (v_vals <= color_range.hsv_max[2])
-        )
-
-    hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
-    debug["hsv_ratio"] = hsv_ratio
-
-    # LAB 匹配
-    lab_mask = (
-        (lab_vals[:, 0] >= color_range.lab_min[0])
-        & (lab_vals[:, 0] <= color_range.lab_max[0])
-        & (lab_vals[:, 1] >= color_range.lab_min[1])
-        & (lab_vals[:, 1] <= color_range.lab_max[1])
-        & (lab_vals[:, 2] >= color_range.lab_min[2])
-        & (lab_vals[:, 2] <= color_range.lab_max[2])
-    )
-    lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
-    debug["lab_ratio"] = lab_ratio
-
-    # 色相平均值檢查
-    mean_h = float(np.mean(h_vals))
-    debug["mean_hue"] = mean_h
-
-    hue_similarity = 1.0
-    if color_range.hsv_mean is not None:
-        expected_h = float(color_range.hsv_mean[0])
-        hue_dist = circular_hue_distance(mean_h, expected_h)
-        hue_similarity = np.exp(-hue_dist / 15.0)
-        debug["hue_distance"] = hue_dist
-        debug["hue_similarity"] = float(hue_similarity)
-
-    # LAB 色度分析 (對 Orange/Red 重要)
-    lab_chroma_similarity = 1.0
-    if color_range.lab_mean is not None and color_name in ["Orange", "Red"]:
-        mean_a = float(np.mean(lab_vals[:, 1]))
-        mean_b = float(np.mean(lab_vals[:, 2]))
-        expected_a = float(color_range.lab_mean[1])
-        expected_b = float(color_range.lab_mean[2])
-
-        lab_chroma_dist = np.sqrt(
-            (mean_a - expected_a) ** 2 + (mean_b - expected_b) ** 2
-        )
-        lab_chroma_similarity = np.exp(-lab_chroma_dist / 20.0)
-
-        debug["lab_chroma_dist"] = float(lab_chroma_dist)
-        debug["lab_chroma_similarity"] = float(lab_chroma_similarity)
-
-    # 動態權重
-    if color_name in ["Orange", "Red"]:
-        weights = {"hsv": 0.35, "lab": 0.25, "hue_sim": 0.25, "lab_chroma": 0.15}
-    elif color_name == "Green":
-        weights = {"hsv": 0.6, "lab": 0.2, "hue_sim": 0.2, "lab_chroma": 0.0}
-    elif color_name == "Yellow":
-        weights = {"hsv": 0.5, "lab": 0.2, "hue_sim": 0.3, "lab_chroma": 0.0}
-    else:
-        weights = {"hsv": 0.5, "lab": 0.3, "hue_sim": 0.2, "lab_chroma": 0.0}
-
-    final_score = (
-        hsv_ratio * weights["hsv"]
-        + lab_ratio * weights["lab"]
-        + hue_similarity * weights["hue_sim"]
-        + lab_chroma_similarity * weights["lab_chroma"]
-    )
-
-    debug["final_score"] = float(final_score)
-    return final_score, debug
-
-
-def separate_orange_red_improved(
-    hsv_vals: np.ndarray, lab_vals: np.ndarray, orange_score: float, red_score: float
-) -> Tuple[str, float, Dict[str, Any]]:
-    """改進的 Orange vs Red 分離"""
-    if len(hsv_vals) == 0:
-        return (
-            "Red" if red_score >= orange_score else "Orange",
-            max(red_score, orange_score),
-            {},
-        )
-
-    debug: Dict[str, object] = {}
-    hue_vals = hsv_vals[:, 0]
-
-    # 色相分布
-    orange_core = np.sum((hue_vals >= 8) & (hue_vals <= 16))
-    red_core = np.sum((hue_vals <= 5) | (hue_vals >= 175))
-
-    orange_hue_ratio = orange_core / len(hue_vals)
-    red_hue_ratio = red_core / len(hue_vals)
-
-    debug["orange_hue_ratio"] = float(orange_hue_ratio)
-    debug["red_hue_ratio"] = float(red_hue_ratio)
-
-    # LAB a*/b* 分析
-    mean_a = float(np.mean(lab_vals[:, 1]))
-    mean_b = float(np.mean(lab_vals[:, 2]))
-    ab_ratio = mean_b / max(mean_a, 1.0)
-
-    debug["mean_a"] = mean_a
-    debug["mean_b"] = mean_b
-    debug["ab_ratio"] = float(ab_ratio)
-
-    # 判斷邏輯
-    if ab_ratio > 1.05:
-        lab_vote = "Orange"
-    elif ab_ratio < 0.90:
-        lab_vote = "Red"
-    else:
-        lab_vote = "Unclear"
-
-    hue_vote = (
-        "Orange"
-        if orange_hue_ratio > red_hue_ratio * 1.2
-        else "Red"
-        if red_hue_ratio > orange_hue_ratio * 1.2
-        else "Unclear"
-    )
-
-    debug["lab_vote"] = lab_vote
-    debug["hue_vote"] = hue_vote
-
-    # 最終決策
-    if hue_vote == lab_vote and hue_vote != "Unclear":
-        predicted = hue_vote
-        confidence = max(orange_score, red_score) * 1.3
-    elif hue_vote != "Unclear":
-        predicted = hue_vote
-        confidence = orange_score if hue_vote == "Orange" else red_score
-        confidence *= 1.1
-    elif lab_vote != "Unclear":
-        predicted = lab_vote
-        confidence = orange_score if lab_vote == "Orange" else red_score
-        confidence *= 1.1
-    else:
-        predicted = "Orange" if orange_score > red_score else "Red"
-        confidence = max(orange_score, red_score) * 0.9
-
-    debug["decision"] = predicted
-    return predicted, confidence, debug
-
-
 # ============= 主要評估函數 (整合改進邏輯) =============
 
 
@@ -336,171 +123,68 @@ def _evaluate_image_improved(
     lab_img: np.ndarray,
     color_ranges: Dict[str, ColorRange],
 ) -> Tuple[Dict[str, float], Dict[str, np.ndarray], Dict[str, Any]]:
-    """整合改進邏輯的圖片評估函數"""
+    """整合改進邏輯的圖片評估函數 (使用策略模式)"""
     debug_info: Dict[str, Any] = {}
     h, w = hsv_img.shape[:2]
 
-    # 快速檢查黑色
-    is_black, black_conf = _is_black_image(
-        hsv_img, BLACK_S_THRESHOLD, BLACK_V_THRESHOLD
-    )
-    debug_info["is_black_detected"] = is_black
-    debug_info["black_confidence"] = float(black_conf)
+    # 1. 快速檢查 (Short-circuit paths)
+    for color_name, color_range in color_ranges.items():
+        strategy = ColorStrategyRegistry.get_strategy(color_name)
+        is_detected, conf = strategy.fast_detect(hsv_img, lab_img, color_range)
+        if is_detected:
+            debug_info[f"is_{color_name.lower()}_detected"] = True
+            debug_info[f"{color_name.lower()}_confidence"] = float(conf)
+            
+            ratios = {c: 0.0 for c in color_ranges.keys()}
+            ratios[color_name] = conf
+            masks = {c: np.zeros((h, w), dtype=bool) for c in color_ranges.keys()}
+            masks[color_name] = np.ones((h, w), dtype=bool)
+            return ratios, masks, debug_info
 
-    if is_black and "Black" in color_ranges:
-        ratios = {color: 0.0 for color in color_ranges.keys()}
-        ratios["Black"] = black_conf
-        masks = {
-            color: np.zeros(hsv_img.shape[:2], dtype=bool)
-            for color in color_ranges.keys()
-        }
-        masks["Black"] = np.ones(hsv_img.shape[:2], dtype=bool)
-        return ratios, masks, debug_info
-
-    # 快速檢查黃色
-    is_yellow, yellow_conf = _detect_yellow_special(hsv_img)
-    debug_info["is_yellow_detected"] = is_yellow
-    debug_info["yellow_confidence"] = float(yellow_conf)
-
-    if is_yellow and "Yellow" in color_ranges:
-        ratios = {color: 0.0 for color in color_ranges.keys()}
-        ratios["Yellow"] = yellow_conf
-        masks = {
-            color: np.zeros(hsv_img.shape[:2], dtype=bool)
-            for color in color_ranges.keys()
-        }
-        masks["Yellow"] = np.ones(hsv_img.shape[:2], dtype=bool)
-        return ratios, masks, debug_info
-
-    # 取中心區域
+    # 2. 取中心區域做進一步分析
     margin_y = int(h * 0.15)
     margin_x = int(w * 0.15)
     center_hsv = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
     center_lab = lab_img[margin_y : h - margin_y, margin_x : w - margin_x]
 
     # 過濾低飽和度
+    # 常數與比例由原 color_verifier 提供或策略內部處理
+    # DEFAULT_SAT_THRESHOLD 在本體仍保留
     sat_mask = center_hsv[:, :, 1] >= DEFAULT_SAT_THRESHOLD
     valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
     valid_lab = center_lab[sat_mask].reshape(-1, 3)
 
     if len(valid_hsv) < 50:
-        # 太少有效像素，可能是黑色
+        # 太少有效像素，可能是黑色或其他低光
         ratios = {color: 0.0 for color in color_ranges.keys()}
         if "Black" in ratios:
             ratios["Black"] = 0.7
-        masks = {
-            color: np.zeros(hsv_img.shape[:2], dtype=bool)
-            for color in color_ranges.keys()
-        }
+        masks = {color: np.zeros((h, w), dtype=bool) for color in color_ranges.keys()}
         return ratios, masks, debug_info
 
-    # 使用改進的匹配函數計算每個顏色的分數
+    # 3. 多型呼叫策略計算分數
     ratios = {}
     all_debug = {}
-
     for color_name, color_range in color_ranges.items():
-        score, color_debug = improved_match_ratio(
-            valid_hsv, valid_lab, color_range, color_name
-        )
+        strategy = ColorStrategyRegistry.get_strategy(color_name)
+        score, color_debug = strategy.match_ratio(valid_hsv, valid_lab, color_range)
         ratios[color_name] = score
         all_debug[color_name] = color_debug
 
     debug_info["color_details"] = all_debug
-    # ????B?n (??????X???O)
+
+    # 4. 建立 Mask (視覺化用)
     masks = {}
     sat_mask_full = hsv_img[:, :, 1] >= DEFAULT_SAT_THRESHOLD
     for color_name, color_range in color_ranges.items():
-        hsv_cond = (
-            (hsv_img[:, :, 0] >= color_range.hsv_min[0])
-            & (hsv_img[:, :, 0] <= color_range.hsv_max[0])
-            & (hsv_img[:, :, 1] >= color_range.hsv_min[1])
-            & (hsv_img[:, :, 1] <= color_range.hsv_max[1])
-            & (hsv_img[:, :, 2] >= color_range.hsv_min[2])
-            & (hsv_img[:, :, 2] <= color_range.hsv_max[2])
-        )
-        lab_cond = (
-            (lab_img[:, :, 0] >= color_range.lab_min[0])
-            & (lab_img[:, :, 0] <= color_range.lab_max[0])
-            & (lab_img[:, :, 1] >= color_range.lab_min[1])
-            & (lab_img[:, :, 1] <= color_range.lab_max[1])
-            & (lab_img[:, :, 2] >= color_range.lab_min[2])
-            & (lab_img[:, :, 2] <= color_range.lab_max[2])
-        )
-        mask = hsv_cond & lab_cond & sat_mask_full
-        masks[color_name] = mask
+        strategy = ColorStrategyRegistry.get_strategy(color_name)
+        masks[color_name] = strategy.build_mask(hsv_img, lab_img, color_range, sat_mask_full)
 
     return ratios, masks, debug_info
-    return ratios, masks, debug_info
-
-
-def _is_black_image(
-    hsv_img: np.ndarray, s_thresh: float, v_thresh: float
-) -> Tuple[bool, float]:
-    """檢測是否為黑色圖片"""
-    h, w = hsv_img.shape[:2]
-    margin_y = int(h * 0.15)
-    margin_x = int(w * 0.15)
-    center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
-
-    if center_region.size == 0:
-        center_region = hsv_img
-
-    mean_s = float(np.mean(center_region[:, :, 1]))
-    mean_v = float(np.mean(center_region[:, :, 2]))
-    median_s = float(np.median(center_region[:, :, 1]))
-    median_v = float(np.median(center_region[:, :, 2]))
-
-    black_mask = (center_region[:, :, 1] < s_thresh) & (
-        center_region[:, :, 2] < v_thresh
-    )
-    black_coverage = float(np.count_nonzero(black_mask)) / black_mask.size
-
-    is_black = (
-        (mean_s < s_thresh and mean_v < v_thresh)
-        or (median_s < s_thresh * 0.8 and median_v < v_thresh * 0.8)
-        or (black_coverage > BLACK_MIN_COVERAGE)
-    )
-
-    confidence = black_coverage if is_black else 0.0
-    return is_black, confidence
-
-
-def _detect_yellow_special(hsv_img: np.ndarray) -> Tuple[bool, float]:
-    """快速檢測黃色"""
-    h, w = hsv_img.shape[:2]
-    margin = int(min(h, w) * 0.15)
-    center = hsv_img[margin : h - margin, margin : w - margin]
-
-    if center.size == 0:
-        center = hsv_img
-
-    h_vals = center[:, :, 0]
-    s_vals = center[:, :, 1]
-    v_vals = center[:, :, 2]
-
-    yellow_mask_primary = (
-        (h_vals >= YELLOW_H_RANGE[0])
-        & (h_vals <= YELLOW_H_RANGE[1])
-        & (s_vals >= YELLOW_S_MIN)
-        & (v_vals >= YELLOW_V_MIN)
-    )
-
-    yellow_mask_secondary = (
-        (h_vals >= 18) & (h_vals <= 38) & (s_vals >= 60) & (v_vals >= 180)
-    )
-
-    yellow_mask = yellow_mask_primary | yellow_mask_secondary
-    yellow_ratio = float(np.count_nonzero(yellow_mask)) / yellow_mask.size
-
-    orange_like_mask = (h_vals < 20) & (h_vals > 5) & (s_vals > 100)
-    orange_ratio = float(np.count_nonzero(orange_like_mask)) / orange_like_mask.size
-
-    is_yellow = (yellow_ratio > 0.25) and (yellow_ratio > orange_ratio * 1.3)
-    return is_yellow, yellow_ratio
 
 
 def _extract_center_pixels(
-    img: np.ndarray, margin_ratio: float = CENTER_MARGIN_RATIO
+    img: np.ndarray, margin_ratio: float = 0.15
 ) -> np.ndarray:
     """Return the center crop used for rule-based decisions."""
     h, w = img.shape[:2]
@@ -522,112 +206,35 @@ def _apply_color_rules(
     confidence: float,
     context: DecisionContext,
 ) -> Tuple[str, float]:
-    for rule in _COLOR_RULES:
-        result = rule(predicted_color, confidence, context)
+    """套用後期校正邏輯 (使用策略模式)"""
+    # 決定何處是中心區域常數
+    CENTER_MARGIN_RATIO = 0.15
+    center_hsv = _extract_center_pixels(context.hsv_img, CENTER_MARGIN_RATIO)
+    center_lab = _extract_center_pixels(context.lab_img, CENTER_MARGIN_RATIO)
+    
+    # 調用註冊的所有策略嘗試進行後校正 (例如橘紅 tiebreak, 綠色校正)
+    for strategy in ColorStrategyRegistry.all_strategies().values():
+        result = strategy.post_correction(
+            predicted_color, confidence, context.ratios, center_hsv, center_lab
+        )
         if result is not None:
             predicted_color, confidence = result
+            # 更新 debug info
+            context.debug_info["post_corrected"] = True
+            context.debug_info["corrected_by"] = strategy.__class__.__name__
+
     return predicted_color, confidence
-
-
-def _rule_black(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
-    if context.debug_info.get("is_black_detected") and "Black" in context.ratios:
-        new_conf = float(context.debug_info.get("black_confidence", confidence))
-        return "Black", new_conf
-    return None
-
-
-def _rule_yellow(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
-    if context.debug_info.get("is_yellow_detected") and "Yellow" in context.ratios:
-        new_conf = float(context.debug_info.get("yellow_confidence", confidence))
-        return "Yellow", new_conf
-    return None
-
-
-def _rule_orange_red_tiebreak(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
-    ratios = context.ratios
-    if (
-        "Orange" not in ratios
-        or "Red" not in ratios
-        or predicted_color not in {"Orange", "Red"}
-        or abs(ratios["Orange"] - ratios["Red"]) >= ORANGE_RED_TIE_MARGIN
-    ):
-        return None
-
-    center_hsv = _extract_center_pixels(context.hsv_img)
-    center_lab = _extract_center_pixels(context.lab_img)
-
-    if center_hsv.size == 0 or center_lab.size == 0:
-        return None
-
-    flat_hsv = center_hsv.reshape(-1, 3)
-    flat_lab = center_lab.reshape(-1, 3)
-
-    if flat_hsv.size == 0 or flat_lab.size == 0:
-        return None
-
-    sat_mask = flat_hsv[:, 1] >= DEFAULT_SAT_THRESHOLD
-    valid_hsv = flat_hsv[sat_mask]
-    valid_lab = flat_lab[sat_mask]
-
-    if len(valid_hsv) == 0 or len(valid_lab) == 0:
-        return None
-
-    new_color, new_conf, sep_debug = separate_orange_red_improved(
-        valid_hsv, valid_lab, ratios["Orange"], ratios["Red"]
-    )
-    context.debug_info["orange_red_separated"] = True
-    context.debug_info["separation_details"] = sep_debug
-    return new_color, new_conf
-
-
-def _rule_green_correction(
-    predicted_color: str,
-    confidence: float,
-    context: DecisionContext,
-) -> Optional[Tuple[str, float]]:
-    if predicted_color != "Red" or "Green" not in context.ratios:
-        return None
-
-    center_hsv = _extract_center_pixels(context.hsv_img)
-    if center_hsv.size == 0:
-        return None
-
-    h_vals = center_hsv[:, :, 0] if center_hsv.ndim == 3 else center_hsv
-    total_pixels = h_vals.size
-    if total_pixels == 0:
-        return None
-
-    green_pixels = np.sum((h_vals >= 70) & (h_vals <= 100))
-    green_ratio = green_pixels / total_pixels
-
-    if green_ratio > GREEN_DOMINANCE_RATIO:
-        context.debug_info["green_correction"] = True
-        return "Green", float(green_ratio)
-    return None
-
-
-_COLOR_RULES: List[DecisionRule] = [
-    _rule_black,
-    _rule_yellow,
-    _rule_orange_red_tiebreak,
-    _rule_green_correction,
-]
 
 
 def _confidence_threshold_for(color: str, default_threshold: float) -> float:
     """Choose the stricter threshold between global and per-color defaults."""
+    COLOR_CONF_THRESHOLDS = {
+        "Black": 0.45,
+        "Yellow": 0.20,
+        "Orange": 0.25,
+        "Red": 0.25,
+        "Green": 0.30,
+    }
     per_color = COLOR_CONF_THRESHOLDS.get(color, default_threshold)
     return max(per_color, float(default_threshold))
 
