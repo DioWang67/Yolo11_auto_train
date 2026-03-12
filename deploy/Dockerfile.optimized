@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
-COPY requirements.txt .
+COPY requirements/requirements.txt requirements/
 
 # Install Python dependencies to user directory
 RUN pip install --user --no-cache-dir --no-warn-script-location \
-    -r requirements.txt
+    -r requirements/requirements.txt
 
 # Stage 2: Runtime - Minimal production image
 FROM python:3.11-slim
