@@ -4,8 +4,8 @@ services:
   # Main application service
   app:
     build:
-      context: .
-      dockerfile: Dockerfile.optimized
+      context: ..
+      dockerfile: deploy/Dockerfile.optimized
     image: yolo11-auto-train:latest
     container_name: yolo11-app
     restart: unless-stopped
@@ -17,9 +17,9 @@ services:
 
     # Volume mounts
     volumes:
-      - ./data:/data:rw
-      - ./runs:/runs:rw
-      - ./configs:/app/configs:ro
+      - ../data:/data:rw
+      - ../runs:/runs:rw
+      - ../configs:/app/configs:ro
 
     # Port mapping
     ports:
@@ -77,7 +77,7 @@ services:
     ports:
       - "5001:5000"
     volumes:
-      - ./mlflow:/mlflow
+      - ../mlflow:/mlflow
     profiles:
       - mlflow
 
