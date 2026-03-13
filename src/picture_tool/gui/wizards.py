@@ -107,13 +107,27 @@ class NewProjectWizard(QDialog):
 
     def _create_structure(self, root: Path):
         root.mkdir(parents=True, exist_ok=True)
+        project_name = root.name
 
-        (root / "data" / "raw" / "images").mkdir(parents=True)
-        (root / "data" / "raw" / "labels").mkdir(parents=True)
-        (root / "data" / "split").mkdir(parents=True)
+        # Standard Data Structure: data/<project>/...
+        data_root = root / "data" / project_name
+        (data_root / "raw" / "images").mkdir(parents=True)
+        (data_root / "raw" / "labels").mkdir(parents=True)
+        (data_root / "processed").mkdir(parents=True)
+        (data_root / "split").mkdir(parents=True)
+        (data_root / "qc" / "color_samples").mkdir(parents=True)
+        (data_root / "qc" / "position_samples").mkdir(parents=True)
+        
+        # Standard Runs Structure: runs/<project>/...
+        runs_root = root / "runs" / project_name
+        (runs_root / "train").mkdir(parents=True)
+        (runs_root / "infer").mkdir(parents=True)
+        (runs_root / "quality" / "color").mkdir(parents=True)
+        (runs_root / "quality" / "position").mkdir(parents=True)
+        (runs_root / "reports").mkdir(parents=True)
+        (runs_root / "logs").mkdir(parents=True)
+
         (root / "models").mkdir(parents=True)
-        (root / "reports").mkdir(parents=True)
-        (root / "logs").mkdir(parents=True)
 
         raw_classes = self.classes_edit.text().strip()
         class_list = [c.strip() for c in raw_classes.split(",") if c.strip()]
@@ -128,117 +142,91 @@ class NewProjectWizard(QDialog):
     def _generate_default_config(
         self, root: Path, class_names: Optional[list[str]] = None
     ) -> dict:
-        """Generates a config dict with absolute paths for the new project."""
+        """Generates a config dict with absolute project-centric paths for the new project."""
         if class_names is None:
             class_names = ["object"]
-        # Note: We use .as_posix() to ensure forward slashes, which are safer in YAML/Python on Windows
+        
+        project_name = root.name
+        # Use absolute paths for the generated config to ensure stability
+        data_p = (root / "data" / project_name).resolve().as_posix()
+        runs_p = (root / "runs" / project_name).resolve().as_posix()
+        
         return {
+            "project_name": project_name,
+            "run_name": "train",
             "pipeline": {
-                "log_file": (root / "logs" / "pipeline.log").as_posix(),
+                "log_file": f"{runs_p}/logs/pipeline.log",
                 "tasks": [
                     {"name": "dataset_splitter", "enabled": True, "dependencies": []},
-                    {
-                        "name": "yolo_train",
-                        "enabled": True,
-                        "dependencies": ["dataset_splitter"],
-                    },
-                    {
-                        "name": "yolo_evaluation",
-                        "enabled": True,
-                        "dependencies": ["yolo_train"],
-                    },
+                    {"name": "yolo_train", "enabled": True, "dependencies": ["dataset_splitter"]},
+                    {"name": "yolo_evaluation", "enabled": True, "dependencies": ["yolo_train"]},
                     {"name": "generate_report", "enabled": True, "dependencies": []},
                 ],
             },
             "format_conversion": {
-                "input_dir": (root / "data" / "raw" / "images").as_posix(),
-                "output_dir": (root / "data" / "raw" / "images_converted").as_posix(),
+                "input_dir": f"{data_p}/raw/images",
+                "output_dir": f"{data_p}/processed/images_converted",
                 "quality": 95,
             },
             "train_test_split": {
                 "input": {
-                    "image_dir": (root / "data" / "augmented" / "images").as_posix(),
-                    "label_dir": (root / "data" / "augmented" / "labels").as_posix(),
+                    "image_dir": f"{data_p}/processed/images",
+                    "label_dir": f"{data_p}/processed/labels",
                 },
-                "output": {"output_dir": (root / "data" / "split").as_posix()},
+                "output": {"output_dir": f"{data_p}/split"},
                 "split_ratios": {"train": 0.7, "val": 0.2, "test": 0.1},
                 "input_formats": [".jpg", ".jpeg", ".png", ".bmp"],
                 "label_format": ".txt",
             },
             "dataset_lint": {
-                "input_dir": (root / "data" / "raw" / "images").as_posix(),
-                "label_dir": (root / "data" / "raw" / "labels").as_posix(),
-                "extensions": [".jpg", ".jpeg", ".png", ".bmp"],
-                "fix": True,
+                "image_dir": f"{data_p}/processed/images",
+                "label_dir": f"{data_p}/processed/labels",
+                "output_dir": f"{runs_p}/quality/lint",
+            },
+            "aug_preview": {
+                "image_dir": f"{data_p}/processed/images",
+                "label_dir": f"{data_p}/processed/labels",
+                "output_dir": f"{runs_p}/quality/preview",
+                "num_samples": 16,
+                "cols": 4,
             },
             "color_inspection": {
                 "enabled": True,
-                "input_dir": (root / "data" / "raw" / "images").as_posix(),
-                "output_dir": (root / "reports" / "color_inspection").as_posix(),
+                "input_dir": f"{data_p}/qc/color_samples",
+                "output_json": f"{runs_p}/quality/color/stats.json",
             },
             "color_verification": {
-                "enabled": False,  # Disabled by default as it requires reference image
-                "input_dir": (root / "data" / "raw" / "images").as_posix(),
-                "reference_image": None,
-                "tolerance": 10,
-                "method": "DeltaE",
-            },
-            "aug_preview": {
-                "input_dir": (root / "data" / "raw" / "images").as_posix(),
-                "output_dir": (root / "data" / "augmented" / "preview").as_posix(),
-                "number": 5,
-            },
-            "yolo_evaluation": {
-                "dataset_dir": (root / "data" / "split").as_posix(),
-                "imgsz": 640,
-                "batch": 16,
-                "device": "cpu",
-                "conf": 0.001,
-                "iou": 0.6,
+                "enabled": True,
+                "input_dir": f"{data_p}/qc/color_samples",
+                "color_stats": f"{runs_p}/quality/color/stats.json",
+                "output_json": f"{runs_p}/quality/color/verification.json",
+                "output_csv": f"{runs_p}/quality/color/verification.csv",
+                "debug_dir": f"{runs_p}/quality/color/debug",
             },
             "yolo_training": {
-                "dataset_dir": (root / "data" / "split").as_posix(),
-                "model": "yolo11n.pt",
+                "dataset_dir": f"{data_p}/split",
+                "model": "models/yolo11n.pt",
                 "epochs": 50,
-                "project": (root / "runs" / "detect").as_posix(),
+                "project": runs_p,
                 "name": "train",
                 "class_names": class_names,
                 "position_validation": {
                     "enabled": True,
                     "auto_generate": True,
-                    "product": "ProductA",
-                    "area": "Area1",
-                    "device": "cpu",
-                    "conf": 0.25,
+                    "output_dir": f"{runs_p}/quality/position",
                 },
-                "export_onnx": {
-                    "enabled": True,
-                    "simplify": True,
-                    "opset": 12,
-                    "dynamic": False,
-                },
-                "export_detection_config": {
-                    "enabled": True,
-                    "output_path": None,  # default: runs/detect/{name}/detection_config.yaml
-                    "conf_thres": 0.25,
-                    "iou_thres": 0.45,
-                },
-                "artifact_bundle": {
-                    "enabled": True,
-                    "dir_name": "bundle",
-                    "include_weights": True,
-                    "include_detection_config": True,
-                    "include_onnx": True,
-                },
+                "export_onnx": {"enabled": True},
+                "export_detection_config": {"enabled": True},
+                "artifact_bundle": {"enabled": True},
             },
             "yolo_augmentation": {
                 "input": {
-                    "image_dir": (root / "data" / "raw" / "images").as_posix(),
-                    "label_dir": (root / "data" / "raw" / "labels").as_posix(),
+                    "image_dir": f"{data_p}/raw/images",
+                    "label_dir": f"{data_p}/raw/labels",
                 },
                 "output": {
-                    "image_dir": (root / "data" / "augmented" / "images").as_posix(),
-                    "label_dir": (root / "data" / "augmented" / "labels").as_posix(),
+                    "image_dir": f"{data_p}/processed/images",
+                    "label_dir": f"{data_p}/processed/labels",
                 },
                 "processing": {"num_workers": 2},
                 "augmentation": {
@@ -248,33 +236,24 @@ class NewProjectWizard(QDialog):
                         "blur": {"kernel": [0, 1]},
                         "contrast": {"range": [0.9, 1.1]},
                         "flip": {"probability": 0.5},
-                        "rotate": {"angle": [-10, 10]},
                     },
                 },
             },
-            "image_augmentation": {
-                "input": {"image_dir": (root / "data" / "raw" / "images").as_posix()},
-                "output": {
-                    "image_dir": (
-                        root / "data" / "augmented" / "only_images"
-                    ).as_posix()
-                },
-                "processing": {"num_workers": 2},
-                "augmentation": {
-                    "num_images": 20,
-                    "num_operations": [1, 2],
-                    "operations": {"blur": {"kernel": [1, 3]}},
-                },
+            "yolo_evaluation": {
+                "weights": None,
+                "imgsz": 640,
+                "device": "cpu",
+                "conf": 0.25,
             },
             "batch_inference": {
-                "input_dir": (root / "data" / "split" / "test" / "images").as_posix(),
-                "output_dir": (root / "reports" / "inference").as_posix(),
+                "input_dir": f"{data_p}/split/test/images",
+                "output_dir": f"{runs_p}/infer",
                 "weights": None,
                 "imgsz": 640,
                 "conf": 0.25,
             },
             "report": {
-                "output_dir": (root / "reports").as_posix(),
+                "output_dir": f"{runs_p}/reports",
                 "include_artifacts": True,
             },
         }

@@ -33,8 +33,8 @@ def skip_yolo_augmentation(config, args):
 
     in_dirs = [Path(ic["image_dir"]), Path(ic["label_dir"])]
     out_dirs = [
-        Path(oc.get("image_dir", "Data/augmented/images")),
-        Path(oc.get("label_dir", "Data/augmented/labels")),
+        Path(oc.get("image_dir", "./data/project/processed/images")),
+        Path(oc.get("label_dir", "./data/project/processed/labels")),
     ]
 
     if not all(p.exists() for p in in_dirs):
@@ -62,8 +62,8 @@ def run_aug_preview(config, args):
 
 def skip_aug_preview(config, args):
     p = config.get("aug_preview", {})
-    img_dir = Path(p.get("image_dir", "./data/augmented/images"))
-    out = Path(p.get("output_dir", "./reports/preview")) / "preview.png"
+    img_dir = Path(p.get("image_dir", "./data/project/processed/images"))
+    out = Path(p.get("output_dir", "./runs/project/quality/preview")) / "preview.png"
     if out.exists() and out.stat().st_mtime >= mtime_latest([img_dir]):
         return "Preview output is newer; skipping."
     return None

@@ -67,8 +67,13 @@ class ConfigPanel(QWidget):
         self.product_override_edit = QLineEdit()
         self.product_override_edit.setPlaceholderText("選填: 產品名稱 (如 Cable1)")
         self.product_override_edit.setToolTip(
-            "若填寫，將自動設定 data/raw/{產品}/images 為輸入並覆寫專案名稱。"
+            "若填寫，將自動對齊 data/{產品}/raw 為輸入並輸出至 runs/{產品}/。"
         )
+        self.product_override_edit.textChanged.connect(self._on_product_changed)
+
+        self.path_preview_label = QLabel("")
+        self.path_preview_label.setStyleSheet("color: #6BCB77; font-size: 8pt; font-family: Consolas;")
+        self.path_preview_label.setWordWrap(True)
 
         row1 = QHBoxLayout()
         row1.addWidget(self.config_path_edit)
@@ -86,11 +91,28 @@ class ConfigPanel(QWidget):
 
         layout.addLayout(row1)
         layout.addLayout(row_prod)
+        layout.addWidget(self.path_preview_label)
         layout.addLayout(row2)
 
         self.config_status_label = QLabel("尚未載入設定")
         self.config_status_label.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
         layout.addWidget(self.config_status_label)
+
+    def _on_product_changed(self, text: str) -> None:
+        """Update path preview when product name changes."""
+        text = text.strip()
+        if not text:
+            self.path_preview_label.setText("")
+            return
+        
+        preview = (
+            f"🔍 專案路徑對齊預覽 ({text})：\n"
+            f"   📁 Raw (原始):  data/{text}/raw/\n"
+            f"   📁 Process (加工): data/{text}/processed/\n"
+            f"   📁 QC (檢驗中心):  data/{text}/qc/\n"
+            f"   📁 Runs (訓練/推理): runs/{text}/"
+        )
+        self.path_preview_label.setText(preview)
 
     def _update_config_status(self) -> None:
         """Update status label based on current configuration."""

@@ -45,8 +45,8 @@ def run_dataset_lint(config, args):
 
 def skip_dataset_lint(config, args):
     lint_cfg = config.get("dataset_lint", {})
-    img_dir = Path(lint_cfg.get("image_dir", "./data/augmented/images"))
-    out_dir = Path(lint_cfg.get("output_dir", "./reports/lint"))
+    img_dir = Path(lint_cfg.get("image_dir", "./data/project/processed/images"))
+    out_dir = Path(lint_cfg.get("output_dir", "./runs/project/quality/lint"))
     csv = out_dir / "lint.csv"
     if csv.exists() and csv.stat().st_mtime >= mtime_latest([img_dir]):
         return "Lint outputs are newer; skipping."
@@ -63,8 +63,8 @@ def run_batch_infer(config, args):
 
 def skip_batch_infer(config, args):
     bi = config.get("batch_inference", {})
-    in_dir = Path(bi.get("input_dir", "./data/raw/images"))
-    out_dir = Path(bi.get("output_dir", "./reports/infer"))
+    in_dir = Path(bi.get("input_dir", "./data/project/split/test/images"))
+    out_dir = Path(bi.get("output_dir", "./runs/project/infer"))
     csv = out_dir / "predictions.csv"
     if csv.exists() and csv.stat().st_mtime >= mtime_latest([in_dir]):
         return "Batch inference output is newer; skipping."
@@ -89,9 +89,9 @@ def run_color_inspection(config, args):
             "color_inspection disabled or missing; skipping."
         )
         return
-    input_dir = Path(color_cfg.get("input_dir", "./data/led_qc/samples"))
+    input_dir = Path(color_cfg.get("input_dir", "./data/project/qc/color_samples"))
     output_json = Path(
-        color_cfg.get("output_json", "./reports/led_qc/color_stats.json")
+        color_cfg.get("output_json", "./runs/project/quality/color/stats.json")
     )
     colors = color_cfg.get("colors") or []
     sam_cfg = color_cfg.get("sam", {}) or {}
@@ -137,10 +137,10 @@ def run_color_verification(config, args):
             "color_verification disabled or missing; skipping."
         )
         return
-    input_dir = Path(color_cfg.get("input_dir", "./data/led_qc/infer"))
-    stats_path = Path(color_cfg.get("color_stats", "./reports/led_qc/color_stats.json"))
-    output_json = color_cfg.get("output_json")
-    output_csv = color_cfg.get("output_csv")
+    input_dir = Path(color_cfg.get("input_dir", "./data/project/qc/color_samples"))
+    stats_path = Path(color_cfg.get("color_stats", "./runs/project/quality/color/stats.json"))
+    output_json = color_cfg.get("output_json", "./runs/project/quality/color/verification.json")
+    output_csv = color_cfg.get("output_csv", "./runs/project/quality/color/verification.csv")
     recursive = bool(color_cfg.get("recursive", False))
     expected_map = color_cfg.get("expected_map")
     infer_from_name = bool(color_cfg.get("expected_from_name", True))

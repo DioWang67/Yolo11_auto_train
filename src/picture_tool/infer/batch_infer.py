@@ -21,8 +21,8 @@ def run_batch_inference(config: dict, logger: Optional[logging.Logger] = None) -
     logger = logger or logging.getLogger(__name__)
 
     icfg = config.get("batch_inference", {})
-    input_dir = Path(str(icfg.get("input_dir", "./data/raw/images"))).resolve()
-    output_dir = Path(str(icfg.get("output_dir", "./reports/infer"))).resolve()
+    input_dir = Path(str(icfg.get("input_dir", "./data/project/raw/images"))).resolve()
+    output_dir = Path(str(icfg.get("output_dir", "./runs/project/infer"))).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     imgsz = int(icfg.get("imgsz", config.get("yolo_training", {}).get("imgsz", 640)))
     device = str(

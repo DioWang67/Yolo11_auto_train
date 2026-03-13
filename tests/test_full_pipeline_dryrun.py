@@ -38,13 +38,13 @@ def default_config(qtbot, tmp_path):
 
     # COMPREHENSIVE CHECKS for potentially missing keys
     assert "dataset_lint" in config, "Missing dataset_lint"
-    assert "input_dir" in config["dataset_lint"]
+    assert "image_dir" in config["dataset_lint"]
 
     assert "color_inspection" in config, "Missing color_inspection"
     assert "enabled" in config["color_inspection"]
 
     assert "aug_preview" in config, "Missing aug_preview"
-    assert "number" in config["aug_preview"]
+    assert "num_samples" in config["aug_preview"]
 
     assert "yolo_evaluation" in config, "Missing yolo_evaluation"
     assert "conf" in config["yolo_evaluation"]

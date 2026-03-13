@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget,
     QFrame,
     QSizePolicy,
+    QMessageBox,
 )
 
 # Import new components
@@ -131,11 +132,11 @@ class MainWindow(QMainWindow):
         # --- 左側面板 (Control Panel) ---
         self.side_bar = QWidget()
         self.side_bar.setObjectName("SideBar")  # 用於 CSS 定位
-        self.side_bar.setFixedWidth(420)  # 增加寬度以容納文字
+        self.side_bar.setFixedWidth(420)  # 恢復至穩定的 420px
 
         side_layout = QVBoxLayout(self.side_bar)
-        side_layout.setContentsMargins(20, 20, 20, 20)
-        side_layout.setSpacing(20)
+        side_layout.setContentsMargins(20, 20, 20, 20) 
+        side_layout.setSpacing(20) 
 
         # 加入左側元件
         side_layout.addWidget(self._create_header_label("Configuration"))
@@ -319,6 +320,18 @@ class MainWindow(QMainWindow):
         # Get overrides
         config_path = self.config_panel.get_config_path()
         product = self.config_panel.get_product_override()
+    
+        # Validate product override if placeholders are present
+        if not product:
+            import json
+            cfg_dump = json.dumps(self.manager.config)
+            if "/project/" in cfg_dump or "./data/project" in cfg_dump or "./runs/project" in cfg_dump:
+                QMessageBox.warning(
+                    self, 
+                    "未填寫產品名稱", 
+                    "偵測到設定檔包含路徑佔位符 (project)，請先於左側「Product」欄位輸入產品名稱 (如 Cable1) 以進行自動路徑對齊。"
+                )
+                return
     
         # Update UI state
         if hasattr(self, "start_btn"):

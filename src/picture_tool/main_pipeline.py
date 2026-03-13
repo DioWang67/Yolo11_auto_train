@@ -2,7 +2,7 @@ import logging
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterable, Optional
 
 import yaml
 from picture_tool.pipeline.core import Pipeline, Task
@@ -21,10 +21,18 @@ _DEFAULT_CONFIG_RESOURCE = "default_pipeline.yaml"
 
 def setup_logging(log_file):
     """Initialise logging targets for the pipeline run."""
+    log_path = Path(log_file)
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    
+    # Use force=True to allow re-configuring if called multiple times (e.g. smart resolution)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
+        handlers=[logging.FileHandler(log_file, encoding='utf-8'), logging.StreamHandler()],
+        force=True
     )
     return logging.getLogger(__name__)
 
@@ -78,9 +86,160 @@ def load_config_if_updated(config_path, config, logger):
     return config
 
 
+def _apply_smart_path_resolution(config: dict, args, logger: logging.Logger) -> None:
+    """
+    Standardizes paths based on the project name (from --name or --product).
+    Follows the 'Project-Centric' architecture.
+    """
+    project = getattr(args, "name", None) or getattr(args, "product", None)
+    if not project:
+        return
+
+    logger.info(f"Applying smart path resolution for project: {project}")
+    
+    # 1. Inputs: data/<project>/raw/
+    raw_root = Path("data") / project / "raw"
+    processed_root = Path("data") / project / "processed"
+    split_root = Path("data") / project / "split"
+    qc_root = Path("data") / project / "qc"
+    
+    # 2. Outputs: runs/<project>/
+    runs_root = Path("runs") / project
+    train_root = runs_root / "train"
+    infer_root = runs_root / "infer"
+    quality_root = runs_root / "quality"
+    reports_root = runs_root / "reports"
+
+    # --- Update Config Sections ---
+    
+    # 0. Formatting & Conversion
+    if "format_conversion" in config:
+        fc = config["format_conversion"]
+        fc["input_dir"] = str(raw_root / "images")
+        fc["output_dir"] = str(processed_root / "images_converted")
+
+    # 0.1 Anomaly Detection
+    if "anomaly_detection" in config:
+        ad = config["anomaly_detection"]
+        ad["output_folder"] = str(processed_root / "anomaly_results")
+        ad["reference_folder"] = str(raw_root / "good")
+        ad["test_folder"] = str(raw_root / "test")
+
+    # Pipeline Logs
+    if "pipeline" in config:
+        config["pipeline"]["log_file"] = str(runs_root / "logs" / "pipeline.log")
+        # Re-setup logging to the new project-specific path
+        setup_logging(config["pipeline"]["log_file"])
+
+    # Yolo Augmentation
+    if "yolo_augmentation" in config:
+        ya = config["yolo_augmentation"]
+        inp = ya.get("input", {})
+        out = ya.get("output", {})
+        # Use simple defaults if not explicitly set to something else
+        inp["image_dir"] = str(raw_root / "images")
+        inp["label_dir"] = str(raw_root / "labels")
+        out["image_dir"] = str(processed_root / "images")
+        out["label_dir"] = str(processed_root / "labels")
+        ya["input"], ya["output"] = inp, out
+
+    # Image Augmentation
+    if "image_augmentation" in config:
+        ia = config["image_augmentation"]
+        ia.setdefault("input", {})["image_dir"] = str(raw_root / "images")
+        ia.setdefault("output", {})["image_dir"] = str(processed_root / "augmented_preview")
+
+    # Dataset Splitter
+    if "train_test_split" in config:
+        tts = config["train_test_split"]
+        tts.setdefault("input", {})["image_dir"] = str(processed_root / "images")
+        tts.setdefault("input", {})["label_dir"] = str(processed_root / "labels")
+        tts.setdefault("output", {})["output_dir"] = str(split_root)
+
+    # Yolo Training
+    if "yolo_training" in config:
+        yt = config["yolo_training"]
+        yt["project"] = str(runs_root)
+        yt["name"] = "train"
+        yt["dataset_dir"] = str(split_root)
+        
+        # Position Validation
+        pv = yt.get("position_validation", {})
+        pv["output_dir"] = str(quality_root / "position")
+        pv["sample_dir"] = str(split_root / "val" / "images")
+        pv["product"] = project
+        yt["position_validation"] = pv
+
+        # Export Detection Config
+        edc = yt.get("export_detection_config", {})
+        edc["current_product"] = project
+        yt["export_detection_config"] = edc
+
+    # Batch Inference
+    if "batch_inference" in config:
+        bi = config["batch_inference"]
+        bi["output_dir"] = str(infer_root)
+        # Default input for inference often comes from split/test
+        if not bi.get("input_dir") or "/project/" in str(bi.get("input_dir")):
+            bi["input_dir"] = str(split_root / "test" / "images")
+
+    # Color Verification & Inspection
+    if "color_inspection" in config:
+        ci = config["color_inspection"]
+        ci["input_dir"] = str(qc_root / "color_samples")
+        ci["output_json"] = str(quality_root / "color" / "stats.json")
+
+    if "color_verification" in config:
+        cv = config["color_verification"]
+        cv["input_dir"] = str(qc_root / "color_samples")
+        cv["color_stats"] = str(quality_root / "color" / "stats.json")
+        cv["output_json"] = str(quality_root / "color" / "verification.json")
+        cv["output_csv"] = str(quality_root / "color" / "verification.csv")
+        cv["debug_dir"] = str(quality_root / "color" / "debug")
+        
+    # Dataset Lint
+    if "dataset_lint" in config:
+        dl = config["dataset_lint"]
+        dl["image_dir"] = str(processed_root / "images")
+        dl["label_dir"] = str(processed_root / "labels")
+        dl["output_dir"] = str(quality_root / "lint")
+
+    # Augmentation Preview
+    if "aug_preview" in config:
+        ap = config["aug_preview"]
+        ap["image_dir"] = str(processed_root / "images")
+        ap["label_dir"] = str(processed_root / "labels")
+        ap["output_dir"] = str(quality_root / "preview")
+
+    # Reports
+    if "report" in config:
+        config["report"]["output_dir"] = str(reports_root)
+
+    # 3. Final Placeholder Check (Safety Guard)
+    _check_for_placeholders(config, logger)
+
+
+def _check_for_placeholders(obj: Any, logger: logging.Logger, path: str = "") -> None:
+    """Recursively scans for any remaining 'project' placeholders in the configuration."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            _check_for_placeholders(v, logger, f"{path}.{k}" if path else k)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            _check_for_placeholders(v, logger, f"{path}[{i}]")
+    elif isinstance(obj, str):
+        if "/project/" in obj.lower() or "./data/project" in obj.lower():
+            logger.warning(f"Unresolved placeholder found in config at '{path}': {obj}")
+
+
 def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
+    # First, apply smart resolution if applicable
+    _apply_smart_path_resolution(config, args, logger)
+    
     yt = config.get("yolo_training", {})
     changed = []
+    
+    # Individual Overrides (Override smart resolution if explicitly provided)
     if getattr(args, "device", None):
         yt["device"] = args.device
         changed.append(("device", args.device))
@@ -102,37 +261,6 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
     if getattr(args, "name", None):
         yt["name"] = args.name
         changed.append(("name", yt["name"]))
-
-    # [NEW] Product Override
-    product = getattr(args, "product", None)
-    if product:
-        # 1. Update Augmentation Inputs
-        ya = config.get("yolo_augmentation", {})
-        inp = ya.get("input", {})
-
-        target_img_dir = f"./data/raw/{product}/images"
-        target_lbl_dir = f"./data/raw/{product}/labels"
-
-        if not Path(target_img_dir).exists():
-            raise FileNotFoundError(
-                f"Product directory not found: {target_img_dir}\n請確認 data/raw/{product} 是否存在。"
-            )
-
-        inp["image_dir"] = target_img_dir
-        inp["label_dir"] = target_lbl_dir
-        ya["input"] = inp
-        config["yolo_augmentation"] = ya
-        changed.append(("yolo_augmentation.input", f"data/raw/{product}"))
-
-        # 2. Update Training Name
-        yt["name"] = product
-        changed.append(("yolo_training.name", product))
-
-        # 3. Update Position Validation Product
-        pv = yt.get("position_validation", {})
-        pv["product"] = product
-        yt["position_validation"] = pv
-        changed.append(("position_validation.product", product))
 
     config["yolo_training"] = yt
 
@@ -156,7 +284,7 @@ def _apply_cli_overrides(config: dict, args, logger: logging.Logger) -> None:
 
     if changed:
         logger.info(
-            "Applied CLI overrides: %s",
+            "Applied manual CLI overrides: %s",
             ", ".join([f"{key}={value}" for key, value in changed]),
         )
 

@@ -1,5 +1,5 @@
 pipeline:
-  log_file: logs/pipeline.log
+  log_file: logs/project/pipeline.log
   task_groups:
     preprocess:
     - format_conversion
@@ -80,10 +80,10 @@ pipeline:
     - color_verification
     - batch_inference
 format_conversion:
-  input_dir: ./data/raw/images
+  input_dir: ./data/project/raw/images
   input_formats:
   - .bmp
-  output_dir: ./data/converter_output
+  output_dir: ./data/project/processed/images_converted
   output_format: .png
   quality: 95
 anomaly_detection:
@@ -91,17 +91,17 @@ anomaly_detection:
   - .png
   - .jpg
   - .jpeg
-  output_folder: ./data/anomaly/ground_truth/Reversed_Connection
-  reference_folder: ./data/anomaly/train/good
-  test_folder: ./data/anomaly/test/Reversed_Connection
+  output_folder: ./data/project/processed/anomaly_results
+  reference_folder: ./data/project/raw/good
+  test_folder: ./data/project/raw/test
   threshold: 50
 yolo_augmentation:
   input:
-    image_dir: ./data/raw/Cable1/images
-    label_dir: ./data/raw/Cable1/labels
+    image_dir: ./data/project/raw/images
+    label_dir: ./data/project/raw/labels
   output:
-    image_dir: ./data/augmented/images
-    label_dir: ./data/augmented/labels
+    image_dir: ./data/project/processed/images
+    label_dir: ./data/project/processed/labels
   processing:
     num_workers: 2
   augmentation:
@@ -146,9 +146,9 @@ yolo_augmentation:
         - 1.03
 image_augmentation:
   input:
-    image_dir: ./data/raw/images
+    image_dir: ./data/project/raw/images
   output:
-    image_dir: ./data/anomaly/train/good
+    image_dir: ./data/project/processed/augmented_preview
   processing:
     num_workers: 2
   augmentation:
@@ -193,22 +193,22 @@ image_augmentation:
         - 1.05
 train_test_split:
   input:
-    image_dir: ./data/augmented/images
-    label_dir: ./data/augmented/labels
+    image_dir: ./data/project/processed/images
+    label_dir: ./data/project/processed/labels
   input_formats:
   - .png
   - .jpg
   - .jpeg
   label_format: .txt
   output:
-    output_dir: ./data/split
+    output_dir: ./data/project/split
   split_ratios:
     train: 0.7
     val: 0.15
     test: 0.15
   stratified: true
 yolo_training:
-  dataset_dir: ./data/split
+  dataset_dir: ./data/project/split
   class_names:
   - Black
   - Green
@@ -220,17 +220,17 @@ yolo_training:
   imgsz: 640
   batch: 16
   device: cpu
-  project: ./runs/detect
+  project: ./runs/project
   name: train
   position_validation:
     enabled: true
-    product: Cable1
+    product: project
     area: A
     imgsz: 640
-    sample_dir: ./data/split/val/images
+    sample_dir: ./data/project/split/val/images
     config_path: ./models/yolo/position_config.yaml
     config: {}
-    output_dir: ./reports/position
+    output_dir: ./runs/project/quality/position
     weights: null
     device: null
     conf: 0.1
@@ -247,10 +247,10 @@ yolo_training:
     timeout: 1
     enable_yolo: true
     output_dir: Result
-    current_product: Cable1
+    current_product: project
     area: null
     expected_items:
-      Cable1:
+      project:
         A:
         - Red
         - Green
@@ -310,33 +310,33 @@ yolo_evaluation:
   imgsz: 640
   device: cpu
 batch_inference:
-  input_dir: ./data/augmented/images
-  output_dir: ./reports/infer
+  input_dir: ./data/project/split/test/images
+  output_dir: ./runs/project/infer
   weights: null
   imgsz: 640
   device: cpu
   conf: 0.25
 report:
-  output_dir: ./reports
+  output_dir: ./runs/project/reports
   include_artifacts: true
 dataset_lint:
-  image_dir: ./data/augmented/images
-  label_dir: ./data/augmented/labels
-  output_dir: ./reports/lint
+  image_dir: ./data/project/processed/images
+  label_dir: ./data/project/processed/labels
+  output_dir: ./runs/project/quality/lint
   num_preview: 20
   preview_cols: 5
   seed: 42
 aug_preview:
-  image_dir: ./data/augmented/images
-  label_dir: ./data/augmented/labels
-  output_dir: ./reports/preview
+  image_dir: ./data/project/processed/images
+  label_dir: ./data/project/processed/labels
+  output_dir: ./runs/project/quality/preview
   num_samples: 16
   cols: 4
   seed: 42
 color_inspection:
   enabled: true
-  input_dir: ./data/led_qc/samples
-  output_json: ./reports/led_qc/color_stats.json
+  input_dir: ./data/project/qc/color_samples
+  output_json: ./runs/project/quality/color/stats.json
   colors:
   - Black
   - Green
@@ -349,10 +349,10 @@ color_inspection:
     device: auto
 color_verification:
   enabled: true
-  input_dir: ./data/led_qc/samples
-  color_stats: ./reports/led_qc/color_stats.json
-  output_json: ./reports/led_qc/color_verification.json
-  output_csv: ./reports/led_qc/color_verification.csv
+  input_dir: ./data/project/qc/color_samples
+  color_stats: ./runs/project/quality/color/stats.json
+  output_json: ./runs/project/quality/color/verification.json
+  output_csv: ./runs/project/quality/color/verification.csv
   recursive: true
   expected_from_name: true
   expected_map: null
@@ -367,7 +367,7 @@ color_verification:
   - 8
   - 12
   debug_plot: true
-  debug_dir: ./reports/led_qc/color_verification_debug
+  debug_dir: ./runs/project/quality/color/debug
   mask_strategy: full
   strip_sampling:
     enabled: true

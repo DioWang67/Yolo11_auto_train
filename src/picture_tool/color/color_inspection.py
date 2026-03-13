@@ -249,9 +249,9 @@ class SessionConfig:
         max_side = getattr(ns, "max_side", None) or sam_cfg.get("max_side") or 2048
         colors = list(getattr(ns, "colors", []) or ["Default"])
         return SessionConfig(
-            input_dir=Path(getattr(ns, "input_dir", "./data/led_qc/samples")),
+            input_dir=Path(getattr(ns, "input_dir", "./data/project/qc/color_samples")),
             output_json=Path(
-                getattr(ns, "output_json", "./reports/led_qc/color_stats.json")
+                getattr(ns, "output_json", "./runs/project/quality/color/stats.json")
             ),
             colors=colors,
             sam=SamSettings(
@@ -471,8 +471,17 @@ class SamPredictorWrapper:
             points = [point_coords] # List of [x, y]
             labels = [point_labels] # List of ints
             
+        # Validate matching lengths to prevent internal model crashes
+        pts_count = len(point_coords) if point_coords else 0
+        lbl_count = len(point_labels) if point_labels else 0
+        if pts_count != lbl_count:
+             msg = f"Points/Labels mismatch: {pts_count} pts vs {lbl_count} labels"
+             logging.error(msg)
+             # Return empty mask instead of crashing
+             h, w = image_bgr.shape[:2]
+             return np.zeros((h, w), dtype=np.uint8)
+
         # Calling the model
-        # stream=False to get all results
         # device=self.device
         try:
             results = self.model(
@@ -791,7 +800,7 @@ class _SamInferenceTask(QtCore.QRunnable):
             # Return full-res mask AND computed stats
             self.callback(self.request_id, resized_mask, stats, inference_ms, None)
 
-        except (OSError, ValueError) as exc:
+        except Exception as exc:  # Catch all to prevent thread crash
             if self.cancel_event.is_set():
                 return
             if self.progress_cb:
@@ -1377,7 +1386,7 @@ class SamSelectionWindow(QtWidgets.QWidget):
             )
             return
         scaled_points = self._scaled_points_for_sam()
-        point_labels = self.point_labels if scaled_points else None
+        point_labels = list(self.point_labels) if scaled_points else None
         params = (self._scaled_box_for_sam(), scaled_points, point_labels)
         if self._sam_pending:
             self._queued_sam_args = params

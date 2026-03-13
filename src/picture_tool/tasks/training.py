@@ -69,7 +69,7 @@ def run_yolo_evaluation(config, args):
 def run_position_validation_task(config, args):
     """Run offline position validation using trained weights and sample images."""
     ycfg = config.get("yolo_training", {}) if isinstance(config, dict) else {}
-    run_root = Path(str(ycfg.get("project", DEFAULT_RUNS_DIR / "detect")))
+    run_root = Path(str(ycfg.get("project", DEFAULT_RUNS_DIR / "project")))
     run_name = str(ycfg.get("name", "train"))
     default_run_dir = run_root / run_name
     weights_path, detected_run_dir = detect_existing_weights(config, prefer="position")

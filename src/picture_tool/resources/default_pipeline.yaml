@@ -3,15 +3,15 @@ anomaly_detection:
   - .png
   - .jpg
   - .jpeg
-  output_folder: ./data/anomaly/ground_truth/Reversed_Connection
-  reference_folder: ./data/anomaly/train/good
-  test_folder: ./data/anomaly/test/Reversed_Connection
+  output_folder: ./data/project/processed/anomaly_results
+  reference_folder: ./data/project/raw/good
+  test_folder: ./data/project/raw/test
   threshold: 50
 format_conversion:
-  input_dir: ./data/raw/images
+  input_dir: ./data/project/raw/images
   input_formats:
   - .bmp
-  output_dir: ./data/converter_output
+  output_dir: ./data/project/processed/images_converted
   output_format: .png
   quality: 95
 image_augmentation:
@@ -56,9 +56,9 @@ image_augmentation:
         - 0.95
         - 1.05
   input:
-    image_dir: ./data/raw/images
+    image_dir: ./data/project/raw/images
   output:
-    image_dir: ./data/anomaly/train/good
+    image_dir: ./data/project/processed/augmented_preview
   processing:
     num_workers: 2
 pipeline:
@@ -137,15 +137,15 @@ pipeline:
     name: batch_inference
 train_test_split:
   input:
-    image_dir: ./data/augmented/images
-    label_dir: ./data/augmented/labels
+    image_dir: ./data/project/processed/images
+    label_dir: ./data/project/processed/labels
   input_formats:
   - .png
   - .jpg
   - .jpeg
   label_format: .txt
   output:
-    output_dir: ./data/split
+    output_dir: ./data/project/split
   split_ratios:
     test: 0.15
     train: 0.7
@@ -193,29 +193,29 @@ yolo_augmentation:
         - 0.97
         - 1.03
   input:
-    image_dir: ./data/raw/images
-    label_dir: ./data/raw/labels
+    image_dir: ./data/project/raw/images
+    label_dir: ./data/project/raw/labels
   output:
-    image_dir: ./data/augmented/images
-    label_dir: ./data/augmented/labels
+    image_dir: ./data/project/processed/images
+    label_dir: ./data/project/processed/labels
   processing:
     num_workers: 2
 
 # YOLO training settings
 yolo_training:
   # Split dataset root containing train/val/test
-  dataset_dir: ./data/split
+  dataset_dir: ./data/project/split
   # Class names for your dataset
-  class_names: ["Black", "Green", "Orange","Red", "Yellow"]
+  class_names: ["Object1", "Object2"]
   # Initial weights (local file or model name)
   model: ./models/yolo11n.pt
   # Training hyperparameters
-  epochs: 5
+  epochs: 50
   imgsz: 640
   batch: 16
   device: cpu
   # Ultralytics outputs
-  project: ./runs/detect
+  project: ./runs/project
   name: train
   position_validation:
     enabled: false
@@ -225,7 +225,7 @@ yolo_training:
     sample_dir: null
     config_path: ./models/yolo/position_config.yaml
     config: {}
-    output_dir: ./reports/position
+    output_dir: ./runs/project/quality/position
     weights: null
     device: null
     conf: 0.25
@@ -242,16 +242,9 @@ yolo_training:
     timeout: 1
     enable_yolo: true
     output_dir: Result
-    current_product: "Cable1"  # fallback to position_validation.product
-    area: null  # fallback to position_validation.area
-    expected_items:
-      Cable1:
-        A:
-          - Black
-          - Green
-          - Orange
-          - Red
-          - Yellow
+    current_product: null
+    area: null
+    expected_items: {}
 
     tolerance: null
     tolerance_unit: percent
@@ -288,8 +281,8 @@ yolo_evaluation:
 
 # Batch inference settings
 batch_inference:
-  input_dir: ./data/augmented/images
-  output_dir: ./reports/infer
+  input_dir: ./data/project/split/test/images
+  output_dir: ./runs/project/infer
   weights: null
   imgsz: 640
   device: cpu
@@ -297,22 +290,22 @@ batch_inference:
 
 # Report generation
 report:
-  output_dir: ./reports
+  output_dir: ./runs/project/reports
   include_artifacts: true
 
 # Dataset lint and preview settings
 dataset_lint:
-  image_dir: ./data/augmented/images
-  label_dir: ./data/augmented/labels
-  output_dir: ./reports/lint
+  image_dir: ./data/project/processed/images
+  label_dir: ./data/project/processed/labels
+  output_dir: ./runs/project/quality/lint
   num_preview: 20
   preview_cols: 5
   seed: 42
 
 aug_preview:
-  image_dir: ./data/augmented/images
-  label_dir: ./data/augmented/labels
-  output_dir: ./reports/preview
+  image_dir: ./data/project/processed/images
+  label_dir: ./data/project/processed/labels
+  output_dir: ./runs/project/quality/preview
   num_samples: 16
   cols: 4
   seed: 42
@@ -320,16 +313,11 @@ aug_preview:
 
 color_inspection:
   enabled: true
-  input_dir: ./data/led_qc/samples
-  output_json: ./reports/led_qc/color_stats.json
+  input_dir: ./data/project/qc/color_samples
+  output_json: ./runs/project/quality/color/stats.json
   colors:
-    - Black
-    - Green
-    - Orange
-    - Red
-    - Yellow
-    - White
-    - Blue
+    - Object1
+    - Object2
   sam:
     checkpoint: ./models/sam2_b.pt
     model_type: sam2_b
@@ -338,76 +326,34 @@ color_inspection:
 # 改進版顏色驗證配置
 color_verification:
   enabled: true
-  input_dir: ./data/led_qc/samples
-  color_stats: ./reports/led_qc/color_stats.json
-  output_json: ./reports/led_qc/color_verification_improved.json
-  output_csv: ./reports/led_qc/color_verification_improved.csv
+  input_dir: ./data/project/qc/color_samples
+  color_stats: ./runs/project/quality/color/stats.json
+  output_json: ./runs/project/quality/color/verification.json
+  output_csv: ./runs/project/quality/color/verification.csv
   recursive: true
   expected_from_name: true
-  expected_map: null  # 可選: 指定 CSV/JSON 映射檔案
+  expected_map: null
 
-  hsv_margin: [5, 25, 25]
-  lab_margin: [8, 6, 8]
+  hsv_margin: [8, 30, 30]
+  lab_margin: [10, 8, 10]
 
   # 視覺化除錯
   debug_plot: true
-  debug_dir: ./reports/led_qc/debug_improved
+  debug_dir: ./runs/project/quality/color/debug
   
   # 條帶採樣配置 (Strip Sampling)
   strip_sampling:
     enabled: true
-    segments: 10           # 分割成 10 個條帶
-    orientation: vertical  # vertical 或 horizontal
-    min_width_ratio: 0.06  # 最小條帶寬度比例
-    
-    # 核心參數調整
-    threshold: 0.30        # 降低信心度閾值 (原 0.35)
-    edge_margin: 0.15      # 增加邊緣裁切 (原 0.08)
-    
-    # 飽和度/明度過濾
-    sat_threshold: 30      # 降低飽和度閾值 (原 25)
-    val_threshold: 200     # 略提高明度閾值 (原 245)
-    
-    # 中心加權
+    segments: 10
+    orientation: vertical
+    min_width_ratio: 0.06
+    threshold: 0.30
+    edge_margin: 0.15
+    sat_threshold: 30
+    val_threshold: 200
     center_bias: true
-    center_sigma: 0.25     # 更強的中心偏重 (原 0.35)
-    
-    # 條帶品質控制
-    min_valid_pixels: 60   # 降低最小像素要求 (原 60)
-    top_k: 1               # 取前 5 個最佳條帶 (原 3)
-    min_sat_ratio: 0.15    # 最小飽和度覆蓋率 (原 0.18)
-    max_edge_ratio: 0.25   # 最大邊緣比例 (原 0.2)
-
-# 顏色特殊檢測參數 (程式內部使用)
-# 這些參數已內建於改進版程式中:
-# 
-# Black 檢測:
-#   - S < 50, V < 80
-#   - 覆蓋率 > 60%
-#
-# Yellow 檢測:
-#   - H: 20-35 度
-#   - S > 80
-#   - V > 150
-#
-# Orange/Red 分離:
-#   - Orange: H 在 5-20 度
-#   - Red: H 在 0-5 或 170-180 度
-
-# 執行範例:
-# python color_verifier.py \
-#   --input-dir ./data/led_qc/samples \
-#   --color-stats ./reports/led_qc/color_stats.json \
-#   --output-json ./reports/led_qc/color_verification_improved.json \
-#   --output-csv ./reports/led_qc/color_verification_improved.csv \
-#   --recursive \
-#   --hsv-margin 10 40 45 \
-#   --lab-margin 15 10 15 \
-#   --segments 10 \
-#   --ratio-threshold 0.30 \
-#   --edge-margin 0.15 \
-#   --sat-threshold 20 \
-#   --center-sigma 0.25 \
-#   --top-k 5 \
-#   --debug-plot \
-#   --debug-dir ./reports/led_qc/debug_improved
+    center_sigma: 0.25
+    min_valid_pixels: 60
+    top_k: 3
+    min_sat_ratio: 0.15
+    max_edge_ratio: 0.25
