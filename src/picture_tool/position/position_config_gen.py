@@ -14,19 +14,7 @@ except ImportError:
 from picture_tool.utils.normalization import normalize_imgsz
 
 
-def _resolve_sample_images(directory: Path, suffixes: set) -> List[Path]:
-    if not directory.exists():
-        raise FileNotFoundError(
-            f"Position validation sample_dir not found: {directory}"
-        )
-    images = [
-        p
-        for p in sorted(directory.iterdir())
-        if p.is_file() and p.suffix.lower() in suffixes
-    ]
-    if not images:
-        raise FileNotFoundError(f"No images available under {directory}")
-    return images
+from picture_tool.position.yolo_position_validator import _resolve_sample_images
 
 
 class PositionConfigGenerator:

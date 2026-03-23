@@ -1,61 +1,69 @@
-from typing import Dict
+from typing import Dict, Optional
+import importlib
+import pkgutil
+
 from picture_tool.color.strategies.base import ColorStrategy
-from picture_tool.color.strategies.generic import GenericStrategy
-from picture_tool.color.strategies.black import BlackStrategy
-from picture_tool.color.strategies.yellow import YellowStrategy
-from picture_tool.color.strategies.red_orange import RedOrangeStrategy
-from picture_tool.color.strategies.green import GreenStrategy
 
 class ColorStrategyRegistry:
-    """Registry to manage and retrieve color-specific strategies."""
+    """Registry to manage and retrieve color-specific strategies dynamically."""
     
     _strategies: Dict[str, ColorStrategy] = {}
-    _fallback = GenericStrategy()
+    _fallback: Optional[ColorStrategy] = None
+    _initialized: bool = False
+
+    @classmethod
+    def register(cls, *names: str):
+        """Decorator to register a ColorStrategy."""
+        def decorator(strategy_class):
+            instance = strategy_class()
+            for name in names:
+                cls._strategies[name.lower()] = instance
+            return strategy_class
+        return decorator
+
+    @classmethod
+    def register_fallback(cls):
+        """Decorator to register the fallback GenericStrategy."""
+        def decorator(strategy_class):
+            cls._fallback = strategy_class()
+            return strategy_class
+        return decorator
 
     @classmethod
     def initialize(cls):
-        """Initialize the default mapping of color names to strategy instances."""
-        # Instances are stateless or share-able across lookups
-        black = BlackStrategy()
-        yellow = YellowStrategy()
-        red_orange = RedOrangeStrategy()
-        green = GreenStrategy()
+        """Dynamically load all strategies in the package to trigger decorators."""
+        if cls._initialized:
+            return
+            
+        import picture_tool.color.strategies as strategies_pkg
         
-        cls._strategies = {
-            "Black": black,
-            "Yellow": yellow,
-            "Red": red_orange,
-            "Orange": red_orange,
-            "Green": green
-        }
+        for _, module_name, _ in pkgutil.iter_modules(strategies_pkg.__path__):
+            if module_name not in ('base', 'registry'):
+                importlib.import_module(f"picture_tool.color.strategies.{module_name}")
+                
+        cls._initialized = True
 
     @classmethod
     def get_strategy(cls, color_name: str) -> ColorStrategy:
         """Get the strategy for a color name, falling back to Generic if not found."""
-        if not cls._strategies:
-            cls.initialize()
+        cls.initialize()
         
-        # 1. Exact match
-        if color_name in cls._strategies:
-            return cls._strategies[color_name]
+        color_lower = color_name.lower()
+        if color_lower in cls._strategies:
+            return cls._strategies[color_lower]
             
-        # 2. Fuzzy/Keyword match (e.g., "ProductA_Black" -> BlackStrategy)
-        name_lower = color_name.lower()
-        if "black" in name_lower:
-            return cls._strategies["Black"]
-        if "yellow" in name_lower:
-            return cls._strategies["Yellow"]
-        if "red" in name_lower or "orange" in name_lower:
-            return cls._strategies["Red"]
-        if "green" in name_lower:
-            return cls._strategies["Green"]
+        # Fuzzy/Keyword match
+        for key, strategy in cls._strategies.items():
+            if key in color_lower:
+                return strategy
+                
+        if cls._fallback is None:
+            raise RuntimeError("Fallback GenericStrategy implicitly missing. Was generic.py not loaded?")
             
-        # 3. Last fallback
         return cls._fallback
 
     @classmethod
     def all_strategies(cls) -> Dict[str, ColorStrategy]:
         """Returns all registered strategies."""
-        if not cls._strategies:
-            cls.initialize()
+        cls.initialize()
         return cls._strategies

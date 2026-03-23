@@ -53,8 +53,9 @@ def _parse_yolo_config(config: dict) -> dict:
         "model_cfg": ycfg.get("model", "yolo11n.pt"),
         "epochs": int(ycfg.get("epochs", 100)),
         "imgsz": int(ycfg.get("imgsz", 640)),
-        "batch": int(ycfg.get("batch", 16)),
+        "batch": int(ycfg.get("batch", 8)),
         "device": str(ycfg.get("device", "cpu")),
+        "workers": int(ycfg.get("workers", 0)),
         "project": str(ycfg.get("project", DEFAULT_RUNS_DIR / "detect")),
         "name": str(ycfg.get("name", "train")),
     }
@@ -208,6 +209,7 @@ def train_yolo(
             imgsz=params["imgsz"],
             batch=params["batch"],
             device=params["device"],
+            workers=params["workers"],
             project=params["project"],
             name=params["name"],
             exist_ok=True,

@@ -16,7 +16,7 @@ def test_wizard_create_structure(qtbot, tmp_path):
     wizard._create_structure(project_root)
 
     assert project_root.exists()
-    assert (project_root / "data" / "raw" / "images").exists()
+    assert (project_root / "data" / project_name / "raw" / "images").exists()
     assert (project_root / "config.yaml").exists()
 
     # Verify config content
@@ -32,7 +32,7 @@ def test_wizard_create_structure(qtbot, tmp_path):
     img_dir = cfg["train_test_split"]["input"]["image_dir"]
     assert "/" in img_dir or "\\" not in img_dir  # Should use posix style
     assert project_name in img_dir
-    assert "augmented" in img_dir
+    assert "processed" in img_dir
 
 
 def test_wizard_chinese_path(qtbot, tmp_path):

@@ -4,6 +4,7 @@ from typing import Optional, List
 
 from picture_tool.utils.experiment import write_experiment
 from picture_tool.utils.experiment import _load_metrics_csv  # type: ignore
+from picture_tool.pipeline.utils import detect_existing_weights
 
 import os
 
@@ -15,41 +16,12 @@ except Exception:  # pragma: no cover
     YOLO = None  # type: ignore
 
 
-def _candidate_runs(project: Path, name: str) -> List[Path]:
-    if not project.exists():
-        return []
-    # Match 'train', 'train2', 'train3', ... or custom names with numeric suffix
-    runs = [p for p in project.iterdir() if p.is_dir() and p.name.startswith(name)]
-    # Prefer those that actually have a best.pt
-    runs = [p for p in runs if (p / "weights" / "best.pt").exists()]
-    # Sort by latest modification time of best.pt (fallback to dir mtime)
-    runs.sort(
-        key=lambda p: (
-            (p / "weights" / "best.pt").stat().st_mtime
-            if (p / "weights" / "best.pt").exists()
-            else p.stat().st_mtime
-        ),
-        reverse=True,
-    )
-    return runs
-
-
 def _resolve_weights(config: dict) -> Path:
-    ycfg = config.get("yolo_training", {})
-    ecfg = config.get("yolo_evaluation", {})
-    # Prefer explicit weights
-    weights = ecfg.get("weights")
-    if weights:
-        p = Path(str(weights)).resolve()
-        return p
-    project = Path(str(ycfg.get("project", "./runs/detect")))
-    name = str(ycfg.get("name", "train"))
-    # Try latest matching run first
-    candidates = _candidate_runs(project, name)
-    if candidates:
-        return (candidates[0] / "weights" / "best.pt").resolve()
-    # Fallback to exact name
-    return (project / name / "weights" / "best.pt").resolve()
+    # Prefer explicit weights via standard detection util instead of DRY violation
+    weights_path, _ = detect_existing_weights(config, prefer=None)
+    if not weights_path:
+        raise FileNotFoundError("Could not detect any existing model weights to evaluate.")
+    return Path(str(weights_path)).resolve()
 
 
 def evaluate_yolo(config: dict, logger: Optional[logging.Logger] = None) -> None:
@@ -62,6 +34,9 @@ def evaluate_yolo(config: dict, logger: Optional[logging.Logger] = None) -> None
     ecfg = config.get("yolo_evaluation", {})
     imgsz = int(ecfg.get("imgsz", ycfg.get("imgsz", 640)))
     device = str(ecfg.get("device", ycfg.get("device", "cpu")))
+    # OOM Prevention: Limit default workers and batch size
+    workers = int(ecfg.get("workers", ycfg.get("workers", 1)))
+    batch = int(ecfg.get("batch", 4))
 
     dataset_dir = Path(str(ycfg.get("dataset_dir", "./datasets/split_dataset")))
     data_yaml = (dataset_dir / "data.yaml").resolve()
@@ -72,10 +47,10 @@ def evaluate_yolo(config: dict, logger: Optional[logging.Logger] = None) -> None
         raise FileNotFoundError(f"data.yaml not found: {data_yaml}")
 
     logger.info(
-        f"Evaluating model: {weights_path} | data={data_yaml} imgsz={imgsz} device={device}"
+        f"Evaluating model: {weights_path} | data={data_yaml} imgsz={imgsz} device={device} workers={workers} batch={batch}"
     )
     model = YOLO(str(weights_path))
-    results = model.val(data=str(data_yaml), imgsz=imgsz, device=device)
+    results = model.val(data=str(data_yaml), imgsz=imgsz, device=device, workers=workers, batch=batch)
     logger.info("Evaluation completed.")
     run_dir = weights_path.parent.parent
     artifacts = {

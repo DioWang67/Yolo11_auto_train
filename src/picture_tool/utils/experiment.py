@@ -18,7 +18,7 @@ def _git_rev() -> Optional[str]:
             check=True,
         )
         return result.stdout.strip() or None
-    except (FileNotFoundError, PermissionError, OSError):
+    except (FileNotFoundError, PermissionError, OSError, subprocess.SubprocessError):
         return None
 
 

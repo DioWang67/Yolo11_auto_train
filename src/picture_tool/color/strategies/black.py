@@ -8,6 +8,9 @@ BLACK_S_THRESHOLD = 50.0
 BLACK_V_THRESHOLD = 80.0
 BLACK_MIN_COVERAGE = 0.6
 
+from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
+
+@ColorStrategyRegistry.register("Black")
 class BlackStrategy(GenericStrategy):
     """Specific logic for verifying Black colors."""
 

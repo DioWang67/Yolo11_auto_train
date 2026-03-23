@@ -6,6 +6,9 @@ from picture_tool.color.strategies.generic import GenericStrategy
 
 GREEN_DOMINANCE_RATIO = 0.3
 
+from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
+
+@ColorStrategyRegistry.register("Green")
 class GreenStrategy(GenericStrategy):
     """Specific logic for verifying Green colors."""
 

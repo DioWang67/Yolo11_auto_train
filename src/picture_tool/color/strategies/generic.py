@@ -10,6 +10,9 @@ def circular_hue_distance(h1: float, h2: float) -> float:
     return float(min(diff, 180 - diff))
 
 
+from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
+
+@ColorStrategyRegistry.register_fallback()
 class GenericStrategy(ColorStrategy):
     """Fallback strategy for colors that don't need special overrides."""
 

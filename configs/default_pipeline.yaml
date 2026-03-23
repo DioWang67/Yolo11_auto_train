@@ -218,7 +218,8 @@ yolo_training:
   model: ./models/yolo11n.pt
   epochs: 5
   imgsz: 640
-  batch: 16
+  batch: 8
+  workers: 0
   device: cpu
   project: ./runs/project
   name: train

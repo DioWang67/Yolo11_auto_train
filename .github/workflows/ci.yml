@@ -54,7 +54,7 @@ jobs:
           PYTHONPATH: src
         run: |
           mkdir -p reports
-          pytest --ignore=src/picture_tool/libs/labelImg --cov=picture_tool --cov-report=xml --cov-report=term --junitxml=reports/junit.xml --timeout=60 || true
+          pytest --ignore=src/picture_tool/libs/labelImg --cov=picture_tool --cov-report=xml --cov-report=term --junitxml=reports/junit.xml --timeout=60
           # Ensure artifacts exist even if coverage threshold fails
           touch reports/junit.xml coverage.xml 2>/dev/null || true
       - name: Upload test artifacts

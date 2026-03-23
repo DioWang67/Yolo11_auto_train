@@ -8,6 +8,9 @@ YELLOW_H_RANGE = (20, 35)
 YELLOW_S_MIN = 80
 YELLOW_V_MIN = 150
 
+from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
+
+@ColorStrategyRegistry.register("Yellow")
 class YellowStrategy(GenericStrategy):
     """Specific logic for verifying Yellow colors."""
 

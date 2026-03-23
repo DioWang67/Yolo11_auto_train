@@ -11,6 +11,8 @@ from picture_tool.color import color_verifier
 from picture_tool.report.qc_summary import generate_qc_summary
 from picture_tool.pipeline.utils import mtime_latest
 from picture_tool.pipeline.core import Task
+from picture_tool.tasks.quality_schemas import ColorInspectionConfig, ColorVerificationConfig
+from pydantic import ValidationError
 
 
 def run_anomaly_detection(config, args):
@@ -83,24 +85,20 @@ def _section_enabled(section) -> bool:
 
 
 def run_color_inspection(config, args):
-    color_cfg = config.get("color_inspection")
-    if not _section_enabled(color_cfg):
-        logging.getLogger(__name__).info(
-            "color_inspection disabled or missing; skipping."
-        )
+    color_cfg_dict = config.get("color_inspection")
+    if not color_cfg_dict:
+        logging.getLogger(__name__).info("color_inspection missing; skipping.")
         return
-    input_dir = Path(color_cfg.get("input_dir", "./data/project/qc/color_samples"))
-    output_json = Path(
-        color_cfg.get("output_json", "./runs/project/quality/color/stats.json")
-    )
-    colors = color_cfg.get("colors") or []
-    sam_cfg = color_cfg.get("sam", {}) or {}
-    checkpoint = sam_cfg.get("checkpoint")
-    if not checkpoint:
-        raise ValueError("color_inspection.sam.checkpoint is required.")
-    model_type = sam_cfg.get("model_type", "vit_b")
-    device = sam_cfg.get("device", "auto")
-    max_side = int(sam_cfg.get("max_side", color_cfg.get("max_side", 2048)))
+        
+    try:
+        cfg = ColorInspectionConfig.model_validate(color_cfg_dict)
+    except ValidationError as e:
+        logging.getLogger(__name__).error(f"color_inspection configuration error:\n{e}")
+        raise ValueError(f"Invalid color_inspection configuration: {e}") from e
+
+    if not cfg.enabled:
+        logging.getLogger(__name__).info("color_inspection disabled; skipping.")
+        return
 
     cmd = [
         sys.executable,
@@ -108,131 +106,101 @@ def run_color_inspection(config, args):
         "picture_tool.color.color_inspection",
         "collect",
         "--input-dir",
-        str(input_dir),
+        str(cfg.input_dir),
         "--output-json",
-        str(output_json),
+        str(cfg.output_json),
         "--sam-checkpoint",
-        str(checkpoint),
+        str(cfg.sam.checkpoint),
         "--sam-model",
-        model_type,
+        cfg.sam.model_type,
         "--device",
-        device,
+        cfg.sam.device,
         "--max-side",
-        str(max_side),
+        str(cfg.max_side),
     ]
-    if colors:
-        cmd += ["--colors", *colors]
+    if cfg.colors:
+        cmd += ["--colors", *cfg.colors]
     logging.getLogger(__name__).info(
         "Launching SAM color selection GUI for %s (output -> %s)",
-        input_dir,
-        output_json,
+        cfg.input_dir,
+        cfg.output_json,
     )
     subprocess.run(cmd, check=True)
 
 
 def run_color_verification(config, args):
-    color_cfg = config.get("color_verification")
-    if not _section_enabled(color_cfg):
-        logging.getLogger(__name__).info(
-            "color_verification disabled or missing; skipping."
-        )
+    color_cfg_dict = config.get("color_verification")
+    if not color_cfg_dict:
+        logging.getLogger(__name__).info("color_verification missing; skipping.")
         return
-    input_dir = Path(color_cfg.get("input_dir", "./data/project/qc/color_samples"))
-    stats_path = Path(color_cfg.get("color_stats", "./runs/project/quality/color/stats.json"))
-    output_json = color_cfg.get("output_json", "./runs/project/quality/color/verification.json")
-    output_csv = color_cfg.get("output_csv", "./runs/project/quality/color/verification.csv")
-    recursive = bool(color_cfg.get("recursive", False))
-    expected_map = color_cfg.get("expected_map")
-    infer_from_name = bool(color_cfg.get("expected_from_name", True))
-    min_area = float(color_cfg.get("min_area_ratio", 0.01))
-    max_area = float(color_cfg.get("max_area_ratio", 0.8))
-    hsv_margin = color_cfg.get("hsv_margin", (8.0, 35.0, 40.0))
-    lab_margin = color_cfg.get("lab_margin", (12.0, 8.0, 12.0))
-    debug_plot = bool(color_cfg.get("debug_plot", False))
-    debug_dir = color_cfg.get("debug_dir")
-    mask_strategy = str(color_cfg.get("mask_strategy", "auto"))
-    strip_cfg = color_cfg.get("strip_sampling", {}) or {}
+        
+    try:
+        cfg = ColorVerificationConfig.model_validate(color_cfg_dict)
+    except ValidationError as e:
+        logging.getLogger(__name__).error(f"color_verification configuration error:\n{e}")
+        raise ValueError(f"Invalid color_verification configuration: {e}") from e
+
+    if not cfg.enabled:
+        logging.getLogger(__name__).info("color_verification disabled; skipping.")
+        return
+
     strip_opts = color_verifier.StripOptions(
-        enabled=bool(strip_cfg.get("enabled", False)),
-        segments=int(strip_cfg.get("segments", 10)),
-        ratio_threshold=float(strip_cfg.get("threshold", 0.25)),
-        orientation=str(strip_cfg.get("orientation", "vertical")),
-        min_strip_ratio=float(strip_cfg.get("min_width_ratio", 0.05)),
-        edge_margin=float(
-            strip_cfg.get("edge_margin", color_verifier.DEFAULT_EDGE_MARGIN)
-        ),
-        sat_threshold=float(
-            strip_cfg.get("sat_threshold", color_verifier.DEFAULT_SAT_THRESHOLD)
-        ),
-        val_threshold=float(
-            strip_cfg.get("val_threshold", color_verifier.DEFAULT_VAL_THRESHOLD)
-        ),
-        center_bias=strip_cfg.get("center_bias", True),
-        center_sigma=float(
-            strip_cfg.get("center_sigma", color_verifier.DEFAULT_CENTER_SIGMA)
-        ),
-        min_valid_pixels=int(
-            strip_cfg.get("min_valid_pixels", color_verifier.DEFAULT_MIN_VALID_PIXELS)
-        ),
-        top_k=int(strip_cfg.get("top_k", color_verifier.DEFAULT_TOPK)),
-        min_sat_ratio=float(
-            strip_cfg.get("min_sat_ratio", color_verifier.DEFAULT_MIN_SAT_RATIO)
-        ),
-        max_edge_ratio=float(
-            strip_cfg.get("max_edge_ratio", color_verifier.DEFAULT_MAX_EDGE_RATIO)
-        ),
-        black_s_threshold=float(
-            strip_cfg.get("black_s_threshold", color_verifier.BLACK_S_THRESHOLD)
-        ),
-        black_v_threshold=float(
-            strip_cfg.get("black_v_threshold", color_verifier.BLACK_V_THRESHOLD)
-        ),
+        enabled=cfg.strip_sampling.enabled,
+        segments=cfg.strip_sampling.segments,
+        ratio_threshold=cfg.strip_sampling.threshold,
+        orientation=cfg.strip_sampling.orientation,
+        min_strip_ratio=cfg.strip_sampling.min_width_ratio,
+        edge_margin=cfg.strip_sampling.edge_margin,
+        sat_threshold=cfg.strip_sampling.sat_threshold,
+        val_threshold=cfg.strip_sampling.val_threshold,
+        center_bias=cfg.strip_sampling.center_bias,
+        center_sigma=cfg.strip_sampling.center_sigma,
+        min_valid_pixels=cfg.strip_sampling.min_valid_pixels,
+        top_k=cfg.strip_sampling.top_k,
+        min_sat_ratio=cfg.strip_sampling.min_sat_ratio,
+        max_edge_ratio=cfg.strip_sampling.max_edge_ratio,
+        black_s_threshold=cfg.strip_sampling.black_s_threshold,
+        black_v_threshold=cfg.strip_sampling.black_v_threshold,
     )
 
     logger = logging.getLogger(__name__)
     logger.info(
         "Running color verification on %s using %s (recursive=%s)",
-        input_dir,
-        stats_path,
-        recursive,
+        cfg.input_dir,
+        cfg.color_stats,
+        cfg.recursive,
     )
+    
+    def get_override(opt_val, strip_val):
+        return opt_val if opt_val is not None else strip_val
+
     color_verifier.verify_directory(
-        input_dir=input_dir,
-        color_stats=stats_path,
-        output_json=Path(output_json) if output_json else None,
-        output_csv=Path(output_csv) if output_csv else None,
-        recursive=recursive,
-        expected_map=Path(expected_map) if expected_map else None,
-        infer_expected_from_name=infer_from_name,
-        min_area_ratio=min_area,
-        max_area_ratio=max_area,
-        hsv_margin=hsv_margin,
-        lab_margin=lab_margin,
-        segments=int(color_cfg.get("segments", strip_opts.segments)),
-        orientation=str(color_cfg.get("orientation", strip_opts.orientation)),
-        min_strip_ratio=float(
-            color_cfg.get("min_strip_ratio", strip_opts.min_strip_ratio)
-        ),
-        ratio_threshold=float(
-            color_cfg.get("ratio_threshold", strip_opts.ratio_threshold)
-        ),
-        edge_margin=float(color_cfg.get("edge_margin", strip_opts.edge_margin)),
-        sat_threshold=float(color_cfg.get("sat_threshold", strip_opts.sat_threshold)),
-        val_threshold=float(color_cfg.get("val_threshold", strip_opts.val_threshold)),
-        min_sat_ratio=float(color_cfg.get("min_sat_ratio", strip_opts.min_sat_ratio)),
-        max_edge_ratio=float(
-            color_cfg.get("max_edge_ratio", strip_opts.max_edge_ratio)
-        ),
-        black_s_threshold=float(
-            color_cfg.get("black_s_threshold", strip_opts.black_s_threshold)
-        ),
-        black_v_threshold=float(
-            color_cfg.get("black_v_threshold", strip_opts.black_v_threshold)
-        ),
-        debug_plot=debug_plot,
-        debug_dir=Path(debug_dir) if debug_dir else None,
+        input_dir=cfg.input_dir,
+        color_stats=cfg.color_stats,
+        output_json=cfg.output_json,
+        output_csv=cfg.output_csv,
+        recursive=cfg.recursive,
+        expected_map=cfg.expected_map,
+        infer_expected_from_name=cfg.expected_from_name,
+        min_area_ratio=cfg.min_area_ratio,
+        max_area_ratio=cfg.max_area_ratio,
+        hsv_margin=cfg.hsv_margin,
+        lab_margin=cfg.lab_margin,
+        segments=get_override(cfg.segments, strip_opts.segments),
+        orientation=get_override(cfg.orientation, strip_opts.orientation),
+        min_strip_ratio=get_override(cfg.min_strip_ratio, strip_opts.min_strip_ratio),
+        ratio_threshold=get_override(cfg.ratio_threshold, strip_opts.ratio_threshold),
+        edge_margin=get_override(cfg.edge_margin, strip_opts.edge_margin),
+        sat_threshold=get_override(cfg.sat_threshold, strip_opts.sat_threshold),
+        val_threshold=get_override(cfg.val_threshold, strip_opts.val_threshold),
+        min_sat_ratio=get_override(cfg.min_sat_ratio, strip_opts.min_sat_ratio),
+        max_edge_ratio=get_override(cfg.max_edge_ratio, strip_opts.max_edge_ratio),
+        black_s_threshold=get_override(cfg.black_s_threshold, strip_opts.black_s_threshold),
+        black_v_threshold=get_override(cfg.black_v_threshold, strip_opts.black_v_threshold),
+        debug_plot=cfg.debug_plot,
+        debug_dir=cfg.debug_dir,
         strip_options=strip_opts,
-        mask_strategy=mask_strategy,
+        mask_strategy=cfg.mask_strategy,
         logger=logger,
     )
 

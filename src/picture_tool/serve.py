@@ -8,6 +8,7 @@ from typing import Optional
 
 try:
     from fastapi import FastAPI, File, UploadFile, HTTPException  # type: ignore
+    from fastapi.concurrency import run_in_threadpool
     import uvicorn
     from PIL import Image
 except ImportError:
@@ -48,13 +49,15 @@ def load_model(model_path: str):
     if YOLO is None:
         raise RuntimeError("ultralytics not installed")
     
+    try:
+        new_model = YOLO(model_path)
+    except (RuntimeError, OSError) as e:
+        logging.error(f"Failed to load model from {model_path}: {e}")
+        raise
+
     with _MODEL_LOCK:
-        try:
-            MODEL_INSTANCE = YOLO(model_path)
-            logging.info(f"Model loaded from {model_path}")
-        except (RuntimeError, OSError) as e:
-            logging.error(f"Failed to load model from {model_path}: {e}")
-            raise
+        MODEL_INSTANCE = new_model
+        logging.info(f"Model loaded from {model_path}")
 
 
 @asynccontextmanager
@@ -143,8 +146,8 @@ async def predict(file: UploadFile = File(...), conf: float = 0.25):
         raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
     try:
-        # Inference
-        results = MODEL_INSTANCE(image, conf=conf)
+        # Inference (CPU/GPU Bound) offloaded to ThreadPool to prevent Event Loop blocking
+        results = await run_in_threadpool(MODEL_INSTANCE, image, conf=conf)
 
         # Format response
         detections = []

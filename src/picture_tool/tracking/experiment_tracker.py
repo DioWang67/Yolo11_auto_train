@@ -14,8 +14,15 @@ except ImportError:
         pass
 
 
+class TrackingInfrastructureError(Exception):
+    """基礎設施錯誤: 網路或設定導致追蹤後端失效。"""
+    pass
+
+class TrackingDomainError(Exception):
+    """領域錯誤: 不支援的日誌格式或操作。"""
+    pass
+
 class ExperimentTracker(ABC):
-    """Abstract base class for experiment tracking."""
 
     @abstractmethod
     def start_run(self, run_name: Optional[str] = None) -> None:
@@ -66,17 +73,19 @@ class MLflowTracker(ExperimentTracker):
 
             mlflow.set_experiment(experiment_name)
         except MlflowException as e:
-            logging.warning(f"Failed to setup MLflow tracking/experiment: {e}")
-            self._enabled = False
+            raise TrackingInfrastructureError(f"Failed to setup MLflow tracking/experiment: {e}") from e
         except OSError as e:
-            logging.warning(f"OS/Network error during MLflow setup: {e}")
-            self._enabled = False
-            self._enabled = False
+            raise TrackingInfrastructureError(f"OS/Network error during MLflow setup: {e}") from e
 
     def start_run(self, run_name: Optional[str] = None) -> None:
         if not self._enabled:
             return
-        mlflow.start_run(run_name=run_name)
+        try:
+            mlflow.start_run(run_name=run_name)
+        except MlflowException as e:
+            raise TrackingInfrastructureError(f"Failed to start MLflow run: {e}") from e
+        except OSError as e:
+            raise TrackingInfrastructureError(f"OS/Network error starting run: {e}") from e
 
     def log_params(self, params: Dict[str, Any]) -> None:
         if not self._enabled:
@@ -85,9 +94,9 @@ class MLflowTracker(ExperimentTracker):
         try:
             mlflow.log_params(params)
         except MlflowException as e:
-            logging.warning(f"MLflow log_params failed: {e}")
+            raise TrackingInfrastructureError(f"MLflow log_params failed: {e}") from e
         except OSError as e:
-            logging.warning(f"OS/Network error during MLflow log_params: {e}")
+            raise TrackingInfrastructureError(f"OS/Network error during MLflow log_params: {e}") from e
 
     def log_metrics(
         self, metrics: Dict[str, float], step: Optional[int] = None
@@ -97,9 +106,9 @@ class MLflowTracker(ExperimentTracker):
         try:
             mlflow.log_metrics(metrics, step=step)
         except MlflowException as e:
-            logging.warning(f"MLflow log_metrics failed: {e}")
+            raise TrackingInfrastructureError(f"MLflow log_metrics failed: {e}") from e
         except OSError as e:
-            logging.warning(f"OS/Network error during MLflow log_metrics: {e}")
+            raise TrackingInfrastructureError(f"OS/Network error during MLflow log_metrics: {e}") from e
 
     def log_artifact(
         self, local_path: str, artifact_path: Optional[str] = None
@@ -107,19 +116,23 @@ class MLflowTracker(ExperimentTracker):
         if not self._enabled:
             return
         if not os.path.exists(local_path):
-            logging.warning(f"Artifact not found: {local_path}")
-            return
+            raise TrackingDomainError(f"Artifact not found: {local_path}")
         try:
             mlflow.log_artifact(local_path, artifact_path)
         except MlflowException as e:
-            logging.warning(f"MLflow log_artifact failed: {e}")
+            raise TrackingInfrastructureError(f"MLflow log_artifact failed: {e}") from e
         except OSError as e:
-            logging.warning(f"OS/Network error during MLflow log_artifact: {e}")
+            raise TrackingInfrastructureError(f"OS/Network error during MLflow log_artifact: {e}") from e
 
     def end_run(self) -> None:
         if not self._enabled:
             return
-        mlflow.end_run()
+        try:
+            mlflow.end_run()
+        except MlflowException as e:
+            raise TrackingInfrastructureError(f"MLflow end_run failed: {e}") from e
+        except OSError as e:
+            raise TrackingInfrastructureError(f"OS/Network error during MLflow end_run: {e}") from e
 
 
 class NullTracker(ExperimentTracker):

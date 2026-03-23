@@ -102,8 +102,8 @@ class TestPipelineCollect:
         with pytest.raises(ValueError, match="Cycle detected"):
             pipeline._collect(["task1"])
 
-    def test_collect_handles_unknown_task_with_warning(self, caplog):
-        """Should warn and skip unknown tasks."""
+    def test_collect_handles_unknown_task_throws_value_error(self):
+        """Should raise ValueError on unknown task dependency."""
 
         def run_fn(c, a):
             pass
@@ -111,11 +111,8 @@ class TestPipelineCollect:
         tasks = {"task1": Task("task1", run_fn)}
         pipeline = Pipeline(tasks)
 
-        with caplog.at_level(logging.WARNING):
-            collected = pipeline._collect(["unknown_task"])
-
-        assert "Unknown task requested" in caplog.text
-        assert len(collected) == 0
+        with pytest.raises(ValueError, match="Unknown task requested or missing dependency"):
+            pipeline._collect(["unknown_task"])
 
     def test_collect_deduplicates_tasks(self):
         """Should not duplicate tasks in collection."""
@@ -324,8 +321,8 @@ class TestPipelineRun:
         assert "Pre-task hook" in caplog.text
         assert "failed" in caplog.text
 
-    def test_run_handles_skip_fn_exception(self, caplog):
-        """Should log warning if skip_fn raises exception."""
+    def test_run_handles_skip_fn_exception(self):
+        """Should raise RuntimeError if skip_fn fails."""
 
         def run_fn(c, a):
             pass
@@ -336,10 +333,8 @@ class TestPipelineRun:
         tasks = {"task1": Task("task1", run_fn, skip_fn=failing_skip)}
         pipeline = Pipeline(tasks)
 
-        with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="Task skip evaluation failed"):
             pipeline.run(["task1"], {}, SimpleNamespace(force=False))
-
-        assert "Skip check" in caplog.text
 
     def test_run_logs_task_execution(self, caplog):
         """Should log task start and completion."""

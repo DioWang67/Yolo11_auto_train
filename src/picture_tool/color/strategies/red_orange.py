@@ -6,6 +6,9 @@ from picture_tool.color.strategies.generic import GenericStrategy
 
 ORANGE_RED_TIE_MARGIN = 0.15
 
+from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
+
+@ColorStrategyRegistry.register("Red", "Orange")
 class RedOrangeStrategy(GenericStrategy):
     """Specific logic for Red and Orange, which have high similarity and cross-dependency."""
 

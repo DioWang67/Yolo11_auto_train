@@ -364,17 +364,17 @@ def validate_detections_against_area(
     )
 
 
-def _resolve_sample_images(directory: Path) -> List[Path]:
+def _resolve_sample_images(directory: Path, suffixes: Optional[set] = None) -> List[Path]:
     if not directory.exists():
         raise FileNotFoundError(
             f"Position validation sample_dir not found: {directory}"
         )
+    if suffixes is None:
+        suffixes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
     images = [
         p
         for p in sorted(directory.iterdir())
-        if p.is_file()
-        and p.suffix.lower()
-        in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+        if p.is_file() and p.suffix.lower() in suffixes
     ]
     if not images:
         raise FileNotFoundError(f"No images available under {directory}")

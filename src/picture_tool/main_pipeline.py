@@ -2,7 +2,7 @@ import logging
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 import yaml
 from picture_tool.pipeline.core import Pipeline, Task
@@ -105,7 +105,6 @@ def _apply_smart_path_resolution(config: dict, args, logger: logging.Logger) -> 
     
     # 2. Outputs: runs/<project>/
     runs_root = Path("runs") / project
-    train_root = runs_root / "train"
     infer_root = runs_root / "infer"
     quality_root = runs_root / "quality"
     reports_root = runs_root / "reports"

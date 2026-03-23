@@ -4,7 +4,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Shield C++ fatal DLLs explicitly for GUI mock resolution
-sys.modules["torch"] = MagicMock()
+class MockTensor: pass
+torch_mock = MagicMock()
+torch_mock.Tensor = MockTensor
+sys.modules["torch"] = torch_mock
 sys.modules["ultralytics"] = MagicMock()
 sys.modules["segment_anything"] = MagicMock()
 sys.modules["albumentations"] = MagicMock()

@@ -3,7 +3,6 @@ import time
 
 
 from picture_tool.eval.yolo_evaluator import (
-    _candidate_runs,
     _resolve_weights,
 )
 from picture_tool.train.yolo_trainer import (
@@ -11,21 +10,6 @@ from picture_tool.train.yolo_trainer import (
 )
 
 
-def test_candidate_runs_prefers_latest_best_weight(tmp_path):
-    project = tmp_path / "runs"
-    run1 = project / "train"
-    run2 = project / "train2"
-    for run in (run1, run2):
-        (run / "weights").mkdir(parents=True, exist_ok=True)
-        (run / "weights" / "best.pt").write_bytes(b"fake")
-
-    older = time.time() - 60
-    newer = time.time()
-    os.utime(run1 / "weights" / "best.pt", (older, older))
-    os.utime(run2 / "weights" / "best.pt", (newer, newer))
-
-    runs = _candidate_runs(project, "train")
-    assert runs and runs[0] == run2
 
 
 def test_resolve_weights_uses_evaluation_override(tmp_path):

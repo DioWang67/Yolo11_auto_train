@@ -35,9 +35,7 @@ class Pipeline:
             visiting.add(name)
             task = self.tasks.get(name)
             if not task:
-                self.logger.warning(f"Unknown task requested: {name}")
-                visiting.remove(name)
-                return
+                raise ValueError(f"Unknown task requested or missing dependency: {name}")
             for dep in task.dependencies:
                 dfs(dep)
             collected[name] = task
@@ -60,11 +58,13 @@ class Pipeline:
             temporary.add(name)
             task = tasks.get(name)
             if not task:
+                temporary.remove(name)
                 return
             for dep in task.dependencies:
                 if dep in tasks:
                     visit(dep)
             permanent.add(name)
+            temporary.remove(name)
             ordered.append(task)
 
         for name in tasks:
@@ -109,9 +109,9 @@ class Pipeline:
             if not force and task.skip_fn:
                 try:
                     skip_reason = task.skip_fn(config, args)
-                except (TypeError, AttributeError, RuntimeError) as exc:  # pragma: no cover - defensive
-                    self.logger.warning("skip_fn for %s failed: %s", task.name, exc)
-                    skip_reason = None
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.logger.error("skip_fn for %s failed: %s", task.name, exc)
+                    raise RuntimeError(f"Task skip evaluation failed for {task.name}: {exc}") from exc
             if skip_reason:
                 self.logger.info(f"Skipping task {task.name}: {skip_reason}")
                 continue

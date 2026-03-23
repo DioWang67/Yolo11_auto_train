@@ -28,6 +28,11 @@ else:
     Compose = Any
 
 
+class AugmentationError(Exception):
+    """Domain error representing a failure during the data augmentation process."""
+    pass
+
+
 class DataAugmentor:
     def __init__(self, config_path: Optional[str] = None):
         self._setup_logging()
@@ -288,7 +293,7 @@ class DataAugmentor:
             image = cv2.imread(str(img_path))
             if image is None:
                 self.logger.error(f"無法讀取影像: {img_path}")
-                return
+                raise AugmentationError(f"Failed to read image: {img_path}")
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             original_height, original_width = image.shape[:2]
             self.logger.info(
@@ -301,7 +306,7 @@ class DataAugmentor:
                     ]
             except (FileNotFoundError, OSError) as e:
                 self.logger.error(f"讀取標註案失敗 {label_path}: {e}")
-                return
+                raise AugmentationError(f"Failed to read label {label_path}") from e
             if not annotations:
                 self.logger.warning(f"標註檔案為空: {label_path}")
                 return
@@ -411,9 +416,10 @@ class DataAugmentor:
                     )
                 except (OSError, ValueError) as e:
                     self.logger.error(f"套用增強發生錯誤 {img_file}_aug_{i + 1}: {e}")
-                    continue
+                    raise AugmentationError(f"Augmentation application failed for {img_file}_aug_{i + 1}") from e
         except (OSError, ValueError) as e:
             self.logger.error(f"處理單張影像出錯 {img_file}: {e}")
+            raise AugmentationError(f"Image processing failed for {img_file}") from e
 
     def process_dataset(self):
         # 確保已建立輸出資料夾與增強流程

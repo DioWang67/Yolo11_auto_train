@@ -23,13 +23,15 @@ def run_yolo_train(config, args):
     try:
         PositionConfigGenerator.generate(config, run_dir, logger)
     except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
-        logger.warning(f"Position config generation failed: {e}")
+        logger.error(f"Position config generation failed: {e}")
+        raise RuntimeError(f"Pipeline aborted: Position config generation failed - {e}") from e
 
     # 2. ONNX Export
     try:
         OnnxExporter.export(config, run_dir, logger)
     except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
-        logger.warning(f"ONNX export failed: {e}")
+        logger.error(f"ONNX export failed: {e}")
+        raise RuntimeError(f"Pipeline aborted: ONNX export failed - {e}") from e
 
     # 3. Detection Config Export
     ycfg = config.get("yolo_training", {})
@@ -46,7 +48,8 @@ def run_yolo_train(config, args):
             config, run_dir, logger, include_position=position_validation_active
         )
     except (FileNotFoundError, ValueError, OSError) as e:
-        logger.warning(f"Detection config export failed: {e}")
+        logger.error(f"Detection config export failed: {e}")
+        raise RuntimeError(f"Pipeline aborted: Detection config export failed - {e}") from e
 
 
 def run_yolo_evaluation(config, args):
