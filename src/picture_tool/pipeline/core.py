@@ -7,7 +7,19 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 @dataclass
 class Task:
-    """A unit of work in the picture-tool pipeline."""
+    """A unit of work in the picture-tool pipeline.
+
+    Attributes:
+        name: Unique identifier for this task.
+        run: Callable ``(config, args) -> Any`` that executes the task.
+        dependencies: Names of tasks that must run before this one.
+        skip_fn: Optional callable ``(config, args) -> Optional[str]``.
+            **Contract**: return ``None`` to proceed with execution, or a
+            non-empty ``str`` describing the reason to skip.  When the
+            pipeline's ``force`` flag is set, ``skip_fn`` is bypassed
+            entirely.
+        description: Human-readable summary shown in CLI/GUI listings.
+    """
 
     name: str
     run: Callable[[dict, Any], object]
@@ -84,16 +96,28 @@ class Pipeline:
         config: dict,
         args: Any,
         before_task: Optional[Callable[["Task", dict], dict]] = None,
+        after_task: Optional[Callable[["Task", int, int], None]] = None,
     ) -> None:
-        """Resolve dependencies, topo-sort, and execute tasks with skip logic."""
+        """Resolve dependencies, topo-sort, and execute tasks with skip logic.
+
+        Args:
+            requested: List of task names to execute.
+            config: Pipeline configuration dictionary.
+            args: Parsed CLI arguments namespace.
+            before_task: Optional ``(task, config) -> config`` hook called
+                before each task.  May return a refreshed config dict.
+            after_task: Optional ``(task, index, total) -> None`` hook called
+                after each task completes (including skipped tasks).
+        """
         collected = self._collect(requested)
         ordered = self._toposort(collected)
         self.logger.info(f"Resolved task order: {[t.name for t in ordered]}")
         force = bool(
             getattr(args, "force", False) or config.get("pipeline", {}).get("force")
         )
+        total = len(ordered)
 
-        for task in ordered:
+        for index, task in enumerate(ordered):
             if before_task:
                 try:
                     config = before_task(task, config)
@@ -114,7 +138,11 @@ class Pipeline:
                     raise RuntimeError(f"Task skip evaluation failed for {task.name}: {exc}") from exc
             if skip_reason:
                 self.logger.info(f"Skipping task {task.name}: {skip_reason}")
+                if after_task:
+                    after_task(task, index, total)
                 continue
             self.logger.info(f"Running task: {task.name}")
             task.run(config, args)
             self.logger.info(f"Task {task.name} completed.")
+            if after_task:
+                after_task(task, index, total)

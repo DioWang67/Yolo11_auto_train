@@ -14,6 +14,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from picture_tool import main_pipeline as pipeline
 from picture_tool.exceptions import ConfigurationError, PipelineError
+from picture_tool.pipeline.core import Pipeline, Task
 
 
 class _SignalLoggingHandler(logging.Handler):
@@ -34,7 +35,13 @@ class _SignalLoggingHandler(logging.Handler):
 
 
 class WorkerThread(QThread):
-    """Run a subset of pipeline tasks on a background thread."""
+    """Run a subset of pipeline tasks on a background thread.
+
+    Delegates execution to :class:`Pipeline.run` so that dependency
+    resolution, skip logic, and task ordering are defined in exactly
+    one place.  Progress is reported via Qt signals through the
+    ``before_task`` and ``after_task`` hooks.
+    """
 
     progress_updated = pyqtSignal(int)
     task_started = pyqtSignal(str)
@@ -66,16 +73,13 @@ class WorkerThread(QThread):
     # QThread implementation
     # ------------------------------------------------------------------
     def run(self) -> None:  # pragma: no cover - exercised via GUI, hard to unit test
-        # Local logger for thread-level messages
         logger = logging.getLogger(f"picture_tool.gui.worker.{id(self)}")
         logger.setLevel(logging.INFO)
-        logger.propagate = True  # Ensure messages bubble up to 'picture_tool'
+        logger.propagate = True
 
-        # Attach signal handler to the root 'picture_tool' logger so we capture
-        # logs emitted by submodules (like train.yolo_trainer, quality.dataset_linter)
         base_logger = logging.getLogger("picture_tool")
         yolo_logger = logging.getLogger("ultralytics")
-        
+
         handler = _SignalLoggingHandler(self.log_message.emit)
         handler.setFormatter(
             logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -83,75 +87,53 @@ class WorkerThread(QThread):
         base_logger.addHandler(handler)
         yolo_logger.addHandler(handler)
 
+        file_handler = None
         try:
             config = self._resolve_config()
             args = self._build_args()
 
-            # Using build_task_registry to get Task objects
             registry = pipeline.build_task_registry(config)
 
-            # Ensure logging to file is set up for GUI runs too
             log_file = config.get("pipeline", {}).get("log_file", "logs/pipeline.log")
-            
-            # Attaching a FileHandler to the base_logger ensures persistence for all module logs
-            file_handler = None
             try:
                 log_path = Path(log_file)
                 log_path.parent.mkdir(parents=True, exist_ok=True)
-                file_handler = logging.FileHandler(log_path, encoding='utf-8')
-                file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+                file_handler = logging.FileHandler(log_path, encoding="utf-8")
+                file_handler.setFormatter(
+                    logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+                )
                 base_logger.addHandler(file_handler)
                 yolo_logger.addHandler(file_handler)
             except OSError as e:
                 logger.warning(f"Failed to setup file logging: {e}")
 
-            # Using Pipeline core to resolve dependencies correctly
-            pipe_core = pipeline.Pipeline(registry, logger)
-            collected = pipe_core._collect(self.tasks)
-            # The original logic expected `validate_dependencies` to return a list,
-            # but now we should trust Pipeline topological sort if possible.
-            # However, to maintain incremental signal emission, we iterate manually on the sorted tasks.
-            ordered_tasks = pipe_core._toposort(collected)
-
-            planned_tasks = [t.name for t in ordered_tasks]
-            total = max(len(planned_tasks), 1)
-
-            for index, task_obj in enumerate(ordered_tasks):
-                task_name = task_obj.name
+            # --- before_task hook: apply overrides + emit signal ---
+            def _before_task(task_obj: Task, cfg: dict) -> dict:
                 if self._cancel_requested:
-                    logger.info("Pipeline cancelled by user.")
-                    break
+                    self.stop_event.set()
+                self.task_started.emit(task_obj.name)
+                cfg = pipeline._apply_cli_overrides(cfg, args, logger)
+                pipeline._auto_device(cfg, logger)
+                return cfg
 
-                self.task_started.emit(task_name)
+            # --- after_task hook: emit progress + completion signal ---
+            def _after_task(task_obj: Task, index: int, total: int) -> None:
+                self.task_completed.emit(task_obj.name)
+                self._emit_progress(index + 1, max(total, 1))
 
-                # Apply overrides before each task (mimicking Pipeline logic)
-                pipeline._apply_cli_overrides(config, args, logger)  # type: ignore[attr-defined]
-                pipeline._auto_device(config, logger)  # type: ignore[attr-defined]
-
-                skip_reason = None
-                if task_obj.skip_fn:
-                    try:
-                        skip_reason = task_obj.skip_fn(config, args)
-                    except (TypeError, AttributeError, RuntimeError) as exc:
-                        logger.warning(f"Skip check for {task_name} failed: {exc}")
-
-                if skip_reason:
-                    logger.info(f"Skipping {task_name}: {skip_reason}")
-                    self.task_completed.emit(task_name)
-                    self._emit_progress(index + 1, total)
-                    continue
-
-                logger.info(f"Running task: {task_name}")
-                task_obj.run(config, args)
-                logger.info(f"Finished task {task_name}")
-
-                self.task_completed.emit(task_name)
-                self._emit_progress(index + 1, total)
+            pipe = Pipeline(registry, logger=logger)
+            pipe.run(
+                self.tasks,
+                config,
+                args,
+                before_task=_before_task,
+                after_task=_after_task,
+            )
 
             if not self._cancel_requested:
                 logger.info("All tasks completed.")
             self.finished_signal.emit()
-        except (PipelineError, RuntimeError, OSError) as exc:  # pragma: no cover - defensive guard
+        except (PipelineError, RuntimeError, OSError) as exc:  # pragma: no cover
             logger.exception(f"Pipeline execution failed: {exc}")
             self.error_occurred.emit(str(exc))
         finally:
@@ -160,7 +142,7 @@ class WorkerThread(QThread):
             if file_handler:
                 base_logger.removeHandler(file_handler)
                 yolo_logger.removeHandler(file_handler)
-                file_handler.close()  # Fix: Ensure file handle is closed to avoid Windows locking
+                file_handler.close()
 
     # ------------------------------------------------------------------
     # helpers
