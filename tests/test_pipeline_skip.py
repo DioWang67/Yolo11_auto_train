@@ -155,3 +155,80 @@ def test_should_skip_aug_preview_when_preview_exists(base_config):
 def test_should_skip_batch_inference_when_predictions_exist(base_config):
     reason = quality.skip_batch_infer(base_config, SimpleNamespace(force=False))
     assert reason is not None
+
+
+# --- _find_latest_run_dir & versioning tests ---
+
+def test_find_latest_run_dir_returns_base_when_only_one(tmp_path):
+    from picture_tool.tasks.training import _find_latest_run_dir
+
+    (tmp_path / "train" / "weights").mkdir(parents=True)
+    result = _find_latest_run_dir(tmp_path, "train")
+    assert result is not None
+    assert result.name == "train"
+
+
+def test_find_latest_run_dir_returns_most_recent_versioned(tmp_path):
+    import time
+    from picture_tool.tasks.training import _find_latest_run_dir
+
+    for name in ("train", "train2"):
+        (tmp_path / name / "weights").mkdir(parents=True)
+
+    time.sleep(0.05)
+    (tmp_path / "train3" / "weights").mkdir(parents=True)
+    (tmp_path / "train3" / "weights" / "best.pt").write_bytes(b"w")
+
+    result = _find_latest_run_dir(tmp_path, "train")
+    assert result is not None
+    assert result.name == "train3"
+
+
+def test_find_latest_run_dir_ignores_unrelated_dirs(tmp_path):
+    from picture_tool.tasks.training import _find_latest_run_dir
+
+    (tmp_path / "train" / "weights").mkdir(parents=True)
+    (tmp_path / "train_backup").mkdir()
+    (tmp_path / "other").mkdir()
+
+    result = _find_latest_run_dir(tmp_path, "train")
+    assert result is not None
+    assert result.name == "train"
+
+
+def test_find_latest_run_dir_returns_none_when_project_missing(tmp_path):
+    from picture_tool.tasks.training import _find_latest_run_dir
+
+    result = _find_latest_run_dir(tmp_path / "nonexistent", "train")
+    assert result is None
+
+
+def test_skip_yolo_train_uses_latest_versioned_dir(base_config, temp_dirs):
+    """skip_yolo_train should check the most recently modified versioned dir."""
+    import time
+
+    project = temp_dirs["runs"].parent  # runs/detect
+
+    # Create a newer versioned run directory: train2
+    train2 = project / "train2"
+    (train2 / "weights").mkdir(parents=True)
+    (train2 / "auto_position_config.yaml").write_text("cfg", encoding="utf-8")
+
+    time.sleep(1.1)
+    (train2 / "weights" / "best.pt").write_bytes(b"w")
+    (train2 / "last_run_metadata.json").write_text("{}", encoding="utf-8")
+
+    reason = training.skip_yolo_train(base_config, SimpleNamespace(force=False))
+    assert reason is not None
+    assert "train2" in reason
+
+
+def test_skip_yolo_train_force_never_skips(base_config, temp_dirs):
+    import time
+
+    time.sleep(1.1)
+    (temp_dirs["runs"] / "weights" / "best.pt").touch()
+    (temp_dirs["runs"] / "last_run_metadata.json").write_text("{}", encoding="utf-8")
+
+    reason = training.skip_yolo_train(base_config, SimpleNamespace(force=True))
+    assert reason is None

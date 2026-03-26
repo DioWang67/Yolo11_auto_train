@@ -184,5 +184,4 @@ The `--product <name>` argument is a powerful override shortcut that configures 
 - Keep `yolo_training.workers` at `0` on Windows/GUI to avoid multiprocessing
   crashes.
 - Use `pipeline.task_groups` to define higher-level presets for GUI/CLI reuse.
-- After editing your config file, the GUI can reload the file via the **?頛**
-  button; CLI will re-read before each task execution via `load_config_if_updated`.
+- After editing your config file, the GUI can reload via the **Reload** button; CLI will re-read before each task execution via `load_config_if_updated`.

@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from pathlib import Path
 from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
@@ -12,6 +13,7 @@ from picture_tool.utils.detection_config import DetectionConfigExporter
 from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
 from picture_tool.tasks.bundle import run_artifact_bundle
+from picture_tool.tasks.deploy import run_deploy
 
 
 def run_yolo_train(config, args):
@@ -108,9 +110,12 @@ def run_position_validation_task(config, args):
                 f"Using auto-generated position config: {auto_conf}"
             )
         else:
-            logging.getLogger(__name__).warning(
-                "Skipping position_validation: Auto-config not found in run_dir. "
-                "This likely means the model detected nothing during training auto-generation."
+            logging.getLogger(__name__).error(
+                "position_validation is enabled but no auto_position_config.yaml was generated "
+                "in %s. This usually means the model detected nothing during training. "
+                "Position check will NOT run — inference-side position validation will have no "
+                "baseline and may behave unexpectedly.",
+                run_dir,
             )
             return None
     else:
@@ -128,18 +133,32 @@ def run_position_validation_task(config, args):
     return run_position_validation(config, run_dir, logger=logging.getLogger(__name__))
 
 
+def _find_latest_run_dir(project: Path, name: str) -> Path | None:
+    """Return the most recently modified run directory matching the Ultralytics
+    versioning pattern: ``name``, ``name2``, ``name3``, etc."""
+    if not project.exists():
+        return None
+    pattern = re.compile(r"^" + re.escape(name) + r"\d*$")
+    candidates = [p for p in project.iterdir() if p.is_dir() and pattern.match(p.name)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
 def skip_yolo_train(config, args):
-    y = config.get("yolo_training", {})
-    project = Path(str(y.get("project", DEFAULT_RUNS_DIR / "detect")))
-    name = str(y.get("name", "train"))
-    run_dir = project / name
-
-    metadata_path = run_dir / "last_run_metadata.json"
-
     if getattr(args, "force", False):
         return None
 
-    if not run_dir.exists() or not metadata_path.exists():
+    y = config.get("yolo_training", {})
+    project = Path(str(y.get("project", DEFAULT_RUNS_DIR / "detect")))
+    name = str(y.get("name", "train"))
+
+    run_dir = _find_latest_run_dir(project, name)
+    if run_dir is None:
+        return None
+
+    metadata_path = run_dir / "last_run_metadata.json"
+    if not metadata_path.exists():
         return None
 
     # Check hashes
@@ -156,7 +175,7 @@ def skip_yolo_train(config, args):
             and stored_meta.get("config_hash") == current_cfg_hash
             and (run_dir / "weights" / "best.pt").exists()
         ):
-            return "Skipping training: Source dataset and config match last run."
+            return f"Skipping training: dataset and config match last run ({run_dir.name})."
 
     except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError, OSError):
         # Fallback to mtime if hash check fails or file corrupt
@@ -168,7 +187,7 @@ def skip_yolo_train(config, args):
     auto_conf = run_dir / "auto_position_config.yaml"
     if weights.exists() and auto_conf.exists():
         if weights.stat().st_mtime >= mtime_latest([dataset_dir]):
-            return "Found latest best.pt (mtime check); skipping training."
+            return f"Found latest best.pt in {run_dir.name} (mtime check); skipping training."
 
     return None
 
@@ -198,5 +217,11 @@ TASKS = [
         run=run_artifact_bundle,
         description="Bundle training artifacts (Zip).",
         dependencies=[],
+    ),
+    Task(
+        name="deploy",
+        run=run_deploy,
+        description="Deploy artifacts directly to yolo11_inference models directory.",
+        dependencies=["yolo_train"],
     ),
 ]

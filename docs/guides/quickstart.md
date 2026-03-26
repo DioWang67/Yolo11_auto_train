@@ -61,21 +61,31 @@ python -m picture_tool.gui.app
 
 ### 3. Check Results
 
-Training outputs:
+Training outputs (versioned — each run creates a new directory):
 ```
-runs/detect/train/
-  ├── weights/
-  │   ├── best.pt
-  │   └── last.pt
-  ├── results.csv
-  └── confusion_matrix.png
+runs/detect/
+  ├── train/          ← first run
+  │   ├── weights/
+  │   │   ├── best.pt
+  │   │   └── last.pt
+  │   ├── results.csv
+  │   └── confusion_matrix.png
+  ├── train2/         ← second run (--force)
+  └── train3/         ← third run (--force)
 ```
+
+> **Skip behaviour**: if the dataset and config are unchanged from the last run, `yolo_train` is skipped automatically. Use `--force` to bypass and create a new versioned run directory.
 
 ## Common Tasks
 
 ### Train a Model
 ```bash
 python -m picture_tool.main_pipeline configs/train.yaml --tasks yolo_train
+```
+
+To force retrain even when data/config is unchanged (creates `train2`, `train3`, …):
+```bash
+python -m picture_tool.main_pipeline configs/train.yaml --tasks yolo_train --force
 ```
 
 ### Run Inference
@@ -94,6 +104,6 @@ yolo_training:
 
 ## Next Steps
 
-- Read [Training Guide](guides/training.md)
-- Read [Testing Guide](guides/testing.md)
 - See [Architecture](ARCHITECTURE.md)
+- See [Config Reference](config_reference.md)
+- See [Integration Guide (Train → Deploy)](INTEGRATION_GUIDE.md)

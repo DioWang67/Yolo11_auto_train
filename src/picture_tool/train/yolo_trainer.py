@@ -212,7 +212,7 @@ def train_yolo(
             workers=params["workers"],
             project=params["project"],
             name=params["name"],
-            exist_ok=True,
+            exist_ok=False,
         )
     except RuntimeError as e:
         # Pass up specific runtime errors from Ultralytics (e.g., CUDA OOM)

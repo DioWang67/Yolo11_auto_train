@@ -23,7 +23,7 @@
 - `dataset_splitter`：需原始影像/標註目錄與分割合數；輸出 train/val/test 影像與標註。
 - `dataset_lint`：需影像/標註目錄；輸出 lint 報告（CSV/圖示）。
 - `aug_preview`：需增強後影像/標註目錄；輸出增強預覽圖。
-- `yolo_train`：需 split 資料集、class_names、初始權重；輸出 runs/detect/<name>/weights/{best,last}.pt 及 log/metrics。
+- `yolo_train`：需 split 資料集、class_names、初始權重；輸出 runs/detect/<name>/weights/{best,last}.pt 及 log/metrics。每次重跑會自動遞增版本目錄（`train` → `train2` → `train3`）；資料與 config 未變時會自動 skip，需強制重跑請加 `--force`。
 - `yolo_evaluation`：需權重與驗證集；輸出評估結果與指標。
 - `generate_report`：依訓練/評估結果產生報告；輸出 reports/*。
 - `batch_inference`：需輸入影像資料夾與權重；輸出推論結果（影像/CSV）。
@@ -41,10 +41,10 @@
   ```bash
   picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
   ```
-- Training export for inference config (detection_config.yaml); includes weights/conf/iou and, if position_validation is enabled, embeds position_config.
+- 匯出推論設定（detection_config.yaml），包含 weights/conf/iou，若啟用 position_validation 則嵌入 position_config：
   ```bash
   picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
-  # output: runs/detect/<name>/detection_config.yaml
+  # 輸出: runs/detect/<name>/detection_config.yaml
   ```
 - 批次推論（指定輸入/輸出、權重）：
   ```bash
@@ -146,9 +146,10 @@ picture-tool-color-verify \
 - 任務查詢：`picture-tool-pipeline --list-tasks` 或 `--describe-task <name>` 可查看可用任務、依賴與描述。
 
 ## 角色導向
-- **我只想完整跑一輪訓練（含 split/訓練/評估/報告）**  
-  `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full`  
+- **我只想完整跑一輪訓練（含 split/訓練/評估/報告）**
+  `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full`
   （若只訓練：`--tasks yolo_train`；GPU/epochs 可用 `--device 0 --epochs 50` 覆蓋）
+  資料與 config 不變時 pipeline 自動 skip 訓練；強制重訓加 `--force`（會建立新版本目錄 `train2`、`train3`…）。
 - **我只想對現有推論圖做顏色 QC**  
   `picture-tool-color-verify --input-dir data/led_qc/infer --color-stats reports/led_qc/color_stats.json --output-json reports/led_qc/verify.json --output-csv reports/led_qc/verify.csv`  
   如需依檔名推 expected，加 `--expected-from-name`；有 mapping 就帶 `--expected-map <csv>`.
@@ -175,6 +176,16 @@ picture-tool-color-verify \
 ## 顏色檢測流程
 - `color_inspection`：啟動 SAM 範本建立，生成 `color_stats.json`。
 - `color_verification`：使用 `color_stats.json` 對資料夾做批次顏色檢測，產出 JSON/CSV，可啟用 `debug_plot` 生成可視化。
+
+## 部署到 yolo11_inference
+
+訓練完成後，可使用 `deploy` 任務自動將產物複製到 yolo11_inference：
+
+```bash
+picture-tool-pipeline --config configs/Cable1.yaml --tasks deploy
+```
+
+完整的訓練→推論整合流程請參考 **[docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)**。
 
 ## 測試與建置
 ```bash
