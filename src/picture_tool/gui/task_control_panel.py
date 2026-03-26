@@ -112,6 +112,11 @@ class TaskControlPanel(QWidget):
         self.task_feedback_label.setStyleSheet("color: #4D96FF; font-size: 9pt;")
         layout.addWidget(self.task_feedback_label)
 
+        self.dependency_label = QLabel("")
+        self.dependency_label.setStyleSheet("color: #b5b5b5; font-size: 8pt;")
+        self.dependency_label.setWordWrap(True)
+        layout.addWidget(self.dependency_label)
+
         self._update_task_summary()
 
     def get_selected_tasks(self) -> List[str]:
@@ -153,6 +158,24 @@ class TaskControlPanel(QWidget):
     def _show_task_feedback(self, message: str, color: str = "#4D96FF") -> None:
         self.task_feedback_label.setText(message)
         self.task_feedback_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+
+    def show_dependency_chain(
+        self, ordered: List[str], auto_added: "set[str]"
+    ) -> None:
+        """Display the resolved execution order with auto-added deps highlighted."""
+        if not ordered:
+            self.dependency_label.setText("")
+            return
+        parts = []
+        for name in ordered:
+            label = TASK_OPTIONS_MAP.get(name, name)
+            if name in auto_added:
+                parts.append(f"<i style='color:#cca700;'>{label} (自動加入)</i>")
+            else:
+                parts.append(label)
+        self.dependency_label.setText(
+            f"<b>執行順序：</b>{'  →  '.join(parts)}"
+        )
 
     # ------------------------------------------------------------------
     # Preset Logic

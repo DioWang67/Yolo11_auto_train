@@ -35,6 +35,10 @@ try:
     from picture_tool.gui.color_panel import ColorPanel
     from picture_tool.gui.task_control_panel import TaskControlPanel
     from picture_tool.gui.style_manager import load_stylesheet
+    from picture_tool.gui.training_metrics import (
+        TrainingMetricsParser,
+        TrainingMetricsWidget,
+    )
     from picture_tool.gui.constants import (
         TASK_OPTIONS_MAP,
     )
@@ -167,7 +171,11 @@ class MainWindow(QMainWindow):
         dash_layout.setContentsMargins(20, 20, 20, 20)
         dash_layout.setSpacing(15)
 
-        # 右側上半部：狀態監控
+        # 右側上半部：訓練指標 (hidden until metrics detected)
+        self.training_metrics = TrainingMetricsWidget()
+        dash_layout.addWidget(self.training_metrics)
+
+        # 狀態監控
         dash_layout.addWidget(self._create_header_label("Pipeline Status Queue"))
         self.status_list = QListWidget()
         self.status_list.setMaximumHeight(200)  # 不佔滿整個畫面
@@ -356,9 +364,15 @@ class MainWindow(QMainWindow):
             self.stop_btn.setEnabled(False)
 
     def log_message(self, message: str) -> None:
-        """Log message wrapper - delegates to LogViewer"""
+        """Log message wrapper - delegates to LogViewer and extracts metrics."""
         self._log_history.append(message)
         self.log_viewer.log_message(message)
+        # Extract training metrics from ultralytics epoch lines
+        if hasattr(self, "training_metrics"):
+            metrics = TrainingMetricsParser.parse_epoch_line(message)
+            if metrics:
+                self.training_metrics.setVisible(True)
+                self.training_metrics.update_metrics(metrics)
 
     def reset_task_statuses(self, tasks):
         self._rebuild_status_items(default_state="Pending...", only=tasks)
@@ -448,8 +462,16 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def on_tasks_changed(self, tasks: list) -> None:
-        "Handle tasks changed signal from TaskControlPanel."
-        self._rebuild_status_items(only=tasks)
+        """Handle tasks changed signal from TaskControlPanel."""
+        # Resolve dependency chain for preview
+        try:
+            ordered, auto_added = self.manager.resolve_task_chain(tasks)
+            self.task_control.show_dependency_chain(ordered, auto_added)
+            # Rebuild status list using the full resolved chain
+            self._rebuild_status_items(only=ordered)
+        except Exception:
+            self.task_control.show_dependency_chain([], set())
+            self._rebuild_status_items(only=tasks)
 
     # ------------------------------------------------------------------
     # Signal Handlers
@@ -461,6 +483,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "progress_bar"):
             self.progress_bar.setValue(100)
             self.status_label.setText("Pipeline Completed")
+        if hasattr(self, "training_metrics"):
+            self.training_metrics.reset()
 
     def on_pipeline_error(self, message: str):
         """Handle pipeline error."""
@@ -468,6 +492,8 @@ class MainWindow(QMainWindow):
         self._reset_ui_state()
         if hasattr(self, "status_label"):
             self.status_label.setText("Pipeline Error")
+        if hasattr(self, "training_metrics"):
+            self.training_metrics.reset()
 
     def on_task_started(self, task_name: str):
         """Handle task start."""

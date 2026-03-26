@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 import logging
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import yaml
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -51,6 +51,7 @@ class PipelineManager(QObject):
         self.config: dict[str, Any] = {}
         self.current_config_path: Optional[Path] = None
         self.worker_thread: Optional[WorkerThread] = None
+        self._registry_cache: Optional[Dict[str, Any]] = None
         self._logger = logging.getLogger("picture_tool.gui.manager")
 
     # ------------------------------------------------------------------
@@ -140,6 +141,7 @@ class PipelineManager(QObject):
     def update_config(self, new_config: dict[str, Any]) -> None:
         """Update the internal config dictionary (e.g. from UI editor)."""
         self.config = new_config
+        self.invalidate_registry_cache()
 
     def _load_config_file(self, path: Path) -> Optional[dict[str, Any]]:
         if not path.exists():
@@ -162,6 +164,44 @@ class PipelineManager(QObject):
                 "tasks": [],
             }
         }
+
+    # ------------------------------------------------------------------
+    # Dependency Resolution (for preview)
+    # ------------------------------------------------------------------
+
+    def resolve_task_chain(
+        self, selected: List[str]
+    ) -> Tuple[List[str], Set[str]]:
+        """Resolve dependencies and return (ordered_names, auto_added_names).
+
+        Returns:
+            ordered_names: Full toposorted task list including dependencies.
+            auto_added: Task names that were NOT in ``selected`` but
+                were pulled in as transitive dependencies.
+        """
+        if not selected:
+            return [], set()
+        try:
+            from picture_tool import main_pipeline as pipeline
+            from picture_tool.pipeline.core import Pipeline
+
+            if self._registry_cache is None:
+                self._registry_cache = pipeline.build_task_registry(
+                    self.config or {}
+                )
+            pipe = Pipeline(self._registry_cache)
+            collected = pipe._collect(selected)
+            ordered = pipe._toposort(collected)
+            ordered_names = [t.name for t in ordered]
+            auto_added = set(ordered_names) - set(selected)
+            return ordered_names, auto_added
+        except Exception as exc:
+            self._logger.debug("resolve_task_chain failed: %s", exc)
+            return list(selected), set()
+
+    def invalidate_registry_cache(self) -> None:
+        """Clear cached task registry (call when config changes)."""
+        self._registry_cache = None
 
     # ------------------------------------------------------------------
     # Pipeline Execution
