@@ -83,11 +83,13 @@ class TaskControlPanel(QWidget):
         preset_row.addStretch()
         layout.addLayout(preset_row)
 
-        # Task Grid
+        # Task Grid (2 columns, equal stretch)
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setVerticalSpacing(6)
         grid.setHorizontalSpacing(10)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         for index, (task_key, label) in enumerate(TASK_OPTIONS):
             desc = TASK_DESCRIPTIONS.get(task_key, label)
