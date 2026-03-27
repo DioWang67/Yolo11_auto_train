@@ -161,6 +161,19 @@ def build_task_registry(config: dict) -> dict[str, Task]:
 def validate_dependencies(
     tasks: list[str], config: dict, logger: logging.Logger
 ) -> list[str]:
+    """Validate that all requested tasks exist and have no cyclic dependencies.
+
+    Returns the input list unchanged if valid; raises ValueError otherwise.
+    """
+    registry = build_task_registry(config)
+    unknown = [t for t in tasks if t not in registry]
+    if unknown:
+        raise ValueError(f"Unknown tasks: {', '.join(unknown)}")
+
+    from picture_tool.pipeline.core import Pipeline
+    pipe = Pipeline(registry, logger=logger)
+    collected = pipe._collect(tasks)
+    pipe._toposort(collected)  # raises on cycle
     return tasks
 
 

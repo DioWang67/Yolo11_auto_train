@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QPushButton,
     QProgressBar,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
     QFrame,
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         # self.annotation_output_dir: Path | None = None
 
         self.setWindowTitle("Picture Tool Orchestrator")
+        self.setMinimumSize(960, 600)
         self.resize(1200, 800)
         # Load external stylesheet
         try:
@@ -136,11 +138,25 @@ class MainWindow(QMainWindow):
         # --- 左側面板 (Control Panel) ---
         self.side_bar = QWidget()
         self.side_bar.setObjectName("SideBar")  # 用於 CSS 定位
-        self.side_bar.setFixedWidth(420)  # 恢復至穩定的 420px
+        self.side_bar.setMinimumWidth(420)
+        self.side_bar.setMaximumWidth(480)
 
-        side_layout = QVBoxLayout(self.side_bar)
-        side_layout.setContentsMargins(20, 20, 20, 20) 
-        side_layout.setSpacing(20) 
+        side_outer = QVBoxLayout(self.side_bar)
+        side_outer.setContentsMargins(0, 0, 0, 0)
+        side_outer.setSpacing(0)
+
+        # 上半部：可滾動區域（Configuration + Select Tasks）
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll_area.setObjectName("SideBarScroll")
+
+        scroll_content = QWidget()
+        scroll_content.setObjectName("SideBarScrollContent")
+        side_layout = QVBoxLayout(scroll_content)
+        side_layout.setContentsMargins(20, 20, 20, 20)
+        side_layout.setSpacing(20)
 
         # 加入左側元件
         side_layout.addWidget(self._create_header_label("Configuration"))
@@ -160,10 +176,15 @@ class MainWindow(QMainWindow):
         self.task_control.log_message.connect(self.log_message)
         side_layout.addWidget(self.task_control)  # 任務勾選區
 
-        side_layout.addStretch()  # 彈簧，把按鈕推到底部
+        side_layout.addStretch()
+        scroll_area.setWidget(scroll_content)
+        side_outer.addWidget(scroll_area, 1)  # 滾動區佔滿剩餘空間
 
-        side_layout.addWidget(self._create_separator())
-        side_layout.addWidget(self._build_control_section())  # 開始/停止按鈕
+        # 下半部：固定控制區（RUN/STOP 按鈕），不會被擠壓
+        side_outer.addWidget(self._create_separator())
+        control_section = self._build_control_section()
+        control_section.setContentsMargins(20, 10, 20, 15)
+        side_outer.addWidget(control_section)
 
         # --- 右側面板 (Dashboard) ---
         self.dashboard = QWidget()
@@ -201,8 +222,8 @@ class MainWindow(QMainWindow):
         dash_layout.addLayout(self._build_log_controls())
         dash_layout.addWidget(self.log_viewer.tabs, 2)  # 使用 LogViewer 的 tabs
 
-        main_layout.addWidget(self.side_bar)
-        main_layout.addWidget(self.dashboard)
+        main_layout.addWidget(self.side_bar, 0)   # 固定寬度，不伸展
+        main_layout.addWidget(self.dashboard, 1)  # 填滿剩餘空間
         
         # Set up backward compatibility aliases
         self.tabs = self.log_viewer.tabs
@@ -320,36 +341,56 @@ class MainWindow(QMainWindow):
         """Start the pipeline with selected tasks"""
         # Collect selected tasks
         selected_tasks = self.task_control.get_selected_tasks()
-    
+
         if not selected_tasks:
             self.log_message("[WARNING] No tasks selected.")
             return
-    
+
         # Get overrides
         config_path = self.config_panel.get_config_path()
         product = self.config_panel.get_product_override()
-    
+
         # Validate product override if placeholders are present
         if not product:
             import json
             cfg_dump = json.dumps(self.manager.config)
             if "/project/" in cfg_dump or "./data/project" in cfg_dump or "./runs/project" in cfg_dump:
                 QMessageBox.warning(
-                    self, 
-                    "未填寫產品名稱", 
+                    self,
+                    "未填寫產品名稱",
                     "偵測到設定檔包含路徑佔位符 (project)，請先於左側「Product」欄位輸入產品名稱 (如 Cable1) 以進行自動路徑對齊。"
                 )
                 return
-    
+
+        # ── Preflight checks ──────────────────────────────────────────
+        try:
+            from picture_tool.pipeline.preflight import PreflightChecker
+            from picture_tool.gui.preflight_dialog import PreflightDialog
+            from picture_tool.path_resolver import resolve_project_paths
+            # Apply product path substitution before preflight so checks
+            # see the actual resolved paths (e.g. Cable1) instead of
+            # the 'project' placeholder that lives in the raw config.
+            preflight_config = (
+                resolve_project_paths(self.manager.config, product)
+                if product else self.manager.config
+            )
+            issues = PreflightChecker().run(selected_tasks, preflight_config)
+            if issues:
+                dlg = PreflightDialog(issues, parent=self)
+                if not dlg.exec_():
+                    return  # User cancelled or errors block execution
+        except Exception as exc:
+            self.log_message(f"[WARNING] Preflight check failed: {exc}")
+
         # Update UI state
         if hasattr(self, "start_btn"):
             self.start_btn.setEnabled(False)
         if hasattr(self, "stop_btn"):
             self.stop_btn.setEnabled(True)
-    
+
         # Reset status items
         self.reset_task_statuses(selected_tasks)
-    
+
         # Start via manager
         self.manager.start_pipeline(selected_tasks, config_path, product)
 

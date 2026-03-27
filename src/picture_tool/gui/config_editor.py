@@ -51,6 +51,9 @@ class ConfigEditor(QWidget):
         self.aug_tab = QWidget()
         self.general_tab = QWidget()
 
+        for tab in (self.general_tab, self.training_tab, self.aug_tab):
+            tab.setObjectName("ConfigEditorTab")
+
         self.tabs.addTab(self.general_tab, "General / Paths")
         self.tabs.addTab(self.training_tab, "YOLO Training")
         self.tabs.addTab(self.aug_tab, "Augmentation")
@@ -63,7 +66,9 @@ class ConfigEditor(QWidget):
         """Setup General / Format Conversion settings."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setObjectName("ConfigEditorScroll")
         content = QWidget()
+        content.setObjectName("ConfigEditorContent")
         layout = QFormLayout(content)
 
         # Pipeline Logs
@@ -106,7 +111,9 @@ class ConfigEditor(QWidget):
         """Setup YOLO Training settings."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setObjectName("ConfigEditorScroll")
         content = QWidget()
+        content.setObjectName("ConfigEditorContent")
         layout = QFormLayout(content)
 
         yt_cfg = self.config.get("yolo_training", {})
@@ -161,7 +168,9 @@ class ConfigEditor(QWidget):
         """Setup Augmentation settings."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setObjectName("ConfigEditorScroll")
         content = QWidget()
+        content.setObjectName("ConfigEditorContent")
         layout = QFormLayout(content)
 
         aug_cfg = self.config.get("yolo_augmentation", {}).get("augmentation", {})

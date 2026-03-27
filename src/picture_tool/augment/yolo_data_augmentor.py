@@ -300,7 +300,7 @@ class DataAugmentor:
                 f"處理 {img_file}, 原始尺寸: {original_width}x{original_height}"
             )
             try:
-                with open(label_path, "r") as f:
+                with open(label_path, "r", encoding="utf-8") as f:
                     annotations = [
                         line.strip().split() for line in f.readlines() if line.strip()
                     ]
@@ -406,7 +406,7 @@ class DataAugmentor:
                     aug_label_path = (
                         Path(self.config["output"]["label_dir"]) / aug_label_filename
                     )
-                    with open(aug_label_path, "w") as f:
+                    with open(aug_label_path, "w", encoding="utf-8") as f:
                         for bbox, label in zip(valid_bboxes, valid_labels):
                             f.write(
                                 f"{int(label)} {bbox[0]:.6f} {bbox[1]:.6f} {bbox[2]:.6f} {bbox[3]:.6f}\n"

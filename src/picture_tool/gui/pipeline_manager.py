@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -52,6 +53,7 @@ class PipelineManager(QObject):
         self.current_config_path: Optional[Path] = None
         self.worker_thread: Optional[WorkerThread] = None
         self._registry_cache: Optional[Dict[str, Any]] = None
+        self._worker_lock = threading.Lock()
         self._logger = logging.getLogger("picture_tool.gui.manager")
 
     # ------------------------------------------------------------------
@@ -207,7 +209,8 @@ class PipelineManager(QObject):
     # Pipeline Execution
     # ------------------------------------------------------------------
     def is_running(self) -> bool:
-        return self.worker_thread is not None and self.worker_thread.isRunning()
+        with self._worker_lock:
+            return self.worker_thread is not None and self.worker_thread.isRunning()
 
     def start_pipeline(
         self,
@@ -259,13 +262,27 @@ class PipelineManager(QObject):
         except (RuntimeError, OSError) as e:
             self.error_occurred.emit(f"Failed to start pipeline thread: {e}")
 
-    def stop_pipeline(self) -> None:
-        """Request the pipeline to stop."""
-        if self.is_running() and self.worker_thread:
-            self.worker_thread.request_stop()
-            self.log_message.emit("Stop requested; waiting for current task...")
-        else:
+    def stop_pipeline(self, timeout_ms: int = 10000) -> None:
+        """Request the pipeline to stop.
+
+        Args:
+            timeout_ms: Max milliseconds to wait for graceful shutdown.
+                        If exceeded, the thread is terminated forcefully.
+        """
+        if not self.is_running() or not self.worker_thread:
             self.status_message.emit("Pipeline is not running.", "info")
+            return
+
+        self.worker_thread.request_stop()
+        self.log_message.emit("Stop requested; waiting for current task...")
+
+        if not self.worker_thread.wait(timeout_ms):
+            self._logger.warning(
+                "Worker thread did not finish within %d ms — terminating", timeout_ms
+            )
+            self.worker_thread.terminate()
+            self.worker_thread.wait(2000)
+            self.error_occurred.emit("Pipeline forcefully terminated (timeout)")
 
     def _on_worker_finished(self) -> None:
         """Handler for worker thread completion."""
@@ -273,10 +290,11 @@ class PipelineManager(QObject):
 
     def _cleanup_worker_thread(self) -> None:
         """Native handler for when QThread actually finishes its run() method."""
-        if self.worker_thread:
-            self.worker_thread.wait() # Ensure C++ thread is fully joined
-            self.worker_thread.deleteLater()
-            self.worker_thread = None
+        with self._worker_lock:
+            if self.worker_thread:
+                self.worker_thread.wait()
+                self.worker_thread.deleteLater()
+                self.worker_thread = None
 
     def _on_worker_error(self, message: str) -> None:
         """Handler for worker thread errors."""

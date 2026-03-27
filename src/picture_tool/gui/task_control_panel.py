@@ -90,11 +90,12 @@ class TaskControlPanel(QWidget):
         grid.setHorizontalSpacing(10)
 
         for index, (task_key, label) in enumerate(TASK_OPTIONS):
+            desc = TASK_DESCRIPTIONS.get(task_key, label)
             checkbox = QCheckBox(label)
-            checkbox.setToolTip(label)
+            checkbox.setToolTip(f"<b>{label}</b><br/>{desc}")
             # Default state logic (moved from main)
             checkbox.setChecked(task_key in {"dataset_splitter", "yolo_train"})
-            checkbox.setStatusTip(TASK_DESCRIPTIONS.get(task_key, label))
+            checkbox.setStatusTip(desc)
             checkbox.stateChanged.connect(self._on_tasks_changed)
 
             self.task_checkboxes[task_key] = checkbox

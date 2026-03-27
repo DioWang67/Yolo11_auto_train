@@ -166,6 +166,7 @@ class ColorPanel(QWidget):
         # Simple input dialog for setup
         dialog = QDialog(self)
         dialog.setWindowTitle("啟動 SAM 採樣工具")
+        dialog.setObjectName("SamDialog")
         dialog.resize(500, 300)
         
         layout = QVBoxLayout(dialog)
@@ -297,9 +298,9 @@ class ColorPanel(QWidget):
                 # Since we are already in an app, it won't call exec_(), just show().
                 # We need to keep a reference to the window or it will be garbage collected.
                 
-                print("DEBUG: Launching run_gui_session via mock?")
-                self._sam_window = run_gui_session(cfg) # Modified expecting it returns window
-                print("DEBUG: run_gui_session returned")
+                logger.debug("Launching run_gui_session")
+                self._sam_window = run_gui_session(cfg)
+                logger.debug("run_gui_session returned")
                 
             except ImportError as e:
                 QMessageBox.critical(self, "模組遺失", f"無法啟動工具，缺少相依套件:\n{e}")
