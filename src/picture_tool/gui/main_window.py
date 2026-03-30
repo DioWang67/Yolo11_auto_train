@@ -138,8 +138,8 @@ class MainWindow(QMainWindow):
         # --- 左側面板 (Control Panel) ---
         self.side_bar = QWidget()
         self.side_bar.setObjectName("SideBar")  # 用於 CSS 定位
-        self.side_bar.setMinimumWidth(420)
-        self.side_bar.setMaximumWidth(480)
+        self.side_bar.setMinimumWidth(480)
+        self.side_bar.setMaximumWidth(520)
 
         side_outer = QVBoxLayout(self.side_bar)
         side_outer.setContentsMargins(0, 0, 0, 0)
@@ -224,11 +224,21 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(self.side_bar, 0)   # 固定寬度，不伸展
         main_layout.addWidget(self.dashboard, 1)  # 填滿剩餘空間
-        
+
         # Set up backward compatibility aliases
         self.tabs = self.log_viewer.tabs
         self.log_text = self.log_viewer.log_text
         self.config_text = self.log_viewer.config_text
+
+        # 統一設定所有 tab bar 屬性（必須在 QSS load 之後、所有 tab 加完之後）
+        for tab_widget in (
+            self.log_viewer.tabs,
+            self.config_editor.tabs,
+            self.color_panel.tabs,
+        ):
+            tab_widget.setElideMode(QtCore.Qt.ElideNone)
+            tab_widget.tabBar().setExpanding(False)
+            tab_widget.tabBar().setUsesScrollButtons(True)
 
         self._rebuild_status_items()
 

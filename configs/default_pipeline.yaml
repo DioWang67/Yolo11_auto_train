@@ -300,12 +300,19 @@ yolo_training:
     enabled: true
     dir_name: bundle
     base_dir: null
+    area: ~                               # null = fallback to deploy.area → position_validation.area → "A"
     include_weights: true
     include_detection_config: true
     include_position_config: true
     include_onnx: true
     include_results_csv: true
     include_args_yaml: true
+  deploy:
+    enabled: false                        # set true to auto-deploy after yolo_train
+    inference_models_dir: ../yolo11_inference/models  # path to inference models dir
+    product: ~                            # null = use yolo_training.name
+    area: ~                               # null = use yolo_training.position_validation.area
+    version: auto                         # "auto" = patch-increment from existing files, or e.g. "1.2.0"
 yolo_evaluation:
   weights: null
   imgsz: 640

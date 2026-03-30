@@ -613,6 +613,87 @@ class TestDetectionConfigExporter:
         assert "expected_items" in exported
         assert exported["expected_items"]["P1"]["Area1"] == ["ItemA", "ItemB"]
 
+    def test_extracts_expected_items_deduplicates_indexed_classes(self, tmp_path):
+        """Should strip #N suffix and deduplicate when building expected_items."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir()
+        (weights_dir / "best.pt").write_text("weights")
+
+        config = {
+            "yolo_training": {
+                "class_names": ["Black", "Red"],
+                "export_detection_config": {
+                    "enabled": True,
+                    "current_product": "P1",
+                    "area": "Area1",
+                    "position_config": {
+                        "P1": {
+                            "Area1": {
+                                "expected_boxes": {
+                                    "Black#0": {"x1": 10, "y1": 10, "x2": 50, "y2": 50},
+                                    "Black#1": {"x1": 100, "y1": 100, "x2": 150, "y2": 150},
+                                    "Red": {"x1": 200, "y1": 200, "x2": 250, "y2": 250},
+                                }
+                            }
+                        }
+                    },
+                },
+            }
+        }
+
+        logger = logging.getLogger("test")
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=True
+        )
+
+        with open(result_path, encoding="utf-8") as f:
+            exported = yaml.safe_load(f)
+
+        items = exported["expected_items"]["P1"]["Area1"]
+        assert items == ["Black", "Red"]
+
+    def test_extracts_expected_items_dedup_all_products(self, tmp_path):
+        """#N dedup works in the all-products path (no explicit product/area)."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir()
+        (weights_dir / "best.pt").write_text("weights")
+
+        config = {
+            "yolo_training": {
+                "class_names": ["LED"],
+                "export_detection_config": {
+                    "enabled": True,
+                    # No current_product/area → takes all-products path
+                    "position_config": {
+                        "Prod": {
+                            "ZoneA": {
+                                "expected_boxes": {
+                                    "LED#0": {"x1": 10, "y1": 10, "x2": 20, "y2": 20},
+                                    "LED#1": {"x1": 30, "y1": 30, "x2": 40, "y2": 40},
+                                    "LED#2": {"x1": 50, "y1": 50, "x2": 60, "y2": 60},
+                                }
+                            }
+                        }
+                    },
+                },
+            }
+        }
+
+        logger = logging.getLogger("test")
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=True
+        )
+
+        with open(result_path, encoding="utf-8") as f:
+            exported = yaml.safe_load(f)
+
+        items = exported["expected_items"]["Prod"]["ZoneA"]
+        assert items == ["LED"]
+
     def test_generates_expected_items_from_class_names(self, tmp_path):
         """Should generate expected_items from class_names if no position config."""
         run_dir = tmp_path / "run"

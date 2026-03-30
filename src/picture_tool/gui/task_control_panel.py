@@ -109,10 +109,12 @@ class TaskControlPanel(QWidget):
         # Feedback Labels
         self.task_summary_label = QLabel("尚未選擇任務")
         self.task_summary_label.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
+        self.task_summary_label.setWordWrap(True)
         layout.addWidget(self.task_summary_label)
 
         self.task_feedback_label = QLabel("")
         self.task_feedback_label.setStyleSheet("color: #4D96FF; font-size: 9pt;")
+        self.task_feedback_label.setWordWrap(True)
         layout.addWidget(self.task_feedback_label)
 
         self.dependency_label = QLabel("")
@@ -139,12 +141,18 @@ class TaskControlPanel(QWidget):
 
     def _select_all_tasks(self) -> None:
         for checkbox in self.task_checkboxes.values():
+            checkbox.blockSignals(True)
             checkbox.setChecked(True)
+            checkbox.blockSignals(False)
+        self._on_tasks_changed()
         self._show_task_feedback("已全選所有任務。")
 
     def _clear_all_tasks(self) -> None:
         for checkbox in self.task_checkboxes.values():
+            checkbox.blockSignals(True)
             checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+        self._on_tasks_changed()
         self._show_task_feedback("已清除所有勾選。", color="#aaaaaa")
 
     def _update_task_summary(self) -> None:
@@ -208,8 +216,12 @@ class TaskControlPanel(QWidget):
                 self.log_message.emit(f"[WARNING] 預設「{name}」包含未知任務：{t}")
         
         for key, checkbox in self.task_checkboxes.items():
+            checkbox.blockSignals(True)
             checkbox.setChecked(key in normalized)
-            
+            checkbox.blockSignals(False)
+
+        self._on_tasks_changed()
+
         preset_labels = [TASK_OPTIONS_MAP.get(k, k) for k in normalized]
         src = (
             f"(來源: {self.preset_source.name})"

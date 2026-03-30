@@ -33,7 +33,7 @@ class LogViewer(QWidget):
         self.config_text = QTextEdit()
         self.config_text.setReadOnly(True)
         self.config_text.setFont(QtGui.QFont("Consolas", 9))
-        self.tabs.addTab(self.config_text, "Config Preview (YAML)")
+        self.tabs.addTab(self.config_text, "Config YAML")
 
         # NOTE: Layout 由 parent (MainWindow) 控制，這裡不設置
 

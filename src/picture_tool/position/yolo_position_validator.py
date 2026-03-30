@@ -41,6 +41,18 @@ class ExpectedBox:
     y1: float
     x2: float
     y2: float
+    cx: Optional[float] = None
+    cy: Optional[float] = None
+    sigma_cx: float = 0.0
+    sigma_cy: float = 0.0
+    count: int = 0
+    tolerance: Optional[float] = None  # per-class tolerance override (percent)
+
+    def center(self) -> Tuple[float, float]:
+        """Return the expected center (precomputed or derived from bbox)."""
+        ecx = self.cx if self.cx is not None else (self.x1 + self.x2) / 2.0
+        ecy = self.cy if self.cy is not None else (self.y1 + self.y2) / 2.0
+        return ecx, ecy
 
     def as_tuple(self) -> BBox:
         return (self.x1, self.y1, self.x2, self.y2)
@@ -58,10 +70,20 @@ class ExpectedBox:
         return x1 <= cx <= x2 and y1 <= cy <= y2
 
 
+def _base_class_name(key: str) -> str:
+    """Strip ``#N`` instance index suffix from a class key."""
+    idx = key.rfind("#")
+    if idx > 0:
+        suffix = key[idx + 1:]
+        if suffix.isdigit():
+            return key[:idx]
+    return key
+
+
 @dataclass
 class PositionAreaConfig:
     enabled: bool = True
-    mode: str = "bbox"
+    mode: str = "center"
     tolerance: float = 0.0
     expected_boxes: Mapping[str, ExpectedBox] = field(default_factory=dict)
 
@@ -123,17 +145,33 @@ def load_position_config(
                     if not isinstance(box, Mapping):
                         continue
                     try:
-                        boxes[class_name] = ExpectedBox(
-                            float(box.get("x1", 0.0)),
-                            float(box.get("y1", 0.0)),
-                            float(box.get("x2", 0.0)),
-                            float(box.get("y2", 0.0)),
+                        eb = ExpectedBox(
+                            x1=float(box.get("x1", 0.0)),
+                            y1=float(box.get("y1", 0.0)),
+                            x2=float(box.get("x2", 0.0)),
+                            y2=float(box.get("y2", 0.0)),
                         )
+                        # Parse optional statistical / override fields
+                        if "cx" in box:
+                            eb.cx = float(box["cx"])
+                        if "cy" in box:
+                            eb.cy = float(box["cy"])
+                        if "sigma_cx" in box:
+                            eb.sigma_cx = float(box["sigma_cx"])
+                        if "sigma_cy" in box:
+                            eb.sigma_cy = float(box["sigma_cy"])
+                        if "count" in box:
+                            eb.count = int(box["count"])
+                        if "tolerance" in box:
+                            eb.tolerance = float(box["tolerance"])
+                        boxes[class_name] = eb
                     except (TypeError, ValueError):
                         continue
+            # Accept both legacy "bbox" and new "center" mode names
+            mode = str(cfg.get("mode", "center"))
             product_map[str(area)] = PositionAreaConfig(
                 enabled=bool(cfg.get("enabled", True)),
-                mode=str(cfg.get("mode", "bbox")),
+                mode=mode,
                 tolerance=float(cfg.get("tolerance", 0.0)),
                 expected_boxes=boxes,
             )
@@ -251,6 +289,60 @@ def _select_best_detection(
     return best
 
 
+def _greedy_match(
+    expected_entries: List[Tuple[str, ExpectedBox]],
+    det_candidates: List[Dict[str, Any]],
+    imgsz_int: int,
+    default_tolerance_px: float,
+) -> Tuple[
+    List[Tuple[str, ExpectedBox, Dict[str, Any]]],  # matched
+    List[str],                                        # unmatched expected keys
+    List[Dict[str, Any]],                             # unmatched detections
+]:
+    """Greedy nearest-neighbor matching by Euclidean center distance.
+
+    For each (expected, detection) pair, compute distance and greedily assign
+    the closest pair first. O(N*M) which is fine for small N, M (< 20).
+    """
+    if not expected_entries or not det_candidates:
+        unmatched_exp = [key for key, _ in expected_entries]
+        return [], unmatched_exp, list(det_candidates)
+
+    # Build all candidate pairs with distances
+    pairs: List[Tuple[float, int, int]] = []
+    for ei, (_, ebox) in enumerate(expected_entries):
+        ecx, ecy = ebox.center()
+        for di, det in enumerate(det_candidates):
+            dcx = det.get("cx")
+            dcy = det.get("cy")
+            if dcx is None or dcy is None:
+                continue
+            dist = ((float(dcx) - ecx) ** 2 + (float(dcy) - ecy) ** 2) ** 0.5
+            pairs.append((dist, ei, di))
+
+    pairs.sort(key=lambda t: t[0])
+
+    matched_exp: set = set()
+    matched_det: set = set()
+    matched: List[Tuple[str, ExpectedBox, Dict[str, Any]]] = []
+
+    for _, ei, di in pairs:
+        if ei in matched_exp or di in matched_det:
+            continue
+        matched_exp.add(ei)
+        matched_det.add(di)
+        key, ebox = expected_entries[ei]
+        matched.append((key, ebox, det_candidates[di]))
+
+    unmatched_exp_keys = [
+        expected_entries[ei][0] for ei in range(len(expected_entries)) if ei not in matched_exp
+    ]
+    unmatched_dets = [
+        det_candidates[di] for di in range(len(det_candidates)) if di not in matched_det
+    ]
+    return matched, unmatched_exp_keys, unmatched_dets
+
+
 def validate_detections_against_area(
     detections: Sequence[Dict[str, Any]],
     area_cfg: PositionAreaConfig,
@@ -274,7 +366,7 @@ def validate_detections_against_area(
             wrong=[],
             unknown=[],
         )
-    if area_cfg.mode not in {"bbox", "box"}:
+    if area_cfg.mode not in {"bbox", "box", "center"}:
         raise ValueError(f"Unsupported position validation mode: {area_cfg.mode}")
     imgsz_int = _imgsz_value(imgsz)
     tol_percent = (
@@ -282,69 +374,136 @@ def validate_detections_against_area(
         if tolerance_override is not None
         else float(area_cfg.tolerance)
     )
-    tolerance_px = imgsz_int * (tol_percent / 100.0)
-    expected_items = list(area_cfg.expected_boxes.items())
-    expected_names = {name for name, _ in expected_items}
+    default_tolerance_px = imgsz_int * (tol_percent / 100.0)
+
+    # Group expected boxes by base class name for multi-instance matching
+    from collections import defaultdict
+    base_class_groups: Dict[str, List[Tuple[str, ExpectedBox]]] = defaultdict(list)
+    for key, ebox in area_cfg.expected_boxes.items():
+        base = _base_class_name(key)
+        base_class_groups[base].append((key, ebox))
+
+    # Group detections by class name
+    det_by_class: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for det in detections:
+        cls = str(det.get("class", ""))
+        det_by_class[cls].append(det)
+
+    expected_base_names = set(base_class_groups.keys())
     results: List[Dict[str, Any]] = []
     missing: List[str] = []
     unexpected: List[str] = []
     wrong: List[str] = []
     unknown: List[str] = []
 
-    for class_name, expected_box in expected_items:
-        det = _select_best_detection(detections, class_name)
-        if det is None:
-            missing.append(class_name)
-            results.append(
-                {
-                    "class": class_name,
-                    "status": "MISSING",
-                    "expected_box": list(expected_box.as_tuple()),
-                }
-            )
-            continue
-        entry = {
-            "class": class_name,
-            "class_id": det.get("class_id"),
-            "confidence": det.get("confidence"),
-            "bbox": det.get("bbox"),
-            "cx": det.get("cx"),
-            "cy": det.get("cy"),
-        }
-        cx = det.get("cx")
-        cy = det.get("cy")
-        if cx is None or cy is None:
-            entry["status"] = "UNKNOWN"
-            unknown.append(class_name)
-        else:
-            if expected_box.contains(
-                float(cx), float(cy), tolerance_px, float(imgsz_int)
-            ):
-                entry["status"] = "CORRECT"
-            else:
-                entry["status"] = "WRONG"
-                entry["expected_box"] = list(expected_box.as_tuple())
-                entry["allowed_box"] = list(
-                    expected_box.expand(tolerance_px, float(imgsz_int))
-                )
-                wrong.append(class_name)
-        results.append(entry)
+    for base_class, expected_entries in base_class_groups.items():
+        candidates = det_by_class.pop(base_class, [])
 
-    for det in detections:
-        class_name = str(det.get("class"))
-        if class_name in expected_names:
+        if len(expected_entries) == 1 and not any("#" in k for k, _ in expected_entries):
+            # Single-instance path: keep backward-compatible behavior
+            key, ebox = expected_entries[0]
+            det = _select_best_detection(candidates, base_class) if candidates else None
+            if det is None:
+                missing.append(key)
+                results.append({
+                    "class": key, "status": "MISSING",
+                    "expected_box": list(ebox.as_tuple()),
+                })
+                continue
+            entry = {
+                "class": key,
+                "class_id": det.get("class_id"),
+                "confidence": det.get("confidence"),
+                "bbox": det.get("bbox"),
+                "cx": det.get("cx"), "cy": det.get("cy"),
+            }
+            cx, cy = det.get("cx"), det.get("cy")
+            if cx is None or cy is None:
+                entry["status"] = "UNKNOWN"
+                unknown.append(key)
+            else:
+                class_tol_px = (
+                    imgsz_int * (ebox.tolerance / 100.0)
+                    if ebox.tolerance is not None
+                    else default_tolerance_px
+                )
+                if ebox.contains(float(cx), float(cy), class_tol_px, float(imgsz_int)):
+                    entry["status"] = "CORRECT"
+                else:
+                    entry["status"] = "WRONG"
+                    entry["expected_box"] = list(ebox.as_tuple())
+                    entry["allowed_box"] = list(ebox.expand(class_tol_px, float(imgsz_int)))
+                    wrong.append(key)
+            results.append(entry)
+        else:
+            # Multi-instance path: greedy matching
+            matched, unmatched_keys, unmatched_dets = _greedy_match(
+                expected_entries, candidates, imgsz_int, default_tolerance_px
+            )
+            for key in unmatched_keys:
+                ebox_miss = dict(area_cfg.expected_boxes).get(key)
+                missing.append(key)
+                results.append({
+                    "class": key, "status": "MISSING",
+                    "expected_box": list(ebox_miss.as_tuple()) if ebox_miss else [],
+                })
+
+            for key, ebox, det in matched:
+                entry = {
+                    "class": key,
+                    "class_id": det.get("class_id"),
+                    "confidence": det.get("confidence"),
+                    "bbox": det.get("bbox"),
+                    "cx": det.get("cx"), "cy": det.get("cy"),
+                }
+                cx, cy = det.get("cx"), det.get("cy")
+                if cx is None or cy is None:
+                    entry["status"] = "UNKNOWN"
+                    unknown.append(key)
+                else:
+                    class_tol_px = (
+                        imgsz_int * (ebox.tolerance / 100.0)
+                        if ebox.tolerance is not None
+                        else default_tolerance_px
+                    )
+                    if ebox.contains(float(cx), float(cy), class_tol_px, float(imgsz_int)):
+                        entry["status"] = "CORRECT"
+                    else:
+                        entry["status"] = "WRONG"
+                        entry["expected_box"] = list(ebox.as_tuple())
+                        entry["allowed_box"] = list(ebox.expand(class_tol_px, float(imgsz_int)))
+                        wrong.append(key)
+                results.append(entry)
+
+            # Unmatched detections from this base class are not unexpected —
+            # they are extra instances beyond the expected count
+            for det in unmatched_dets:
+                entry = {
+                    "class": str(det.get("class")),
+                    "class_id": det.get("class_id"),
+                    "confidence": det.get("confidence"),
+                    "bbox": det.get("bbox"),
+                    "cx": det.get("cx"), "cy": det.get("cy"),
+                    "status": "UNEXPECTED",
+                }
+                results.append(entry)
+                unexpected.append(str(det.get("class")))
+
+    # Any remaining detection classes not in expected_base_names are unexpected
+    for cls, dets in det_by_class.items():
+        if cls in expected_base_names:
             continue
-        entry = {
-            "class": class_name,
-            "class_id": det.get("class_id"),
-            "confidence": det.get("confidence"),
-            "bbox": det.get("bbox"),
-            "cx": det.get("cx"),
-            "cy": det.get("cy"),
-            "status": "UNEXPECTED",
-        }
-        results.append(entry)
-        unexpected.append(class_name)
+        for det in dets:
+            entry = {
+                "class": cls,
+                "class_id": det.get("class_id"),
+                "confidence": det.get("confidence"),
+                "bbox": det.get("bbox"),
+                "cx": det.get("cx"), "cy": det.get("cy"),
+                "status": "UNEXPECTED",
+            }
+            results.append(entry)
+            unexpected.append(cls)
 
     status = "PASS"
     if missing or wrong or unexpected or unknown:

@@ -262,9 +262,12 @@ class DetectionConfigExporter:
                         if isinstance(area_block, Mapping):
                             boxes = area_block.get("expected_boxes")
                             if isinstance(boxes, Mapping) and boxes:
+                                base_names = list(dict.fromkeys(
+                                    name.split("#")[0] for name in boxes.keys()
+                                ))
                                 expected_items = {
                                     product_key: {
-                                        area_key: [str(name) for name in boxes.keys()]
+                                        area_key: base_names
                                     }
                                 }
                 else:
@@ -278,9 +281,9 @@ class DetectionConfigExporter:
                                 continue
                             boxes = area_cfg.get("expected_boxes")
                             if isinstance(boxes, Mapping) and boxes:
-                                area_map[str(area_key)] = [
-                                    str(name) for name in boxes.keys()
-                                ]
+                                area_map[str(area_key)] = list(dict.fromkeys(
+                                    name.split("#")[0] for name in boxes.keys()
+                                ))
                         if area_map:
                             collected[str(prod_key)] = area_map
                     if collected:
