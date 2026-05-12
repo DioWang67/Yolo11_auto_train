@@ -13,26 +13,51 @@ except ImportError:
 
 from picture_tool.utils.normalization import normalize_imgsz
 
+SUPPORTED_RUNTIME_FORMATS = {"onnx", "openvino", "engine", "torchscript"}
+
 
 class OnnxExporter:
     @staticmethod
     def export(
         config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger
     ) -> Optional[Path]:
-        """Export trained weights to ONNX when enabled, with robust error handling and validation."""
+        """Export trained YOLO weights to a configured runtime artifact.
+
+        Legacy configs can keep using ``yolo_training.export_onnx``. Newer
+        deployment configs may use ``yolo_training.export_runtime`` with
+        ``format: onnx|openvino|engine|torchscript``. ONNX keeps the stricter
+        validation path because it is the existing production behavior.
+        """
         ycfg = config.get("yolo_training", {})
         if not isinstance(ycfg, dict):
             return None
-        export_cfg = ycfg.get("export_onnx")
+        export_cfg = ycfg.get("export_runtime")
+        legacy_onnx_cfg = False
+        if export_cfg is None:
+            export_cfg = ycfg.get("export_onnx")
+            legacy_onnx_cfg = True
         if not isinstance(export_cfg, dict) or export_cfg.get("enabled", True) is False:
             return None
+
+        export_format = str(export_cfg.get("format") or "onnx").lower()
+        if legacy_onnx_cfg:
+            export_format = "onnx"
+        if export_format not in SUPPORTED_RUNTIME_FORMATS:
+            supported = ", ".join(sorted(SUPPORTED_RUNTIME_FORMATS))
+            logger.error("YOLO export skipped: unsupported format %r.", export_format)
+            raise ValueError(
+                f"Unsupported YOLO export format: {export_format}. "
+                f"Use one of: {supported}"
+            )
+        if bool(export_cfg.get("half", False)) and bool(export_cfg.get("int8", False)):
+            raise ValueError("Use either half precision or int8 quantization, not both.")
 
         cwd = Path.cwd()
 
         # 1. Fail-fast dependency checks
         import importlib.util
 
-        if importlib.util.find_spec("onnx") is None:
+        if export_format == "onnx" and importlib.util.find_spec("onnx") is None:
             logger.error("ONNX export failed: 'onnx' package not found.")
             raise ImportError(
                 "ONNX export requires package onnx. Install via: pip install onnx"
@@ -65,9 +90,10 @@ class OnnxExporter:
             half = bool(export_cfg.get("half", False))
             dynamic = bool(export_cfg.get("dynamic", False))
             simplify = bool(export_cfg.get("simplify", False))
+            int8 = bool(export_cfg.get("int8", False))
 
             # Check onnxsim availability if simplify requested
-            if simplify:
+            if export_format == "onnx" and simplify:
                 import importlib.util
 
                 if importlib.util.find_spec("onnxsim") is None:
@@ -78,23 +104,27 @@ class OnnxExporter:
                     simplify = False
 
             export_kwargs: Dict[str, Any] = {
-                "format": "onnx",
+                "format": export_format,
                 "imgsz": imgsz_arg,
                 "device": device,
-                "half": half,
                 "dynamic": dynamic,
-                "simplify": simplify,
             }
+            if half:
+                export_kwargs["half"] = True
+            if int8:
+                export_kwargs["int8"] = True
+            if export_format == "onnx":
+                export_kwargs["simplify"] = simplify
 
             opset_val = export_cfg.get("opset")
-            if opset_val is not None:
+            if export_format == "onnx" and opset_val is not None:
                 try:
                     export_kwargs["opset"] = int(opset_val)
                 except (TypeError, ValueError):
-                    logger.warning("ONNX export: invalid opset %r, ignoring", opset_val)
+                    logger.warning("YOLO export: invalid opset %r, ignoring", opset_val)
 
             # 3. Execution with detailed logging
-            logger.info(f"Starting ONNX export from {cwd}")
+            logger.info("Starting YOLO %s export from %s", export_format, cwd)
             logger.info(f"Export args: model={weights_path}, kwargs={export_kwargs}")
 
             try:
@@ -102,7 +132,7 @@ class OnnxExporter:
                 result_path = model.export(**export_kwargs)
                 logger.info(f"Ultralytics export returned: {result_path}")
             except (RuntimeError, OSError, AttributeError) as exc:
-                logger.error(f"ONNX export runtime error: {exc}")
+                logger.error("YOLO %s export runtime error: %s", export_format, exc)
                 raise
 
             # 4. Path Resolution Strategy
@@ -116,40 +146,53 @@ class OnnxExporter:
                     pass
 
             # Candidate B: Derived from weights path
-            derived = weights_path.with_suffix(".onnx")
-            candidates.append(derived.resolve())
+            candidates.extend(_derived_export_candidates(weights_path, export_format))
 
             # Candidate C: Search in weights dir
             weights_dir = weights_path.parent
             if weights_dir.exists():
-                found_onnx = sorted(
-                    weights_dir.glob("*.onnx"),
+                found_artifacts = sorted(
+                    _iter_export_artifacts(
+                        weights_dir,
+                        weights_path.stem,
+                        export_format,
+                    ),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
-                candidates.extend([p.resolve() for p in found_onnx])
+                candidates.extend([p.resolve() for p in found_artifacts])
 
             export_path: Optional[Path] = None
             seen = set()
-            logger.info("Resolving ONNX path from candidates:")
+            logger.info("Resolving YOLO %s export path from candidates:", export_format)
             for cand in candidates:
                 if cand in seen:
                     continue
                 seen.add(cand)
-                exists = cand.exists() and cand.stat().st_size > 0
+                exists = _artifact_exists(cand)
                 status = "FOUND" if exists else "MISSING/EMPTY"
                 logger.info(f"  - {cand} [{status}]")
                 if export_path is None and exists:
                     export_path = cand
 
             if not export_path:
-                msg = f"ONNX export appeared to succeed but output file not found. Searched: {[str(c) for c in seen]}"
+                msg = (
+                    f"YOLO {export_format} export appeared to succeed but output "
+                    f"artifact not found. Searched: {[str(c) for c in seen]}"
+                )
                 logger.error(msg)
                 raise FileNotFoundError(msg)
 
-            logger.info(f"Resolved valid ONNX path: {export_path}")
+            logger.info(
+                "Resolved valid YOLO %s export path: %s",
+                export_format,
+                export_path,
+            )
 
             # 5. Validation using helper
+            if export_format != "onnx":
+                return export_path
+
             try:
                 from picture_tool.utils.onnx_validation import (
                     validate_onnx_structure,
@@ -172,5 +215,42 @@ class OnnxExporter:
             return export_path
 
         except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
-            logger.exception(f"ONNX export process failed: {e}")
+            logger.exception("YOLO export process failed: %s", e)
             return None
+
+
+def _derived_export_candidates(weights_path: Path, export_format: str) -> list[Path]:
+    if export_format == "onnx":
+        return [weights_path.with_suffix(".onnx").resolve()]
+    if export_format == "openvino":
+        return [(weights_path.parent / f"{weights_path.stem}_openvino_model").resolve()]
+    if export_format == "engine":
+        return [weights_path.with_suffix(".engine").resolve()]
+    if export_format == "torchscript":
+        return [weights_path.with_suffix(".torchscript").resolve()]
+    return []
+
+
+def _iter_export_artifacts(
+    weights_dir: Path,
+    stem: str,
+    export_format: str,
+) -> list[Path]:
+    if export_format == "onnx":
+        return list(weights_dir.glob("*.onnx"))
+    if export_format == "openvino":
+        return [p for p in weights_dir.glob(f"{stem}*_openvino_model") if p.is_dir()]
+    if export_format == "engine":
+        return list(weights_dir.glob("*.engine"))
+    if export_format == "torchscript":
+        return list(weights_dir.glob("*.torchscript"))
+    return []
+
+
+def _artifact_exists(path: Path) -> bool:
+    if path.is_dir():
+        try:
+            return any(path.iterdir())
+        except OSError:
+            return False
+    return path.exists() and path.stat().st_size > 0

@@ -181,6 +181,61 @@ class TestOnnxExporterExport:
         assert call_kwargs["imgsz"] == 640
         assert result is not None
 
+    def test_export_runtime_openvino_resolves_directory(self, tmp_path, monkeypatch):
+        """Should export OpenVINO through export_runtime without ONNX validation."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir()
+        (weights_dir / "best.pt").write_text("weights")
+        openvino_dir = weights_dir / "best_openvino_model"
+        openvino_dir.mkdir()
+        (openvino_dir / "best.xml").write_text("<xml/>")
+
+        config = {
+            "yolo_training": {
+                "export_runtime": {
+                    "enabled": True,
+                    "format": "openvino",
+                    "weights_name": "best.pt",
+                    "imgsz": 640,
+                    "device": "cpu",
+                }
+            }
+        }
+
+        mock_model = MagicMock()
+        mock_model.export.return_value = str(openvino_dir)
+        mock_yolo_class = MagicMock(return_value=mock_model)
+        monkeypatch.setattr("picture_tool.utils.onnx_exporter.YOLO", mock_yolo_class)
+
+        logger = logging.getLogger("test")
+        result = OnnxExporter.export(config, run_dir, logger)
+
+        assert result == openvino_dir.resolve()
+        assert mock_model.export.call_args.kwargs["format"] == "openvino"
+
+    def test_export_runtime_rejects_conflicting_precision_modes(self, tmp_path):
+        """Should reject mutually exclusive half and int8 export settings."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        config = {
+            "yolo_training": {
+                "export_runtime": {
+                    "enabled": True,
+                    "format": "openvino",
+                    "half": True,
+                    "int8": True,
+                }
+            }
+        }
+
+        logger = logging.getLogger("test")
+        with pytest.raises(ValueError, match="either half precision or int8"):
+            OnnxExporter.export(config, run_dir, logger)
+
     def test_handles_export_errors_gracefully(self, tmp_path, monkeypatch):
         """Should return None when export raises exception."""
         run_dir = tmp_path / "run"

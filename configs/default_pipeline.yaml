@@ -296,6 +296,15 @@ yolo_training:
     dynamic: false
     simplify: false
     opset: null
+  export_runtime:
+    enabled: false                         # optional replacement for export_onnx
+    format: openvino                       # onnx, openvino, engine, torchscript
+    weights_name: best.pt
+    imgsz: null
+    device: cpu
+    half: false
+    int8: false
+    dynamic: false
   artifact_bundle:
     enabled: true
     dir_name: bundle

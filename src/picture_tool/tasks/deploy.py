@@ -218,11 +218,18 @@ def run_deploy(config: dict, args: Any) -> None:
         logger.error("best.pt not found in %s — weights not deployed.", run_dir / "weights")
         return
 
-    for fname in ["last.pt", "best.onnx"]:
+    for fname in ["last.pt", "best.onnx", "best.engine", "best.torchscript"]:
         src = run_dir / "weights" / fname
         if src.exists():
             shutil.copy2(src, weights_dest / fname)
             logger.info("Copied %s.", fname)
+
+    for src_dir in _iter_export_dirs(run_dir / "weights"):
+        dest_export_dir = weights_dest / src_dir.name
+        if dest_export_dir.exists():
+            shutil.rmtree(dest_export_dir)
+        shutil.copytree(src_dir, dest_export_dir)
+        logger.info("Copied exported runtime directory %s.", src_dir.name)
 
     # ------------------------------------------------------------------
     # Copy colour statistics — use the filename referenced in config so
@@ -281,3 +288,14 @@ def run_deploy(config: dict, args: Any) -> None:
 
 
 TASKS: List[Any] = []
+
+
+def _iter_export_dirs(weights_dir: Path) -> list[Path]:
+    """Return directory-based YOLO runtime artifacts created by Ultralytics."""
+    if not weights_dir.exists():
+        return []
+    return sorted(
+        path
+        for path in weights_dir.iterdir()
+        if path.is_dir() and path.name.endswith("_openvino_model")
+    )
