@@ -540,7 +540,9 @@ class AnnotationPanel(QWidget):
             )
             self.message_logged.emit("[INFO] Launched LabelImg")
         else:
-            QMessageBox.critical(self, "錯誤", "啟動 LabelImg 失敗！")
+            error_detail = self.labelimg_launcher.last_error or "請查看應用程式 log。"
+            QMessageBox.critical(self, "錯誤", f"啟動 LabelImg 失敗！\n\n{error_detail}")
+            self.message_logged.emit(f"[ERROR] Failed to launch LabelImg: {error_detail}")
 
     def _validate_annotations(self) -> None:
         """Validate annotation files."""

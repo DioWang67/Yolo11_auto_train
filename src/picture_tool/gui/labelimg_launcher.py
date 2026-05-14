@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import IO, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,8 @@ class LabelImgLauncher:
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
         self.labelimg_executable = self._find_labelimg()
+        self.last_error: Optional[str] = None
+        self.last_log_path: Optional[Path] = None
 
     def _find_labelimg(self) -> Optional[str]:
         """Find LabelImg executable in the system."""
@@ -109,12 +113,17 @@ class LabelImgLauncher:
         Returns:
             True if launched successfully, False otherwise
         """
+        self.last_error = None
+        self.last_log_path = None
+
         if not self.is_installed():
-            logger.error("LabelImg is not installed")
+            self.last_error = "LabelImg is not installed"
+            logger.error(self.last_error)
             return False
 
         if not input_dir.exists():
-            logger.error(f"Input directory does not exist: {input_dir}")
+            self.last_error = f"Input directory does not exist: {input_dir}"
+            logger.error(self.last_error)
             return False
 
         try:
@@ -137,22 +146,82 @@ class LabelImgLauncher:
 
             logger.info(f"Launching LabelImg with command: {' '.join(cmd)}")
 
-            # Launch as subprocess
+            log_path = output_dir.parent / "labelimg_launch.log"
+            stdout_log, stderr_log = self._open_launch_logs(log_path)
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+
             self.process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=stdout_log,
+                stderr=stderr_log,
                 cwd=str(Path(str(self.labelimg_executable)).parent)
                 if str(self.labelimg_executable).endswith(".py")
                 else None,
+                creationflags=creationflags,
             )
+            stdout_log.close()
+            stderr_log.close()
+            self.last_log_path = log_path
 
             logger.info(f"LabelImg launched with PID: {self.process.pid}")
+            time.sleep(1.5)
+            exit_code = self.process.poll()
+            if exit_code is not None:
+                detail = self._read_launch_log(log_path)
+                self.last_error = (
+                    f"LabelImg exited immediately with code {exit_code}."
+                    f" See log: {log_path}"
+                )
+                if detail:
+                    self.last_error = f"{self.last_error}\n{detail}"
+                logger.error(self.last_error)
+                return False
+
             return True
 
         except (OSError, RuntimeError, FileNotFoundError) as e:
-            logger.error(f"Failed to launch LabelImg: {e}")
+            self.last_error = f"Failed to launch LabelImg: {e}"
+            logger.error(self.last_error)
             return False
+
+    def _open_launch_logs(self, log_path: Path) -> tuple[IO[str], IO[str]]:
+        """Open stdout/stderr log handles for the LabelImg subprocess.
+
+        Args:
+            log_path: File path used for both stdout and stderr diagnostics.
+
+        Returns:
+            A pair of writable text file handles for stdout and stderr.
+
+        Raises:
+            OSError: If the parent directory cannot be created or the log cannot be opened.
+        """
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout_log = open(log_path, "w", encoding="utf-8")
+        stderr_log = open(log_path, "a", encoding="utf-8")
+        stdout_log.write("=== labelImg stdout ===\n")
+        stdout_log.flush()
+        stderr_log.write("\n=== labelImg stderr ===\n")
+        stderr_log.flush()
+        return stdout_log, stderr_log
+
+    def _read_launch_log(self, log_path: Path, max_chars: int = 2000) -> str:
+        """Read a bounded diagnostic tail from the LabelImg launch log.
+
+        Args:
+            log_path: Launch log path.
+            max_chars: Maximum number of trailing characters to return.
+
+        Returns:
+            Bounded log text, or an empty string if unavailable.
+        """
+        try:
+            content = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return content[-max_chars:].strip()
 
     def is_running(self) -> bool:
         """Check if LabelImg process is still running."""
