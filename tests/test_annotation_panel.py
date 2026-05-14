@@ -12,6 +12,17 @@ def manager_mock():
     m.config = {"yolo_training": {"class_names": ["cat", "dog"]}}
     return m
 
+@pytest.fixture(autouse=True)
+def empty_qsettings(monkeypatch):
+    class EmptySettings:
+        def value(self, key, default=None, **kwargs):
+            return default
+
+        def setValue(self, key, value):
+            return None
+
+    monkeypatch.setattr("picture_tool.gui.annotation_panel.QtCore.QSettings", EmptySettings)
+
 @pytest.fixture
 def panel(qtbot, manager_mock):
     widget = AnnotationPanel(manager=manager_mock)
@@ -66,6 +77,75 @@ def test_import_classes_from_config(panel, qtbot, monkeypatch):
     assert "cat" in panel.annotation_classes
     assert "dog" in panel.annotation_classes
     assert panel.annotation_class_list.count() == 2
+
+def test_read_classes_file_deduplicates_and_ignores_blank_lines(panel, tmp_path):
+    classes_file = tmp_path / "classes.txt"
+    classes_file.write_text("\ncat\n# comment\ndog\ncat\n\n", encoding="utf-8")
+
+    assert panel._read_classes_file(classes_file) == ["cat", "dog"]
+
+def test_read_classes_file_rejects_empty_file(panel, tmp_path):
+    classes_file = tmp_path / "classes.txt"
+    classes_file.write_text("\n# comment\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="沒有有效標籤"):
+        panel._read_classes_file(classes_file)
+
+def test_import_classes_from_file_dialog(panel, qtbot, monkeypatch, tmp_path):
+    classes_file = tmp_path / "classes.txt"
+    classes_file.write_text("cat\ndog\ncat\n", encoding="utf-8")
+    info_mock = MagicMock()
+    saved_settings = {}
+
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (str(classes_file), ""),
+    )
+    monkeypatch.setattr("PyQt5.QtWidgets.QMessageBox.information", info_mock)
+    monkeypatch.setattr(
+        panel,
+        "_save_annotation_setting",
+        lambda key, value: saved_settings.setdefault(key, value),
+    )
+
+    with qtbot.waitSignal(panel.message_logged):
+        panel._import_classes_from_file_dialog()
+
+    assert panel.annotation_classes == ["cat", "dog"]
+    assert panel.annotation_class_list.count() == 2
+    assert saved_settings["last_classes_file"] == str(classes_file)
+
+def test_browse_annotation_paths_remembers_selection(panel, monkeypatch, tmp_path):
+    input_dir = tmp_path / "images"
+    output_dir = tmp_path / "labels"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    saved_settings = {}
+
+    monkeypatch.setattr(panel, "_scan_annotation_progress", MagicMock())
+    monkeypatch.setattr(
+        panel,
+        "_save_annotation_setting",
+        lambda key, value: saved_settings.setdefault(key, value),
+    )
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(input_dir),
+    )
+
+    panel._browse_annotation_input()
+
+    monkeypatch.setattr(
+        "PyQt5.QtWidgets.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(output_dir),
+    )
+
+    panel._browse_annotation_output()
+
+    assert panel.annotation_input_dir == input_dir
+    assert panel.annotation_output_dir == output_dir
+    assert saved_settings["input_dir"] == str(input_dir)
+    assert saved_settings["output_dir"] == str(output_dir)
 
 def test_delete_class(panel, monkeypatch, qtbot):
     panel.annotation_classes = ["ToDie"]

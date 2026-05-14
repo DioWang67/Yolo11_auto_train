@@ -54,6 +54,7 @@ class AnnotationPanel(QWidget):
         
         # Build UI
         self._build_ui()
+        self._load_annotation_settings()
 
     def _build_ui(self) -> None:
         """Build the annotation management tab (exact copy of original layout)."""
@@ -104,6 +105,9 @@ class AnnotationPanel(QWidget):
         import_btn = QPushButton("📥 從配置導入")
         import_btn.clicked.connect(self._import_classes_from_config)
 
+        import_file_btn = QPushButton("匯入標籤檔")
+        import_file_btn.clicked.connect(self._import_classes_from_file_dialog)
+
         save_btn = QPushButton("💾 儲存類別")
         save_btn.setObjectName("SuccessBtn")
         save_btn.clicked.connect(self._save_annotation_classes)
@@ -112,7 +116,8 @@ class AnnotationPanel(QWidget):
         btn_layout.addWidget(edit_btn, 0, 1)
         btn_layout.addWidget(delete_btn, 1, 0)
         btn_layout.addWidget(import_btn, 1, 1)
-        btn_layout.addWidget(save_btn, 2, 0, 1, 2)
+        btn_layout.addWidget(import_file_btn, 2, 0, 1, 2)
+        btn_layout.addWidget(save_btn, 3, 0, 1, 2)
 
         layout.addLayout(btn_layout)
         layout.addStretch()
@@ -324,6 +329,41 @@ class AnnotationPanel(QWidget):
         else:
             QMessageBox.information(self, "完成", "所有類別已存在，無需導入。")
 
+    def _import_classes_from_file_dialog(self) -> None:
+        """Import LabelImg class names from a user-selected text file."""
+        start_dir = self._default_class_file_dialog_dir()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "選擇標籤檔",
+            str(start_dir),
+            "Label files (*.txt *.names);;All files (*.*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            imported_classes = self._read_classes_file(Path(file_path))
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "匯入失敗", str(e))
+            self.message_logged.emit(f"[ERROR] Failed to import classes from file: {e}")
+            return
+
+        added = self._merge_annotation_classes(imported_classes)
+        self._refresh_class_list()
+        self._save_annotation_setting("last_classes_file", file_path)
+
+        if added:
+            QMessageBox.information(
+                self,
+                "匯入完成",
+                f"已匯入 {len(added)} 個新標籤：\n" + ", ".join(added),
+            )
+            self.message_logged.emit(
+                f"[INFO] Imported {len(added)} classes from {file_path}"
+            )
+        else:
+            QMessageBox.information(self, "完成", "檔案中的標籤都已存在，無需匯入。")
+
     def _save_annotation_classes(self) -> None:
         """Save classes to predefined_classes.txt."""
         if not self.annotation_classes:
@@ -365,6 +405,55 @@ class AnnotationPanel(QWidget):
         for class_name in self.annotation_classes:
             self.annotation_class_list.addItem(class_name)
 
+    def _read_classes_file(self, class_file: Path) -> List[str]:
+        """Read class names from a LabelImg-compatible text file.
+
+        Args:
+            class_file: Text file containing one class name per line.
+
+        Returns:
+            A de-duplicated class-name list preserving file order.
+
+        Raises:
+            ValueError: If the file is missing or contains no valid class names.
+            OSError: If the file cannot be read.
+        """
+        if not class_file.exists():
+            raise ValueError(f"標籤檔不存在：{class_file}")
+        if not class_file.is_file():
+            raise ValueError(f"標籤路徑不是檔案：{class_file}")
+
+        classes: List[str] = []
+        seen = set()
+        for raw_line in class_file.read_text(encoding="utf-8-sig").splitlines():
+            class_name = raw_line.strip()
+            if not class_name or class_name.startswith("#"):
+                continue
+            if class_name in seen:
+                continue
+            seen.add(class_name)
+            classes.append(class_name)
+
+        if not classes:
+            raise ValueError(f"標籤檔沒有有效標籤：{class_file}")
+        return classes
+
+    def _merge_annotation_classes(self, class_names: List[str]) -> List[str]:
+        """Merge class names into the panel state without duplicating labels.
+
+        Args:
+            class_names: Candidate class names to append.
+
+        Returns:
+            Class names that were newly added.
+        """
+        added: List[str] = []
+        for class_name in class_names:
+            if class_name not in self.annotation_classes:
+                self.annotation_classes.append(class_name)
+                added.append(class_name)
+        return added
+
     # ================================================================
     # Directory Browsing
     # ================================================================
@@ -374,11 +463,12 @@ class AnnotationPanel(QWidget):
         dir_path = QFileDialog.getExistingDirectory(
             self,
             "選擇輸入圖片資料夾",
-            str(Path.cwd()),
+            str(self.annotation_input_dir or self._saved_path("input_dir") or Path.cwd()),
         )
         if dir_path:
             self.annotation_input_dir = Path(dir_path)
             self.annotation_input_edit.setText(dir_path)
+            self._save_annotation_setting("input_dir", dir_path)
             self._scan_annotation_progress()
 
     def _browse_annotation_output(self) -> None:
@@ -386,12 +476,53 @@ class AnnotationPanel(QWidget):
         dir_path = QFileDialog.getExistingDirectory(
             self,
             "選擇標註輸出資料夾",
-            str(Path.cwd()),
+            str(self.annotation_output_dir or self._saved_path("output_dir") or Path.cwd()),
         )
         if dir_path:
             self.annotation_output_dir = Path(dir_path)
             self.annotation_output_edit.setText(dir_path)
+            self._save_annotation_setting("output_dir", dir_path)
             self._scan_annotation_progress()
+
+    def _load_annotation_settings(self) -> None:
+        """Load remembered annotation paths into the panel state."""
+        input_dir = self._saved_path("input_dir")
+        if input_dir is not None:
+            self.annotation_input_dir = input_dir
+            self.annotation_input_edit.setText(str(input_dir))
+
+        output_dir = self._saved_path("output_dir")
+        if output_dir is not None:
+            self.annotation_output_dir = output_dir
+            self.annotation_output_edit.setText(str(output_dir))
+
+    def _saved_path(self, key: str) -> Optional[Path]:
+        """Return a remembered annotation path when it still exists.
+
+        Args:
+            key: Setting key suffix under ``annotation/``.
+
+        Returns:
+            Existing path, or None when unset/missing.
+        """
+        value = QtCore.QSettings().value(f"annotation/{key}", "")
+        if not value:
+            return None
+        path = Path(str(value))
+        return path if path.exists() else None
+
+    def _save_annotation_setting(self, key: str, value: str) -> None:
+        """Persist one annotation setting value."""
+        QtCore.QSettings().setValue(f"annotation/{key}", value)
+
+    def _default_class_file_dialog_dir(self) -> Path:
+        """Return a useful start directory for class-file import."""
+        last_file = self._saved_path("last_classes_file")
+        if last_file is not None:
+            return last_file.parent
+        if self.annotation_output_dir is not None:
+            return self.annotation_output_dir.parent
+        return Path.cwd()
 
     # ================================================================
     # Progress Tracking
