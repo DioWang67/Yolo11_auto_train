@@ -15,6 +15,36 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _load_project_class_names(raw_root: Path) -> list[str]:
+    """Load LabelImg/YOLO class names for a project when available.
+
+    Args:
+        raw_root: Project raw data root, usually ``data/<project>/raw``.
+
+    Returns:
+        Class names in label-index order, or an empty list when unavailable.
+    """
+    candidates = [
+        raw_root / "labels" / "classes.txt",
+        raw_root / "predefined_classes.txt",
+    ]
+    for class_file in candidates:
+        if not class_file.exists():
+            continue
+        try:
+            class_names = [
+                line.strip()
+                for line in class_file.read_text(encoding="utf-8-sig").splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("Failed to read class names from %s: %s", class_file, exc)
+            continue
+        if class_names:
+            return class_names
+    return []
+
+
 def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any]:
     """Return a **new** config dict with all paths standardised for *project*.
 
@@ -44,6 +74,7 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     infer_root = runs_root / "infer"
     quality_root = runs_root / "quality"
     reports_root = runs_root / "reports"
+    project_class_names = _load_project_class_names(raw_root)
 
     # --- Format Conversion ---
     if "format_conversion" in cfg:
@@ -94,6 +125,8 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
         yt["project"] = str(runs_root)
         yt["name"] = "train"
         yt["dataset_dir"] = str(split_root)
+        if project_class_names:
+            yt["class_names"] = project_class_names
 
         pv = yt.get("position_validation", {})
         pv["output_dir"] = str(quality_root / "position")
@@ -103,6 +136,14 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
 
         edc = yt.get("export_detection_config", {})
         edc["current_product"] = project
+        if project_class_names:
+            area = str(edc.get("area") or pv.get("area") or "A")
+            edc["expected_items"] = {project: {area: project_class_names}}
+            steps = edc.get("steps")
+            if isinstance(steps, dict):
+                sequence_check = steps.get("sequence_check")
+                if isinstance(sequence_check, dict):
+                    sequence_check["expected"] = project_class_names
         yt["export_detection_config"] = edc
 
     # --- Batch Inference ---

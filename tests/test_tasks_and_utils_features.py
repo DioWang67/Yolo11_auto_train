@@ -104,6 +104,59 @@ class TestTasksFunctionality:
             assert "skip" in result.lower()
 
 
+    def test_deploy_uses_onnx_when_detection_config_selects_onnx(self, tmp_path):
+        """Deploy should point config.yaml at versioned ONNX when selected."""
+        import yaml
+
+        from picture_tool.tasks.deploy import run_deploy
+
+        run_dir = tmp_path / "runs" / "train"
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        (weights_dir / "best.pt").write_bytes(b"pt")
+        (weights_dir / "best.onnx").write_bytes(b"onnx")
+        (run_dir / "detection_config.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "weights": "best.onnx",
+                    "current_product": "PCBA1",
+                    "current_area": "A",
+                    "pipeline": ["count_check", "sequence_check", "save_results"],
+                    "enable_color_check": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        inference_models_dir = tmp_path / "models"
+        config = {
+            "yolo_training": {
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+                "deploy": {
+                    "enabled": True,
+                    "product": "PCBA1",
+                    "area": "A",
+                    "inference_models_dir": str(inference_models_dir),
+                    "version": "1.0.0",
+                },
+            }
+        }
+
+        run_deploy(config, SimpleNamespace())
+
+        deployed_dir = inference_models_dir / "PCBA1" / "A" / "yolo"
+        deployed_config = yaml.safe_load(
+            (deployed_dir / "config.yaml").read_text(encoding="utf-8")
+        )
+
+        assert "PCBA1_A_v1.0.0_" in deployed_config["weights"]
+        assert deployed_config["weights"].endswith(".onnx")
+        assert deployed_config["enable_color_check"] is False
+        assert (deployed_dir / "weights" / "best.onnx").exists()
+        assert list((deployed_dir / "weights").glob("PCBA1_A_v1.0.0_*.onnx"))
+
+
 class TestUtilityFunctionality:
     """测试utility模块功能"""
 

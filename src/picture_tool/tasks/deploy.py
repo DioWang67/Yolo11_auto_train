@@ -56,6 +56,7 @@ def _resolve_version(
     weights_dest: Path,
     product: str,
     area: str,
+    extension: str = ".pt",
 ) -> Tuple[int, int, int]:
     """Return the version tuple to use for this deployment.
 
@@ -81,7 +82,7 @@ def _resolve_version(
     # Auto-increment: find the highest existing patch and bump it
     existing: list[Tuple[int, int, int]] = []
     if weights_dest.exists():
-        for f in weights_dest.glob(f"{prefix}*.pt"):
+        for f in weights_dest.glob(f"{prefix}*{extension}"):
             ver = _parse_version(f.name)
             if ver:
                 existing.append(ver)
@@ -151,19 +152,44 @@ def run_deploy(config: dict, args: Any) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     weights_dest.mkdir(exist_ok=True)
 
+    det_cfg_path = run_dir / "detection_config.yaml"
+    if not det_cfg_path.exists():
+        logger.error("detection_config.yaml not found at %s; deploy aborted.", det_cfg_path)
+        raise FileNotFoundError(det_cfg_path)
+
+    try:
+        det_cfg_data = yaml.safe_load(det_cfg_path.read_text(encoding="utf-8")) or {}
+        det_cfg_data = rewrite_detection_config(det_cfg_data, product)
+    except Exception as exc:
+        logger.error("Failed to read detection config: %s", exc)
+        raise
+
+    selected_weights_name = Path(str(det_cfg_data.get("weights") or "best.pt")).name
+    selected_weights_path = run_dir / "weights" / selected_weights_name
+    if not selected_weights_path.exists():
+        logger.error(
+            "%s not found in %s; weights not deployed.",
+            selected_weights_name,
+            run_dir / "weights",
+        )
+        return
+    selected_extension = selected_weights_path.suffix or ".pt"
+
     # ------------------------------------------------------------------
     # Resolve version and generate versioned filename
     # ------------------------------------------------------------------
     try:
         version = _resolve_version(
-            dcfg.get("version", "auto"), weights_dest, product, area
+            dcfg.get("version", "auto"), weights_dest, product, area, selected_extension
         )
     except ValueError as exc:
         logger.error("Version resolution failed: %s", exc)
         raise
 
     date_str = datetime.datetime.now().strftime("%Y%m%d")
-    versioned_name = f"{product}_{area}_v{_version_str(version)}_{date_str}.pt"
+    versioned_name = (
+        f"{product}_{area}_v{_version_str(version)}_{date_str}{selected_extension}"
+    )
     versioned_path = weights_dest / versioned_name
 
     logger.info(
@@ -208,11 +234,11 @@ def run_deploy(config: dict, args: Any) -> None:
     # ------------------------------------------------------------------
     # Copy weights — best.pt → versioned name; also keep best.pt alias
     # ------------------------------------------------------------------
-    src_best = run_dir / "weights" / "best.pt"
+    src_best = selected_weights_path
     if src_best.exists():
         shutil.copy2(src_best, versioned_path)
         # Keep a plain best.pt alias so any tool that looks for it still works
-        shutil.copy2(src_best, weights_dest / "best.pt")
+        shutil.copy2(src_best, weights_dest / selected_weights_name)
         logger.info("Copied best.pt → %s (+ best.pt alias).", versioned_name)
     else:
         logger.error("best.pt not found in %s — weights not deployed.", run_dir / "weights")

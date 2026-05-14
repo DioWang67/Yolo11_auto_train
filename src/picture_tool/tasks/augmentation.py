@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from picture_tool.augment import ImageAugmentor, YoloDataAugmentor
 from picture_tool.quality.dataset_linter import preview_dataset
 from picture_tool.pipeline.utils import mtime_latest, exists_and_nonempty
@@ -43,9 +44,46 @@ def skip_yolo_augmentation(config, args):
         raise FileNotFoundError(f"Augmentation inputs missing: {in_dirs}")
 
     if all(exists_and_nonempty(p) for p in out_dirs):
+        expected_outputs = _expected_yolo_augmentation_outputs(cfg)
+        if expected_outputs is not None:
+            actual_labels = len(list(out_dirs[1].glob("*.txt")))
+            if actual_labels < expected_outputs:
+                return None
         if mtime_latest(out_dirs) >= mtime_latest(in_dirs):
             return "Outputs are newer than inputs; skipping."
     return None
+
+
+def _expected_yolo_augmentation_outputs(cfg: dict[str, Any]) -> int | None:
+    """Estimate how many label files a complete YOLO augmentation should produce.
+
+    Args:
+        cfg: The ``yolo_augmentation`` configuration block.
+
+    Returns:
+        Expected label-file count, or None when paths/config are incomplete.
+    """
+    try:
+        image_dir = Path(str(cfg["input"]["image_dir"]))
+        label_dir = Path(str(cfg["input"]["label_dir"]))
+        num_images = int(cfg["augmentation"]["num_images"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if num_images <= 0 or not image_dir.exists() or not label_dir.exists():
+        return None
+
+    image_stems = {
+        path.stem
+        for path in image_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".bmp"}
+    }
+    label_stems = {
+        path.stem
+        for path in label_dir.glob("*.txt")
+        if path.name.lower() != "classes.txt"
+    }
+    return len(image_stems & label_stems) * num_images
 
 
 def run_image_augmentation(config, args):

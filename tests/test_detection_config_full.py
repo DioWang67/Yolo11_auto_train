@@ -471,6 +471,41 @@ class TestDetectionConfigExporter:
 
         assert result is None
 
+    def test_exports_onnx_config_with_color_check_disabled(self, tmp_path):
+        """Should export ONNX as the default runtime and keep color checks disabled."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir()
+        (weights_dir / "best.onnx").write_bytes(b"onnx-weights")
+
+        config = {
+            "yolo_training": {
+                "class_names": ["J5-1", "J5-2"],
+                "export_detection_config": {
+                    "enabled": True,
+                    "weights_name": "best.onnx",
+                    "current_product": "PCBA1",
+                    "area": "A",
+                    "pipeline": ["count_check", "sequence_check", "save_results"],
+                    "enable_color_check": False,
+                },
+            }
+        }
+
+        logger = logging.getLogger("test")
+        result_path = DetectionConfigExporter.export(
+            config, run_dir, logger, include_position=False
+        )
+
+        assert result_path is not None
+        with open(result_path, encoding="utf-8") as f:
+            exported = yaml.safe_load(f)
+
+        assert exported["weights"] == "best.onnx"
+        assert exported["pipeline"] == ["count_check", "sequence_check", "save_results"]
+        assert exported["enable_color_check"] is False
+
     def test_includes_position_config_when_enabled(self, tmp_path):
         """Should include position config when requested."""
         run_dir = tmp_path / "run"

@@ -1,0 +1,392 @@
+pipeline:
+  log_file: logs/project/pipeline.log
+  task_groups:
+    preprocess:
+    - format_conversion
+    - anomaly_detection
+    augmentation:
+    - yolo_augmentation
+    - image_augmentation
+    split:
+    - dataset_splitter
+    train:
+    - yolo_train
+    - position_validation
+    - yolo_evaluation
+    - generate_report
+    inference:
+    - batch_inference
+    quality:
+    - dataset_lint
+    - aug_preview
+    - color_verification
+    - color_inspection
+    - qc_summary
+    full:
+    - format_conversion
+    - yolo_augmentation
+    - image_augmentation
+    - dataset_splitter
+    - yolo_train
+    - position_validation
+    - yolo_evaluation
+    - generate_report
+    - batch_inference
+    - qc_summary
+  tasks:
+  - name: format_conversion
+    enabled: true
+    dependencies: []
+  - name: anomaly_detection
+    enabled: true
+    dependencies: []
+  - name: yolo_augmentation
+    enabled: true
+    dependencies: []
+  - name: image_augmentation
+    enabled: true
+    dependencies: []
+  - name: dataset_splitter
+    enabled: true
+    dependencies: []
+  - name: dataset_lint
+    enabled: true
+    dependencies: []
+  - name: aug_preview
+    enabled: true
+    dependencies: []
+  - name: yolo_train
+    enabled: true
+    dependencies: []
+  - name: position_validation
+    enabled: true
+    dependencies: []
+  - name: yolo_evaluation
+    enabled: true
+    dependencies:
+    - yolo_train
+  - name: generate_report
+    enabled: true
+    dependencies: []
+  - name: batch_inference
+    enabled: true
+    dependencies: []
+  - name: color_verification
+    enabled: true
+    dependencies: []
+  - name: qc_summary
+    enabled: true
+    dependencies:
+    - color_verification
+    - batch_inference
+format_conversion:
+  input_dir: ./data/project/raw/images
+  input_formats:
+  - .bmp
+  output_dir: ./data/project/processed/images_converted
+  output_format: .png
+  quality: 95
+anomaly_detection:
+  input_formats:
+  - .png
+  - .jpg
+  - .jpeg
+  output_folder: ./data/project/processed/anomaly_results
+  reference_folder: ./data/project/raw/good
+  test_folder: ./data/project/raw/test
+  threshold: 50
+yolo_augmentation:
+  input:
+    image_dir: ./data/project/raw/images
+    label_dir: ./data/project/raw/labels
+  output:
+    image_dir: ./data/project/processed/images
+    label_dir: ./data/project/processed/labels
+  processing:
+    num_workers: 2
+  augmentation:
+    num_images: 120
+    num_operations:
+    - 2
+    - 3
+    operations:
+      blur:
+        kernel:
+        - 0
+        - 1
+      contrast:
+        range:
+        - 0.92
+        - 1.08
+      flip:
+        probability: 0.0
+      hue:
+        range:
+        - 1
+        - 1
+      multiply:
+        range:
+        - 0.88
+        - 1.15
+      noise:
+        scale:
+        - 0
+        - 0.02
+      perspective:
+        scale:
+        - 0.0
+        - 0.0
+      rotate:
+        angle:
+        - -2
+        - 2
+      scale:
+        range:
+        - 0.97
+        - 1.03
+image_augmentation:
+  input:
+    image_dir: ./data/project/raw/images
+  output:
+    image_dir: ./data/project/processed/augmented_preview
+  processing:
+    num_workers: 2
+  augmentation:
+    num_images: 50
+    num_operations:
+    - 2
+    - 4
+    operations:
+      blur:
+        kernel:
+        - 1
+        - 3
+      contrast:
+        range:
+        - 0.95
+        - 1.05
+      flip:
+        probability: 0
+      hue:
+        range:
+        - -5
+        - 5
+      multiply:
+        range:
+        - 0.95
+        - 1.05
+      noise:
+        scale:
+        - 0.01
+        - 0.05
+      perspective:
+        scale:
+        - 0.01
+        - 0.02
+      rotate:
+        angle:
+        - 0
+        - 1
+      scale:
+        range:
+        - 0.95
+        - 1.05
+train_test_split:
+  input:
+    image_dir: ./data/project/processed/images
+    label_dir: ./data/project/processed/labels
+  input_formats:
+  - .png
+  - .jpg
+  - .jpeg
+  label_format: .txt
+  output:
+    output_dir: ./data/project/split
+  split_ratios:
+    train: 0.7
+    val: 0.15
+    test: 0.15
+  stratified: true
+yolo_training:
+  dataset_dir: ./data/project/split
+  class_names:
+  - Black
+  - Green
+  - Orange
+  - Red
+  - Yellow
+  model: ./models/yolo11n.pt
+  epochs: 80
+  imgsz: 640
+  batch: 8
+  workers: 0
+  device: cpu
+  project: ./runs/project
+  name: train
+  position_validation:
+    enabled: true
+    product: project
+    area: A
+    imgsz: 640
+    sample_dir: ./data/project/split/val/images
+    config_path: ./models/yolo/position_config.yaml
+    config: {}
+    output_dir: ./runs/project/quality/position
+    weights: null
+    device: null
+    conf: 0.1
+    tolerance_override: null
+    auto_generate: true
+  export_detection_config:
+    enabled: true
+    output_path: null
+    weights_name: best.onnx
+    device: null
+    conf_thres: 0.4
+    iou_thres: 0.45
+    imgsz: null
+    timeout: 1
+    enable_yolo: true
+    output_dir: Result
+    current_product: project
+    area: null
+    expected_items:
+      project:
+        A:
+        - Red
+        - Green
+        - Orange
+        - Yellow
+        - Black
+        - Black
+    
+    # 產線專屬的高級檢測管線 (Inference Payload)
+    pipeline:
+      - count_check
+      - save_results
+    steps:
+      count_check:
+        strict: true
+    enable_color_check: false
+
+    tolerance: null
+    tolerance_unit: percent
+    position_config_path: null
+    position_config: {}
+    include_all_products: false
+  export_onnx:
+    enabled: true
+    weights_name: best.pt
+    imgsz: null
+    device: null
+    half: false
+    dynamic: false
+    simplify: false
+    opset: null
+  export_runtime:
+    enabled: false                         # optional replacement for export_onnx
+    format: openvino                       # onnx, openvino, engine, torchscript
+    weights_name: best.pt
+    imgsz: null
+    device: cpu
+    half: false
+    int8: false
+    dynamic: false
+  artifact_bundle:
+    enabled: true
+    dir_name: bundle
+    base_dir: null
+    area: ~                               # null = fallback to deploy.area → position_validation.area → "A"
+    include_weights: true
+    include_detection_config: true
+    include_position_config: true
+    include_onnx: true
+    include_results_csv: true
+    include_args_yaml: true
+  deploy:
+    enabled: false                        # set true to auto-deploy after yolo_train
+    inference_models_dir: ../yolo11_inference/models  # path to inference models dir
+    product: ~                            # null = use yolo_training.name
+    area: ~                               # null = use yolo_training.position_validation.area
+    version: auto                         # "auto" = patch-increment from existing files, or e.g. "1.2.0"
+yolo_evaluation:
+  weights: null
+  imgsz: 640
+  device: cpu
+batch_inference:
+  input_dir: ./data/project/split/test/images
+  output_dir: ./runs/project/infer
+  weights: null
+  imgsz: 640
+  device: cpu
+  conf: 0.25
+report:
+  output_dir: ./runs/project/reports
+  include_artifacts: true
+dataset_lint:
+  image_dir: ./data/project/processed/images
+  label_dir: ./data/project/processed/labels
+  output_dir: ./runs/project/quality/lint
+  num_preview: 20
+  preview_cols: 5
+  seed: 42
+aug_preview:
+  image_dir: ./data/project/processed/images
+  label_dir: ./data/project/processed/labels
+  output_dir: ./runs/project/quality/preview
+  num_samples: 16
+  cols: 4
+  seed: 42
+color_inspection:
+  enabled: true
+  input_dir: ./data/project/qc/color_samples
+  output_json: ./runs/project/quality/color/stats.json
+  colors:
+  - Black
+  - Green
+  - Orange
+  - Red
+  - Yellow
+  sam:
+    checkpoint: ./models/sam2_b.pt
+    model_type: sam2_b
+    device: auto
+color_verification:
+  enabled: true
+  input_dir: ./data/project/qc/color_samples
+  color_stats: ./runs/project/quality/color/stats.json
+  output_json: ./runs/project/quality/color/verification.json
+  output_csv: ./runs/project/quality/color/verification.csv
+  recursive: true
+  expected_from_name: true
+  expected_map: null
+  min_area_ratio: 0.02
+  max_area_ratio: 0.7
+  hsv_margin:
+  - 8
+  - 35
+  - 40
+  lab_margin:
+  - 12
+  - 8
+  - 12
+  debug_plot: true
+  debug_dir: ./runs/project/quality/color/debug
+  mask_strategy: full
+  strip_sampling:
+    enabled: true
+    segments: 8
+    threshold: 0.35
+    orientation: vertical
+    min_width_ratio: 0.05
+    edge_margin: 0.08
+    sat_threshold: 25
+    val_threshold: 245
+    center_bias: true
+    center_sigma: 0.35
+    min_valid_pixels: 50
+    top_k: 3
+tracking:
+  enabled: true
+  backend: mlflow
+  experiment_name: Yolo11_Project_Default

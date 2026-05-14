@@ -5,6 +5,7 @@ does not mutate input) and correctly maps all path sections.
 """
 
 import copy
+from pathlib import Path
 
 import pytest
 
@@ -117,3 +118,38 @@ class TestResolveProjectPaths:
     def test_report_paths(self, base_config):
         result = resolve_project_paths(base_config, "LED")
         assert "LED" in result["report"]["output_dir"]
+
+    def test_loads_project_classes_from_labelimg_classes_file(
+        self, base_config, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        labels_dir = Path("data") / "PCBA1" / "raw" / "labels"
+        labels_dir.mkdir(parents=True)
+        (labels_dir / "classes.txt").write_text(
+            "J5-1\nJ5-2\nC22B\nJ6\nJ7\n",
+            encoding="utf-8",
+        )
+        base_config["yolo_training"]["export_detection_config"] = {
+            "expected_items": {"project": {"A": ["Black", "Green"]}},
+            "steps": {
+                "sequence_check": {
+                    "expected": ["Black", "Green"],
+                }
+            },
+        }
+
+        result = resolve_project_paths(base_config, "PCBA1")
+        yolo_cfg = result["yolo_training"]
+        export_cfg = yolo_cfg["export_detection_config"]
+
+        assert yolo_cfg["class_names"] == ["J5-1", "J5-2", "C22B", "J6", "J7"]
+        assert export_cfg["expected_items"] == {
+            "PCBA1": {"A": ["J5-1", "J5-2", "C22B", "J6", "J7"]}
+        }
+        assert export_cfg["steps"]["sequence_check"]["expected"] == [
+            "J5-1",
+            "J5-2",
+            "C22B",
+            "J6",
+            "J7",
+        ]

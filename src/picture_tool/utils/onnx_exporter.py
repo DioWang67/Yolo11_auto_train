@@ -31,11 +31,7 @@ class OnnxExporter:
         ycfg = config.get("yolo_training", {})
         if not isinstance(ycfg, dict):
             return None
-        export_cfg = ycfg.get("export_runtime")
-        legacy_onnx_cfg = False
-        if export_cfg is None:
-            export_cfg = ycfg.get("export_onnx")
-            legacy_onnx_cfg = True
+        export_cfg, legacy_onnx_cfg = _select_export_config(ycfg)
         if not isinstance(export_cfg, dict) or export_cfg.get("enabled", True) is False:
             return None
 
@@ -217,6 +213,28 @@ class OnnxExporter:
         except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
             logger.exception("YOLO export process failed: %s", e)
             return None
+
+
+def _select_export_config(ycfg: dict[str, Any]) -> tuple[Optional[dict[str, Any]], bool]:
+    """Select the runtime export configuration to apply.
+
+    Args:
+        ycfg: The ``yolo_training`` config block.
+
+    Returns:
+        A tuple of ``(config, is_legacy_onnx_config)``. Disabled
+        ``export_runtime`` blocks intentionally fall back to ``export_onnx``
+        for backward compatibility with existing default configs.
+    """
+    runtime_cfg = ycfg.get("export_runtime")
+    if isinstance(runtime_cfg, dict) and runtime_cfg.get("enabled", False):
+        return runtime_cfg, False
+
+    onnx_cfg = ycfg.get("export_onnx")
+    if isinstance(onnx_cfg, dict):
+        return onnx_cfg, True
+
+    return None, False
 
 
 def _derived_export_candidates(weights_path: Path, export_format: str) -> list[Path]:

@@ -143,6 +143,52 @@ class TestOnnxExporterExport:
 
         assert result == onnx_file.resolve()
 
+    def test_disabled_export_runtime_falls_back_to_export_onnx(
+        self, tmp_path, monkeypatch
+    ):
+        """Disabled export_runtime should not suppress legacy ONNX export."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir()
+        (weights_dir / "best.pt").write_text("weights")
+        onnx_file = weights_dir / "best.onnx"
+        onnx_file.write_text("onnx_content" * 100)
+
+        config = {
+            "yolo_training": {
+                "export_runtime": {
+                    "enabled": False,
+                    "format": "openvino",
+                },
+                "export_onnx": {
+                    "enabled": True,
+                    "weights_name": "best.pt",
+                },
+            }
+        }
+
+        monkeypatch.setattr("importlib.util.find_spec", lambda x: MagicMock())
+
+        mock_model = MagicMock()
+        mock_model.export.return_value = str(onnx_file)
+        mock_yolo_class = MagicMock(return_value=mock_model)
+        monkeypatch.setattr("picture_tool.utils.onnx_exporter.YOLO", mock_yolo_class)
+        monkeypatch.setattr(
+            "picture_tool.utils.onnx_validation.validate_onnx_structure", lambda x: None
+        )
+        monkeypatch.setattr(
+            "picture_tool.utils.onnx_validation.validate_onnx_runtime",
+            lambda x, **kwargs: None,
+        )
+
+        logger = logging.getLogger("test")
+        result = OnnxExporter.export(config, run_dir, logger)
+
+        assert result == onnx_file.resolve()
+        assert mock_model.export.call_args.kwargs["format"] == "onnx"
+
     def test_uses_default_imgsz_when_not_configured(self, tmp_path, monkeypatch):
         """Should default to [640, 640] when imgsz not in config."""
         run_dir = tmp_path / "run"

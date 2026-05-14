@@ -16,6 +16,7 @@ class AnnotationTracker:
     def __init__(self):
         self.image_extensions = {".jpg", ".jpeg", ".png", ".bmp"}
         self.label_extension = ".txt"
+        self.metadata_label_files = {"classes.txt"}
 
     def scan_directory(
         self,
@@ -95,7 +96,10 @@ class AnnotationTracker:
         if not label_dir.exists():
             return [f"Label directory does not exist: {label_dir}"]
 
-        label_files = list(label_dir.glob(f"*{self.label_extension}"))
+        label_files = [
+            path for path in label_dir.glob(f"*{self.label_extension}")
+            if self._is_annotation_file(path)
+        ]
 
         for label_file in label_files:
             file_errors = self._validate_single_file(label_file, num_classes)
@@ -188,6 +192,8 @@ class AnnotationTracker:
         class_counts: Counter = Counter()
 
         for label_file in label_dir.glob(f"*{self.label_extension}"):
+            if not self._is_annotation_file(label_file):
+                continue
             try:
                 with open(label_file, "r", encoding="utf-8") as f:
                     for line in f:
@@ -204,6 +210,17 @@ class AnnotationTracker:
                 continue
 
         return dict(class_counts)
+
+    def _is_annotation_file(self, label_file: Path) -> bool:
+        """Return whether a text file should be treated as a YOLO label file.
+
+        Args:
+            label_file: Candidate file under a labels directory.
+
+        Returns:
+            True for image annotation files, False for metadata such as classes.txt.
+        """
+        return label_file.name.lower() not in self.metadata_label_files
 
     def _empty_stats(self) -> Dict:
         """Return empty statistics dictionary."""

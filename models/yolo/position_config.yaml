@@ -6,7 +6,11 @@ PCBA1:
     mode: bbox
     tolerance: 2.0
     expected_boxes:
-      J5-1: {x1: 400, y1: 200, x2: 540, y2: 340}
+      J5-1: {x1: 370, y1: 250, x2: 491, y2: 362}
+      J5-2: {x1: 103, y1: 258, x2: 206, y2: 362}
+      C22B: {x1: 297, y1: 276, x2: 341, y2: 347}
+      J6:   {x1: 163, y1: 368, x2: 282, y2: 447}
+      J7:   {x1: 301, y1: 345, x2: 422, y2: 444}
 
 # Cable1 / Area A production settings (imgsz=640)
 Cable1:

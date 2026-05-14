@@ -125,6 +125,35 @@ def test_should_skip_yolo_augmentation_when_outputs_newer(base_config, temp_dirs
     assert reason is not None
 
 
+def test_yolo_augmentation_does_not_skip_when_expected_outputs_missing(
+    base_config, temp_dirs
+):
+    base_config["yolo_augmentation"]["augmentation"] = {"num_images": 3}
+    _touch(temp_dirs["aug_images"] / "a_aug_1.png")
+    _touch(temp_dirs["aug_labels"] / "a_aug_1.txt")
+
+    reason = augmentation.skip_yolo_augmentation(
+        base_config, SimpleNamespace(force=False)
+    )
+
+    assert reason is None
+
+
+def test_yolo_augmentation_skips_when_expected_outputs_complete(
+    base_config, temp_dirs
+):
+    base_config["yolo_augmentation"]["augmentation"] = {"num_images": 2}
+    for index in (1, 2):
+        _touch(temp_dirs["aug_images"] / f"a_aug_{index}.png")
+        _touch(temp_dirs["aug_labels"] / f"a_aug_{index}.txt")
+
+    reason = augmentation.skip_yolo_augmentation(
+        base_config, SimpleNamespace(force=False)
+    )
+
+    assert reason is not None
+
+
 def test_should_skip_dataset_splitter_when_split_ready(base_config):
     reason = quality.skip_dataset_splitter(base_config, SimpleNamespace(force=False))
     assert reason is not None
