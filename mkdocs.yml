@@ -17,6 +17,9 @@ plugins:
 
 nav:
   - Home: index.md
+  - Guides:
+      - Quick Start: guides/quickstart.md
+      - PCBA1 YOLO Pipeline: guides/pcba1_pipeline.md
   - API Reference:
       - Pipeline: api/pipeline.md
       - Tasks: api/tasks.md

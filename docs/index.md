@@ -50,3 +50,9 @@ picture-tool-pipeline --list-tasks
 # 啟動 GUI
 picture-tool-gui --config configs/my_project.yaml
 ```
+
+## Project Guides
+
+| Guide | Description |
+|------|-------------|
+| [PCBA1 YOLO Pipeline](guides/pcba1_pipeline.md) | PCBA1 LabelImg data layout, ONNX deployment config, disabled color/sequence checks, rerun rules, and deployment checklist. |
