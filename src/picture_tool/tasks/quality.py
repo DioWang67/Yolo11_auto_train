@@ -1,6 +1,7 @@
 import logging
 import sys
 import subprocess
+import copy
 from pathlib import Path
 from picture_tool.anomaly import process_anomaly_detection
 from picture_tool.split import split_dataset
@@ -15,12 +16,69 @@ from picture_tool.tasks.quality_schemas import ColorInspectionConfig, ColorVerif
 from pydantic import ValidationError
 
 
+def _raw_input_fallback(path: Path) -> Path | None:
+    """Return the matching raw input directory for a processed input path."""
+    if path.name not in {"images", "labels"}:
+        return None
+    if path.parent.name != "processed":
+        return None
+    return path.parent.parent / "raw" / path.name
+
+
+def resolve_split_input_dirs(config: dict) -> tuple[Path, Path, bool]:
+    """Resolve dataset splitter input directories, with raw-data fallback.
+
+    Args:
+        config: Pipeline configuration.
+
+    Returns:
+        ``(image_dir, label_dir, used_fallback)``.
+
+    Raises:
+        KeyError: If required ``train_test_split`` keys are missing.
+    """
+    split_cfg = config["train_test_split"]
+    image_dir = Path(split_cfg["input"]["image_dir"])
+    label_dir = Path(split_cfg["input"]["label_dir"])
+    if image_dir.exists() and label_dir.exists():
+        return image_dir, label_dir, False
+
+    raw_image_dir = _raw_input_fallback(image_dir)
+    raw_label_dir = _raw_input_fallback(label_dir)
+    if (
+        raw_image_dir is not None
+        and raw_label_dir is not None
+        and raw_image_dir.exists()
+        and raw_label_dir.exists()
+    ):
+        return raw_image_dir, raw_label_dir, True
+
+    return image_dir, label_dir, False
+
+
+def _config_with_effective_split_inputs(config: dict) -> dict:
+    """Return a config copy whose splitter input may fallback to raw data."""
+    image_dir, label_dir, used_fallback = resolve_split_input_dirs(config)
+    if not used_fallback:
+        return config
+
+    effective = copy.deepcopy(config)
+    effective["train_test_split"]["input"]["image_dir"] = str(image_dir)
+    effective["train_test_split"]["input"]["label_dir"] = str(label_dir)
+    logging.getLogger(__name__).info(
+        "dataset_splitter input fallback: processed data is missing; using raw data %s / %s",
+        image_dir,
+        label_dir,
+    )
+    return effective
+
+
 def run_anomaly_detection(config, args):
     process_anomaly_detection(config)
 
 
 def run_dataset_splitter(config, args):
-    split_dataset(config)
+    split_dataset(_config_with_effective_split_inputs(config))
 
 
 def skip_dataset_splitter(config, args):
@@ -28,7 +86,11 @@ def skip_dataset_splitter(config, args):
     sc = config.get("train_test_split")
     if not sc:
         return None
-    in_dirs = [Path(sc["input"]["image_dir"]), Path(sc["input"]["label_dir"])]
+    try:
+        image_dir, label_dir, _ = resolve_split_input_dirs(config)
+    except (KeyError, TypeError):
+        return None
+    in_dirs = [image_dir, label_dir]
     out_root = Path(sc["output"]["output_dir"])
     out_dirs = [
         out_root / "train" / "images",

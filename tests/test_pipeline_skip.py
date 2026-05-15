@@ -159,6 +159,53 @@ def test_should_skip_dataset_splitter_when_split_ready(base_config):
     assert reason is not None
 
 
+def test_resolve_split_input_dirs_falls_back_to_raw(tmp_path):
+    raw_images = tmp_path / "data" / "PCBA1" / "raw" / "images"
+    raw_labels = tmp_path / "data" / "PCBA1" / "raw" / "labels"
+    raw_images.mkdir(parents=True)
+    raw_labels.mkdir(parents=True)
+    config = {
+        "train_test_split": {
+            "input": {
+                "image_dir": str(tmp_path / "data" / "PCBA1" / "processed" / "images"),
+                "label_dir": str(tmp_path / "data" / "PCBA1" / "processed" / "labels"),
+            }
+        }
+    }
+
+    image_dir, label_dir, used_fallback = quality.resolve_split_input_dirs(config)
+
+    assert image_dir == raw_images
+    assert label_dir == raw_labels
+    assert used_fallback is True
+
+
+def test_preflight_accepts_raw_fallback_when_processed_missing(tmp_path):
+    from picture_tool.pipeline.preflight import PreflightChecker
+
+    raw_images = tmp_path / "data" / "PCBA1" / "raw" / "images"
+    raw_labels = tmp_path / "data" / "PCBA1" / "raw" / "labels"
+    raw_images.mkdir(parents=True)
+    raw_labels.mkdir(parents=True)
+    config = {
+        "train_test_split": {
+            "input": {
+                "image_dir": str(tmp_path / "data" / "PCBA1" / "processed" / "images"),
+                "label_dir": str(tmp_path / "data" / "PCBA1" / "processed" / "labels"),
+            }
+        },
+        "yolo_training": {
+            "dataset_dir": str(tmp_path / "data" / "PCBA1" / "split"),
+            "class_names": ["part"],
+            "model": "yolo11n.pt",
+        },
+    }
+
+    issues = PreflightChecker().run(["dataset_splitter"], config)
+
+    assert not [issue for issue in issues if issue.task == "dataset_splitter"]
+
+
 def test_should_skip_yolo_train_when_weights_fresh(base_config, temp_dirs):
     # Ensure weights are newer than dataset files
     import time

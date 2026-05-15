@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSignal
 
 from picture_tool.gui.wizards import NewProjectWizard
+from picture_tool.path_resolver import parse_project_area_override
 
 class ConfigPanel(QWidget):
     """
@@ -104,13 +105,30 @@ class ConfigPanel(QWidget):
         if not text:
             self.path_preview_label.setText("")
             return
-        
+
+        try:
+            parsed = parse_project_area_override(text)
+        except ValueError as exc:
+            self.path_preview_label.setStyleSheet(
+                "color: #ff6b6b; font-size: 8pt; font-family: Consolas;"
+            )
+            self.path_preview_label.setText(f"Invalid product input: {exc}")
+            return
+
+        self.path_preview_label.setStyleSheet(
+            "color: #6BCB77; font-size: 8pt; font-family: Consolas;"
+        )
+        project = parsed.project
+        area = parsed.area or "(config default)"
+        data_root = f"data/{project}/{parsed.area}" if parsed.area else f"data/{project}"
+        runs_root = f"runs/{project}/{parsed.area}" if parsed.area else f"runs/{project}"
+
         preview = (
-            f"🔍 專案路徑對齊預覽 ({text})：\n"
-            f"   📁 Raw (原始):  data/{text}/raw/\n"
-            f"   📁 Process (加工): data/{text}/processed/\n"
-            f"   📁 QC (檢驗中心):  data/{text}/qc/\n"
-            f"   📁 Runs (訓練/推理): runs/{text}/"
+            f"Resolved: product={project}, area={area}\n"
+            f"   Raw:       {data_root}/raw/\n"
+            f"   Processed: {data_root}/processed/\n"
+            f"   QC:        {data_root}/qc/\n"
+            f"   Runs:      {runs_root}/"
         )
         self.path_preview_label.setText(preview)
 

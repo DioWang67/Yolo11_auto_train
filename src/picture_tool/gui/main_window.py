@@ -360,6 +360,19 @@ class MainWindow(QMainWindow):
         config_path = self.config_panel.get_config_path()
         product = self.config_panel.get_product_override()
 
+        if product:
+            try:
+                from picture_tool.path_resolver import parse_project_area_override
+
+                parse_project_area_override(product)
+            except ValueError as exc:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Product",
+                    f"Product format must be 'Product' or 'Product,Area'.\n\n{exc}",
+                )
+                return
+
         # Validate product override if placeholders are present
         if not product:
             import json

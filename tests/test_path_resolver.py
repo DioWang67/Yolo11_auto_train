@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from picture_tool.path_resolver import resolve_project_paths
+from picture_tool.path_resolver import (
+    parse_project_area_override,
+    resolve_project_paths,
+)
 
 
 @pytest.fixture
@@ -51,6 +54,30 @@ def base_config():
 
 
 class TestResolveProjectPaths:
+    def test_parses_product_area_override(self):
+        parsed = parse_project_area_override("PCBA1,B")
+
+        assert parsed.project == "PCBA1"
+        assert parsed.area == "B"
+
+    def test_parses_product_without_area(self):
+        parsed = parse_project_area_override("PCBA1")
+
+        assert parsed.project == "PCBA1"
+        assert parsed.area is None
+
+    def test_rejects_empty_product_before_area(self):
+        with pytest.raises(ValueError):
+            parse_project_area_override(",B")
+
+    def test_rejects_path_separator_in_product(self):
+        with pytest.raises(ValueError):
+            parse_project_area_override("../PCBA1,B")
+
+    def test_rejects_path_separator_in_area(self):
+        with pytest.raises(ValueError):
+            parse_project_area_override("PCBA1,B/side")
+
     def test_returns_new_dict(self, base_config):
         """Must not mutate the input dict."""
         original = copy.deepcopy(base_config)
@@ -73,6 +100,36 @@ class TestResolveProjectPaths:
         assert yt["name"] == "train"
         assert "LED" in yt["dataset_dir"]
         assert yt["position_validation"]["product"] == "LED"
+
+    def test_product_area_override_updates_area_settings(self, base_config):
+        base_config["yolo_training"]["deploy"] = {
+            "enabled": True,
+            "inference_models_dir": "../yolo11_inference/models",
+        }
+        base_config["yolo_training"]["artifact_bundle"] = {"enabled": True}
+
+        result = resolve_project_paths(base_config, "PCBA1,B")
+        yt = result["yolo_training"]
+
+        assert "PCBA1" in yt["project"]
+        assert "PCBA1,B" not in yt["project"]
+        assert str(Path("data") / "PCBA1" / "B" / "split") == yt["dataset_dir"]
+        assert str(Path("runs") / "PCBA1" / "B") == yt["project"]
+        assert (
+            result["yolo_augmentation"]["input"]["image_dir"]
+            == str(Path("data") / "PCBA1" / "B" / "raw" / "images")
+        )
+        assert (
+            result["train_test_split"]["input"]["image_dir"]
+            == str(Path("data") / "PCBA1" / "B" / "processed" / "images")
+        )
+        assert yt["position_validation"]["product"] == "PCBA1"
+        assert yt["position_validation"]["area"] == "B"
+        assert yt["export_detection_config"]["current_product"] == "PCBA1"
+        assert yt["export_detection_config"]["area"] == "B"
+        assert yt["deploy"]["product"] == "PCBA1"
+        assert yt["deploy"]["area"] == "B"
+        assert yt["artifact_bundle"]["area"] == "B"
 
     def test_pipeline_log_path(self, base_config):
         result = resolve_project_paths(base_config, "MyProduct")
@@ -153,3 +210,13 @@ class TestResolveProjectPaths:
             "J6",
             "J7",
         ]
+
+    def test_loads_area_scoped_project_classes(self, base_config, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        labels_dir = Path("data") / "PCBA1" / "B" / "raw" / "labels"
+        labels_dir.mkdir(parents=True)
+        (labels_dir / "classes.txt").write_text("J5-1\nJ5-2\n", encoding="utf-8")
+
+        result = resolve_project_paths(base_config, "PCBA1,B")
+
+        assert result["yolo_training"]["class_names"] == ["J5-1", "J5-2"]

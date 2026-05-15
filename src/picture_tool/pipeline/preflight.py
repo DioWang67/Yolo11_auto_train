@@ -133,8 +133,21 @@ class PreflightChecker:
         """ERROR if dataset_splitter input directories are missing."""
         split_cfg: dict = config.get("train_test_split", {}) or {}
         inp: dict = split_cfg.get("input", {}) or {}
+        try:
+            from picture_tool.tasks.quality import resolve_split_input_dirs
+
+            image_dir, label_dir, _ = resolve_split_input_dirs(config)
+            resolved_paths = {
+                "image_dir": str(image_dir),
+                "label_dir": str(label_dir),
+            }
+        except (KeyError, TypeError, ValueError):
+            resolved_paths = {
+                "image_dir": inp.get("image_dir", ""),
+                "label_dir": inp.get("label_dir", ""),
+            }
         for key, label in [("image_dir", "圖片目錄"), ("label_dir", "標籤目錄")]:
-            path_str = inp.get(key, "")
+            path_str = resolved_paths.get(key, "")
             if path_str and not Path(path_str).exists():
                 issues.append(
                     PreflightIssue(

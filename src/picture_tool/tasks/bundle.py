@@ -2,6 +2,7 @@ import logging
 import zipfile
 from pathlib import Path
 from typing import List, Any
+from picture_tool.path_resolver import parse_project_area_override
 from picture_tool.pipeline.utils import detect_existing_weights
 
 
@@ -72,12 +73,19 @@ def run_artifact_bundle(config, args):
         return
 
     # Resolve product and area (same logic as deploy task)
-    product = ycfg.get("name", "train")
+    product = (
+        ycfg.get("artifact_bundle", {}).get("product")
+        or ycfg.get("position_validation", {}).get("product")
+        or ycfg.get("name", "train")
+    )
+    product_area_override = None
     if getattr(args, "product", None):
-        product = args.product
+        product_area_override = parse_project_area_override(args.product)
+        product = product_area_override.project
 
     area: str = (
-        bcfg.get("area")
+        (product_area_override.area if product_area_override else None)
+        or bcfg.get("area")
         or ycfg.get("deploy", {}).get("area")
         or ycfg.get("position_validation", {}).get("area")
         or "A"
