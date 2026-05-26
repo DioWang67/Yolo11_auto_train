@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Optional, List
 import typer  # type: ignore
 import yaml  # type: ignore
@@ -163,6 +164,77 @@ def describe(
     else:
         typer.echo(f"Unknown task: {task}", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command("anomalib-train-folder")
+def anomalib_train_folder(
+    input_dir: Path = typer.Option(
+        ..., "--input", exists=True, file_okay=False, help="Product/area folder or image folder."
+    ),
+    product: str = typer.Option(..., help="Product name, e.g. PCBA1."),
+    area: str = typer.Option(..., help="Area name, e.g. B."),
+    project: Optional[Path] = typer.Option(
+        None, help="Output project directory. Defaults to runs/anomalib/<product>/<area>."
+    ),
+    model: str = typer.Option("padim", help="Anomalib model: padim or patchcore."),
+    image_size: int = typer.Option(256, min=1, help="Square training image size."),
+    batch_size: int = typer.Option(8, min=1, help="Train/eval batch size."),
+    max_epochs: int = typer.Option(1, min=1, help="Maximum training epochs."),
+    accelerator: str = typer.Option("cpu", help="Lightning accelerator, e.g. cpu, gpu, auto."),
+    devices: str = typer.Option("1", help="Lightning devices value."),
+    pre_trained: bool = typer.Option(False, help="Use pretrained backbone weights."),
+    require_anomalous_validation: bool = typer.Option(
+        False, help="Fail if no abnormal validation/test folder is found."
+    ),
+    force: bool = typer.Option(False, help="Retrain even if a checkpoint exists."),
+    tmp_dir: Path = typer.Option(
+        Path("runs/tmp"), help="Temp directory used during checkpoint writes."
+    ),
+):
+    """Train Anomalib from a folder with automatic layout detection."""
+    from picture_tool.train.anomalib_trainer import train_anomalib_folder
+
+    logger = setup_logging("logs/anomalib_train_folder.log")
+    try:
+        result = train_anomalib_folder(
+            input_dir=input_dir,
+            product=product,
+            area=area,
+            project=project,
+            model=model,
+            image_size=image_size,
+            batch_size=batch_size,
+            max_epochs=max_epochs,
+            accelerator=accelerator,
+            devices=_parse_devices(devices),
+            pre_trained=pre_trained,
+            require_anomalous_validation=require_anomalous_validation,
+            force=force,
+            tmp_dir=tmp_dir,
+            logger=logger,
+        )
+    except (ValueError, RuntimeError, ImportError) as exc:
+        logger.exception("Anomalib folder training failed.")
+        typer.echo(f"Anomalib training failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"Run directory: {result.run_dir}")
+    typer.echo(f"Checkpoint: {result.checkpoint_path or 'not found'}")
+    typer.echo(f"Report: {result.report_path}")
+    typer.echo(f"Normal images: {result.normal_image_count}")
+    typer.echo(f"Abnormal images: {result.abnormal_image_count}")
+    if result.baseline_only:
+        typer.echo("Status: baseline_only=true; threshold is not deployment-grade.")
+    else:
+        typer.echo("Status: validated layout detected.")
+
+
+def _parse_devices(value: str) -> str | int:
+    """Return an int for simple numeric device values, otherwise the raw string."""
+    stripped = value.strip()
+    if stripped.isdigit():
+        return int(stripped)
+    return stripped
 
 
 if __name__ == "__main__":

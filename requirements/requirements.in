@@ -6,6 +6,7 @@
 ultralytics>=8.3.0  # Working: 8.3.156
 torch>=2.4.0,<2.5  # Working: 2.4.1
 torchvision>=0.19.0  # Working: 0.19.1
+anomalib==1.2.0  # Working: 1.2.0
 
 # Computer Vision
 opencv-python>=4.9.0  # Working: 4.9.0.80
