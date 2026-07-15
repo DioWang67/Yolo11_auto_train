@@ -299,7 +299,7 @@ class PipelineManager(QObject):
     def _on_worker_error(self, message: str) -> None:
         """Handler for worker thread errors."""
         self.error_occurred.emit(message)
-        # Worker thread usually emits finished_signal after error, but we clean up to be safe
+        # Native QThread.finished performs the actual reference cleanup.
         if self.worker_thread:
             # We don't force kill, just ensure reference is ready to be cleared
             pass

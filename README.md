@@ -1,5 +1,7 @@
 # picture-tool
 
+完整推論回訓與安全部署流程請見 [docs/SEAMLESS_WORKFLOW.md](docs/SEAMLESS_WORKFLOW.md)。
+
 影像處理與 YOLO 自動化訓練/驗證工具，提供 CLI 與 PyQt GUI。涵蓋：格式轉換、資料增強、資料分割、資料檢查、YOLO 訓練/評估、批次推論、顏色檢測、位置驗證、報告產生等。
 
 ## 功能總覽（任務 key）

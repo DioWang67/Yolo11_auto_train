@@ -2,6 +2,11 @@ from pathlib import Path
 from typing import Any
 from picture_tool.augment import ImageAugmentor, YoloDataAugmentor
 from picture_tool.quality.dataset_linter import preview_dataset
+from picture_tool.pipeline.cache import (
+    task_cache_exists,
+    task_cache_matches,
+    write_task_cache,
+)
 from picture_tool.pipeline.utils import mtime_latest, exists_and_nonempty
 from picture_tool.pipeline.core import Task
 
@@ -18,6 +23,15 @@ def run_yolo_augmentation(config, args):
     augmentor._setup_output_dirs()
     augmentor.augmentations = augmentor._create_augmentations()
     augmentor.process_dataset()
+    cfg = config.get("yolo_augmentation", {})
+    ic = cfg.get("input", {})
+    oc = cfg.get("output", {})
+    write_task_cache(
+        Path(oc.get("image_dir", "./data/project/processed/images")).parent,
+        "yolo_augmentation",
+        cfg,
+        [Path(ic["image_dir"]), Path(ic["label_dir"])],
+    )
 
 
 def skip_yolo_augmentation(config, args):
@@ -49,6 +63,11 @@ def skip_yolo_augmentation(config, args):
             actual_labels = len(list(out_dirs[1].glob("*.txt")))
             if actual_labels < expected_outputs:
                 return None
+        cache_dir = out_dirs[0].parent
+        if task_cache_matches(cache_dir, "yolo_augmentation", cfg, in_dirs):
+            return "Output cache matches inputs and config; skipping."
+        if task_cache_exists(cache_dir):
+            return None
         if mtime_latest(out_dirs) >= mtime_latest(in_dirs):
             return "Outputs are newer than inputs; skipping."
     return None

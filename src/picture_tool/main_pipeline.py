@@ -7,13 +7,9 @@ execution to :mod:`picture_tool.pipeline.core`.
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-import yaml
-from picture_tool.config_loader import (
-    load_config,
-    load_config_if_updated,
-)
+from picture_tool.config_loader import load_config_if_updated
 from picture_tool.config_validation import validate_config_schema
 from picture_tool.path_resolver import resolve_project_paths
 from picture_tool.pipeline.core import Pipeline, Task
@@ -135,7 +131,9 @@ def _auto_device(config: dict, logger: logging.Logger) -> None:
 
 def build_task_registry(config: dict) -> dict[str, Task]:
     from picture_tool.tasks import (
+        bundle,
         conversion,
+        deploy,
         quality,
         training,
         augmentation,
@@ -143,7 +141,9 @@ def build_task_registry(config: dict) -> dict[str, Task]:
     )
 
     tasks_modules = [
+        bundle,
         conversion,
+        deploy,
         quality,
         training,
         augmentation,
@@ -223,8 +223,28 @@ def interactive_task_selection(config, registry: dict[str, Task]):
     return selected_tasks
 
 
-def run_pipeline(tasks, config, logger, args, stop_event=None):
-    """Execute each task handler with dependency checks and skipping logic."""
+def run_pipeline(
+    tasks,
+    config,
+    logger,
+    args,
+    stop_event=None,
+    on_task_start=None,
+    on_task_complete=None,
+    reload_config: bool = True,
+):
+    """Execute tasks through the shared CLI/GUI pipeline path.
+
+    Args:
+        tasks: Requested task names.
+        config: Pipeline configuration dictionary.
+        logger: Logger used for pipeline status.
+        args: Runtime args namespace.
+        stop_event: Optional cancellation event checked between tasks.
+        on_task_start: Optional callback receiving the task object.
+        on_task_complete: Optional callback receiving ``task, index, total``.
+        reload_config: Whether to hot-reload ``args.config`` before each task.
+    """
     validate_config_schema(config, logger=logger, strict=False)
 
     registry = build_task_registry(config)
@@ -239,14 +259,29 @@ def run_pipeline(tasks, config, logger, args, stop_event=None):
     setattr(args, "stop_event", stop_event)
 
     def _before_task(task_obj: Task, cfg: dict) -> dict:
-        fresh_cfg = load_config_if_updated(args.config, cfg, logger)
+        if on_task_start:
+            on_task_start(task_obj)
+        fresh_cfg = cfg
+        config_path = getattr(args, "config", None)
+        if reload_config and config_path:
+            fresh_cfg = load_config_if_updated(config_path, cfg, logger)
         fresh_cfg = validate_config_schema(fresh_cfg, logger=logger, strict=False)
         fresh_cfg = _apply_cli_overrides(fresh_cfg, args, logger)
         _auto_device(fresh_cfg, logger)
         return fresh_cfg
 
+    def _after_task(task_obj: Task, index: int, total: int) -> None:
+        if on_task_complete:
+            on_task_complete(task_obj, index, total)
+
     pipeline = Pipeline(registry, logger=logger)
-    pipeline.run(valid_tasks, config, args, before_task=_before_task)
+    pipeline.run(
+        valid_tasks,
+        config,
+        args,
+        before_task=_before_task,
+        after_task=_after_task,
+    )
 
 
 def main():

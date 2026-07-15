@@ -5,6 +5,7 @@ import logging
 import os
 import platform
 import shutil
+import zipfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -48,6 +49,19 @@ MODEL_OPTIONS: dict[str, AnomalibModelOption] = {
         trade_off="Heavier than PaDiM and more sensitive to feature/memory settings.",
         default_backbone="resnet18",
         default_layers=("layer1",),
+        default_n_features=None,
+    ),
+    "efficientad": AnomalibModelOption(
+        name="efficientad",
+        class_path="anomalib.models.EfficientAd",
+        summary="Student-teacher anomaly detector with real optimization steps.",
+        best_for="Validated anomaly training when you can spend more time than PaDiM.",
+        trade_off=(
+            "Slower, downloads EfficientAD support weights/data on first run, "
+            "and thresholds still need abnormal validation."
+        ),
+        default_backbone="efficientad-small",
+        default_layers=(),
         default_n_features=None,
     ),
 }
@@ -158,6 +172,21 @@ class AnomalibDeploymentResult:
     config_path: Path
     checkpoint_path: Path
     report_path: Path | None
+    baseline_only: bool
+    usable_for_deployment: bool
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AnomalibPackageResult:
+    """Result summary for an inference-ready Anomalib zip package."""
+
+    package_dir: Path
+    zip_path: Path
+    config_path: Path
+    checkpoint_path: Path
+    report_path: Path | None
+    manifest_path: Path
     baseline_only: bool
     usable_for_deployment: bool
     warnings: list[str] = field(default_factory=list)
@@ -333,6 +362,18 @@ def train_anomalib_folder(
     layout = infer_anomalib_folder_layout(input_dir)
     output_project = project or Path("runs") / "anomalib" / product / area
     run_name = f"{product}_{area}"
+    normalized_model = _normalize_model_name(model)
+    train_batch_size = batch_size
+    eval_batch_size = batch_size
+    if normalized_model == "efficientad" and batch_size != 1:
+        log.warning(
+            "EfficientAD requires train_batch_size=1 in anomalib 1.2.0; "
+            "overriding requested batch_size=%s.",
+            batch_size,
+        )
+        train_batch_size = 1
+        eval_batch_size = 1
+
     cfg = {
         "anomalib_training": {
             "root": str(layout["root"]),
@@ -342,11 +383,11 @@ def train_anomalib_folder(
             "mask_dir": _string_or_none(layout.get("mask_dir")),
             "project": str(output_project),
             "name": run_name,
-            "model": model,
+            "model": normalized_model,
             "task": "segmentation",
             "image_size": image_size,
-            "train_batch_size": batch_size,
-            "eval_batch_size": batch_size,
+            "train_batch_size": train_batch_size,
+            "eval_batch_size": eval_batch_size,
             "num_workers": 0,
             "accelerator": accelerator,
             "devices": devices,
@@ -483,7 +524,11 @@ def infer_anomalib_folder_layout(input_dir: Path) -> dict[str, Path | None]:
 
 def supported_anomalib_models() -> list[AnomalibModelOption]:
     """Return supported model options in display order."""
-    return [MODEL_OPTIONS["padim"], MODEL_OPTIONS["patchcore"]]
+    return [
+        MODEL_OPTIONS["padim"],
+        MODEL_OPTIONS["patchcore"],
+        MODEL_OPTIONS["efficientad"],
+    ]
 
 
 def deploy_anomalib_run(
@@ -570,10 +615,146 @@ def deploy_anomalib_run(
     )
 
 
+def package_anomalib_run(
+    run_dir: Path,
+    *,
+    output_dir: Path,
+    product: str,
+    area: str,
+    threshold: float = 0.5,
+    force: bool = False,
+) -> AnomalibPackageResult:
+    """Create a zip package that can be extracted under yolo11_inference/models.
+
+    Args:
+        run_dir: Anomalib run directory containing ``weights/lightning/*.ckpt``.
+        output_dir: Directory where the package folder and zip are written.
+        product: Product name used in the inference models path.
+        area: Area name used in the inference models path.
+        threshold: Runtime anomaly score threshold.
+        force: Overwrite an existing package zip/files.
+
+    Returns:
+        Package result summary.
+
+    Raises:
+        FileNotFoundError: If required source files are missing.
+        FileExistsError: If destination files exist and ``force`` is false.
+    """
+    resolved_run = run_dir.expanduser()
+    checkpoint = _find_checkpoint(resolved_run)
+    if checkpoint is None:
+        raise FileNotFoundError(f"No Anomalib checkpoint found under {resolved_run}")
+
+    report = _read_training_report(resolved_run)
+    model_name = str((report.get("config") or {}).get("model", "padim"))
+    model_option = MODEL_OPTIONS.get(_normalize_model_name(model_name), MODEL_OPTIONS["padim"])
+    baseline_only = bool(report.get("baseline_only", True))
+    usable_for_deployment = bool(report.get("usable_for_deployment", False))
+    warnings = list(report.get("warnings") or [])
+    if baseline_only and not warnings:
+        warnings = _folder_training_warnings(True)
+
+    safe_model = model_option.name.replace("/", "_")
+    package_name = f"{product}_{area}_anomalib_{safe_model}_package"
+    package_dir = output_dir.expanduser() / package_name
+    deploy_dir = package_dir / product / area / "anomalib"
+    weights_dir = deploy_dir / "weights"
+    dest_checkpoint = weights_dir / "model.ckpt"
+    dest_report = deploy_dir / "training_report.json"
+    config_path = deploy_dir / "config.yaml"
+    manifest_path = deploy_dir / "package_manifest.json"
+    readme_path = deploy_dir / "README.txt"
+    zip_path = output_dir.expanduser() / f"{package_name}.zip"
+
+    if force:
+        if package_dir.exists():
+            shutil.rmtree(package_dir)
+        if zip_path.exists():
+            zip_path.unlink()
+    else:
+        for path in (package_dir, zip_path):
+            if path.exists():
+                raise FileExistsError(
+                    f"Package output already exists: {path}. Use --force to overwrite."
+                )
+
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(checkpoint, dest_checkpoint)
+
+    source_report = resolved_run / "training_report.json"
+    report_path: Path | None = None
+    if source_report.exists():
+        shutil.copy2(source_report, dest_report)
+        report_path = dest_report
+
+    config = _build_inference_anomalib_config(
+        product=product,
+        area=area,
+        model_option=model_option,
+        threshold=threshold,
+        baseline_only=baseline_only,
+        usable_for_deployment=usable_for_deployment,
+        warnings=warnings,
+    )
+    config_path.write_text(
+        yaml.safe_dump(config, sort_keys=False, allow_unicode=False),
+        encoding="utf-8",
+    )
+
+    manifest = {
+        "package_type": "yolo11_inference_anomalib_model",
+        "extract_under": "yolo11_inference/models",
+        "product": product,
+        "area": area,
+        "model": model_option.name,
+        "class_path": model_option.class_path,
+        "threshold": threshold,
+        "baseline_only": baseline_only,
+        "usable_for_deployment": usable_for_deployment,
+        "warnings": warnings,
+        "files": [
+            f"{product}/{area}/anomalib/config.yaml",
+            f"{product}/{area}/anomalib/training_report.json",
+            f"{product}/{area}/anomalib/weights/model.ckpt",
+        ],
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    readme_path.write_text(
+        (
+            "Extract this zip under yolo11_inference/models.\n"
+            f"Expected checkpoint path: models/{product}/{area}/anomalib/weights/model.ckpt\n"
+            f"baseline_only={str(baseline_only).lower()}\n"
+            f"usable_for_deployment={str(usable_for_deployment).lower()}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    _write_zip_from_package_dir(package_dir, zip_path)
+
+    return AnomalibPackageResult(
+        package_dir=package_dir,
+        zip_path=zip_path,
+        config_path=config_path,
+        checkpoint_path=dest_checkpoint,
+        report_path=report_path,
+        manifest_path=manifest_path,
+        baseline_only=baseline_only,
+        usable_for_deployment=usable_for_deployment,
+        warnings=warnings,
+    )
+
+
 def find_existing_anomalib_run(config: dict[str, Any]) -> Path | None:
     """Return the expected run directory if it already contains a checkpoint."""
     cfg = parse_anomalib_training_config(config)
-    model_name = "Patchcore" if cfg.model == "patchcore" else "Padim"
+    model_name = {
+        "patchcore": "Patchcore",
+        "efficientad": "EfficientAd",
+    }.get(cfg.model, "Padim")
     run_dir = _expected_workspace_dir(cfg, model_name=model_name)
     checkpoint_dir = run_dir / "weights" / "lightning"
     if any(checkpoint_dir.glob("*.ckpt")):
@@ -700,6 +881,14 @@ def _folder_training_warnings(baseline_only: bool) -> list[str]:
     ]
 
 
+def _write_zip_from_package_dir(package_dir: Path, zip_path: Path) -> None:
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(package_dir.rglob("*")):
+            if path.is_file():
+                archive.write(path, path.relative_to(package_dir).as_posix())
+
+
 def _resolve_folder_path(root: Path, value: object) -> Path:
     path = Path(str(value)).expanduser()
     if path.is_absolute():
@@ -725,10 +914,13 @@ def _normalize_model_name(value: str) -> str:
         "padim": "padim",
         "paDiM".lower(): "padim",
         "patchcore": "patchcore",
+        "efficientad": "efficientad",
+        "efficientads": "efficientad",
+        "efficientadsmall": "efficientad",
     }
     if normalized not in aliases:
         raise ValueError(
-            "Unsupported anomalib_training.model. Supported values: padim, patchcore"
+            "Unsupported anomalib_training.model. Supported values: padim, patchcore, efficientad"
         )
     return aliases[normalized]
 
@@ -750,6 +942,8 @@ def _validate_training_config(cfg: AnomalibTrainingConfig) -> None:
         raise ValueError("anomalib_training.test_split_ratio must be between 0 and 1")
     if cfg.model == "patchcore" and cfg.num_neighbors <= 0:
         raise ValueError("anomalib_training.num_neighbors must be greater than 0")
+    if cfg.model == "efficientad" and cfg.train_batch_size != 1:
+        raise ValueError("anomalib_training.train_batch_size must be 1 for EfficientAD")
     if cfg.n_features is not None and cfg.n_features <= 0:
         raise ValueError("anomalib_training.n_features must be greater than 0")
 
@@ -833,6 +1027,11 @@ def _build_model(cfg: AnomalibTrainingConfig) -> Any:
             pre_trained=cfg.pre_trained,
             n_features=cfg.n_features,
         )
+
+    if cfg.model == "efficientad":
+        from anomalib.models import EfficientAd  # type: ignore
+
+        return EfficientAd(model_size="small")
 
     from anomalib.models import Patchcore  # type: ignore
 

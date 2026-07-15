@@ -32,6 +32,7 @@ try:
     from picture_tool.exceptions import ConfigurationError
     from picture_tool.gui.log_viewer import LogViewer
     from picture_tool.gui.annotation_panel import AnnotationPanel
+    from picture_tool.gui.operator_workflow_panel import OperatorWorkflowPanel
     from picture_tool.gui.config_panel import ConfigPanel
     from picture_tool.gui.color_panel import ColorPanel
     from picture_tool.gui.task_control_panel import TaskControlPanel
@@ -48,8 +49,10 @@ except ImportError:
     class PipelineManager:  # type: ignore
         def __init__(self, parent=None):
             self.config = {}
+
         def start_pipeline(self, tasks, config_path=None, product_id=None):
             pass
+
         def stop_pipeline(self):
             pass
 
@@ -67,10 +70,76 @@ except ImportError:
 
 
 # ------------------------------------------------------------------
+def _operator_error_message(message: str) -> str:
+    """Translate expected safety-gate failures into line-leader guidance."""
+    normalized = message.lower()
+    if "operator_training_preflight_failed" in normalized:
+        issues: list[str] = []
+        if "operator_feedback_not_actionable" in normalized:
+            issues.append(
+                "本批只有原本就辨識正確的照片；資料已加入樣本庫，但要累積足夠的"
+                "補框、修正類別、刪除錯框或確認無目標照片才會開始補訓。"
+            )
+        if "deployed_training_pair_missing" in normalized:
+            issues.append(
+                "目前產線 ONNX 找不到同版本的 PT 訓練權重，無法保證從現行模型繼續學習。"
+                "請通知工程人員重新部署成對模型檔。"
+            )
+        if not issues:
+            issues.append("補訓前安全檢查未通過，請通知工程人員查看工作紀錄。")
+        return "補訓尚未開始，資料已安全保存，產線模型不會變更。\n\n" + "\n".join(
+            f"• {issue}" for issue in issues
+        )
+    if any(
+        token in normalized
+        for token in (
+            "split_underrepresented",
+            "class_underrepresented",
+            "not enough independent",
+            "at least three independent",
+        )
+    ):
+        return (
+            "補標資料已安全保存，但目前樣本數不足，這次不會更新產線模型。\n"
+            "請繼續收集並補標漏檢圖片；資料達到安全門檻後再送出補訓。"
+        )
+    if "deployment quality gate failed" in normalized:
+        raw_failures = message.split(":", 1)[1].strip() if ":" in message else ""
+        detail = ""
+        if raw_failures:
+            detail = "\n\n未通過項目：\n" + "\n".join(
+                f"• {item.strip()}" for item in raw_failures.split(";") if item.strip()
+            )
+        return (
+            "新模型未通過產線品質比較，因此未部署，現場仍使用原本模型。\n"
+            "請查看下列指標，補充對應類別的漏檢／錯框照片後再重試。"
+            f"{detail}"
+        )
+    if "deployed_training_pair_missing" in normalized:
+        return (
+            "產線模型缺少同版本 PT 訓練權重，因此補訓尚未開始。\n"
+            "資料已保存且產線模型不會變更；請通知工程人員重新部署成對模型檔。"
+        )
+    if (
+        "incumbent baseline" in normalized
+        or "deployed model is unavailable" in normalized
+    ):
+        return (
+            "找不到目前產線模型，無法安全比較新舊模型，因此未部署。\n"
+            "請通知工程人員檢查模型檔案。"
+        )
+    if "class contract" in normalized or "class order" in normalized:
+        return (
+            "檢測類別資料不一致，已停止補訓且不會部署。\n"
+            "請用目前產線模型重新檢測該圖片後再送出。"
+        )
+    return message
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        
+
         # Initialize PipelineManager (replaces Mixin)
         self.manager = PipelineManager(parent=self)
         self.manager.pipeline_finished.connect(self.on_pipeline_finished)
@@ -79,24 +148,26 @@ class MainWindow(QMainWindow):
         self.manager.task_completed.connect(self.on_task_completed)
         self.manager.progress_updated.connect(self.on_progress_updated)
         self.manager.log_message.connect(self.log_message)
-        
+
         # Initialize LogViewer for logs and config preview
         self.log_viewer = LogViewer(parent=self)
         self._log_history: List[str] = []
-        
+        self._operator_handoff_target = None
+        self._operator_handoff = None
+        self._operator_training_lock = None
+        self._operator_cancel_requested = False
+        self._operator_mode_enabled = False
+
         # Initialize ConfigEditor before _build_ui
         self.config_editor = ConfigEditor()
-        
+
         # Backward compatibility: alias log_viewer components
         # This allows existing code to reference self.tabs, self.log_text, self.config_text
         self.tabs = None  # Will be set after _build_ui
         self.log_text = None
         self.config_text = None
-        
+
         self.task_status_items: Dict[str, QListWidgetItem] = {}
-        
-        
-        
 
         # Annotation-related components (Moved to AnnotationPanel)
         # self.labelimg_launcher = LabelImgLauncher()
@@ -110,12 +181,13 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         # Load external stylesheet
         try:
-             from PyQt5.QtWidgets import QApplication
-             app = QApplication.instance()
-             if app:
-                 load_stylesheet(app)  # type: ignore[arg-type]
+            from PyQt5.QtWidgets import QApplication
+
+            app = QApplication.instance()
+            if app:
+                load_stylesheet(app)  # type: ignore[arg-type]
         except ImportError:
-             pass
+            pass
 
         self._build_ui()
 
@@ -192,12 +264,17 @@ class MainWindow(QMainWindow):
         dash_layout.setContentsMargins(20, 20, 20, 20)
         dash_layout.setSpacing(15)
 
+        self.operator_workflow_panel = OperatorWorkflowPanel(parent=self)
+        self.operator_workflow_panel.setVisible(False)
+        dash_layout.addWidget(self.operator_workflow_panel)
+
         # 右側上半部：訓練指標 (hidden until metrics detected)
         self.training_metrics = TrainingMetricsWidget()
         dash_layout.addWidget(self.training_metrics)
 
         # 狀態監控
-        dash_layout.addWidget(self._create_header_label("Pipeline Status Queue"))
+        self.pipeline_status_header = self._create_header_label("Pipeline Status Queue")
+        dash_layout.addWidget(self.pipeline_status_header)
         self.status_list = QListWidget()
         self.status_list.setMaximumHeight(200)  # 不佔滿整個畫面
         self.status_list.setAlternatingRowColors(True)
@@ -205,10 +282,11 @@ class MainWindow(QMainWindow):
 
         # 右側下半部：使用 LogViewer 的 tabs（保持視覺一致）
         # LogViewer 包含 Execution Logs 和 Config Preview tabs
-        
+
         # Tab 3: Annotation Tool
         self.annotation_panel = AnnotationPanel(manager=self.manager, parent=self)
         self.annotation_panel.message_logged.connect(self.log_message)
+        self.annotation_panel.pending_ready.connect(self.apply_operator_handoff)
         self.log_viewer.tabs.addTab(self.annotation_panel, "📝 圖像標註")
 
         # Tab 4: Config Editor
@@ -219,10 +297,12 @@ class MainWindow(QMainWindow):
         self.color_panel.log_message.connect(self.log_message)
         self.log_viewer.tabs.addTab(self.color_panel, "🎨 顏色驗證")
 
-        dash_layout.addLayout(self._build_log_controls())
+        self.log_controls_container = QWidget()
+        self.log_controls_container.setLayout(self._build_log_controls())
+        dash_layout.addWidget(self.log_controls_container)
         dash_layout.addWidget(self.log_viewer.tabs, 2)  # 使用 LogViewer 的 tabs
 
-        main_layout.addWidget(self.side_bar, 0)   # 固定寬度，不伸展
+        main_layout.addWidget(self.side_bar, 0)  # 固定寬度，不伸展
         main_layout.addWidget(self.dashboard, 1)  # 填滿剩餘空間
 
         # Set up backward compatibility aliases
@@ -315,21 +395,27 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def load_config(self) -> None:
         """Load config from path and update UI"""
-        path = self.config_path_edit.text().strip() if hasattr(self, "config_path_edit") else None
+        path = (
+            self.config_path_edit.text().strip()
+            if hasattr(self, "config_path_edit")
+            else None
+        )
         self.manager.load_config(path)
-    
+
         # Update path display with the actually loaded config path
         if hasattr(self, "config_path_edit") and self.manager.current_config_path:
             self.config_path_edit.setText(str(self.manager.current_config_path))
-    
+
         # self._update_config_status()  # Method was removed during refactoring
         if hasattr(self, "config_editor"):
             self.config_editor.set_config(self.manager.config)
-    
+
         # Update Config Preview tab
         if self.config_text is not None:
             try:
-                config_yaml = yaml.dump(self.manager.config, allow_unicode=True, sort_keys=False)
+                config_yaml = yaml.dump(
+                    self.manager.config, allow_unicode=True, sort_keys=False
+                )
                 self.config_text.setPlainText(config_yaml)
             except (yaml.YAMLError, TypeError, ValueError) as e:
                 self.config_text.setPlainText(f"Error displaying config: {e}")
@@ -338,7 +424,7 @@ class MainWindow(QMainWindow):
         """Handle config loaded signal from ConfigPanel."""
         if hasattr(self, "config_editor"):
             self.config_editor.set_config(config)
-    
+
         # Update Config Preview in LogViewer
         if self.config_text is not None:
             try:
@@ -347,14 +433,14 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.config_text.setPlainText(f"Error displaying config: {e}")
 
-    def start_pipeline(self) -> None:
+    def start_pipeline(self) -> bool:
         """Start the pipeline with selected tasks"""
         # Collect selected tasks
         selected_tasks = self.task_control.get_selected_tasks()
 
         if not selected_tasks:
             self.log_message("[WARNING] No tasks selected.")
-            return
+            return False
 
         # Get overrides
         config_path = self.config_panel.get_config_path()
@@ -371,17 +457,22 @@ class MainWindow(QMainWindow):
                     "Invalid Product",
                     f"Product format must be 'Product' or 'Product,Area'.\n\n{exc}",
                 )
-                return
+                return False
 
         # Validate product override if placeholders are present
         if not product:
             import json
+
             cfg_dump = json.dumps(self.manager.config)
-            if "/project/" in cfg_dump or "./data/project" in cfg_dump or "./runs/project" in cfg_dump:
+            if (
+                "/project/" in cfg_dump
+                or "./data/project" in cfg_dump
+                or "./runs/project" in cfg_dump
+            ):
                 QMessageBox.warning(
                     self,
                     "未填寫產品名稱",
-                    "偵測到設定檔包含路徑佔位符 (project)，請先於左側「Product」欄位輸入產品名稱 (如 Cable1) 以進行自動路徑對齊。"
+                    "偵測到設定檔包含路徑佔位符 (project)，請先於左側「Product」欄位輸入產品名稱 (如 Cable1) 以進行自動路徑對齊。",
                 )
                 return
 
@@ -390,18 +481,20 @@ class MainWindow(QMainWindow):
             from picture_tool.pipeline.preflight import PreflightChecker
             from picture_tool.gui.preflight_dialog import PreflightDialog
             from picture_tool.path_resolver import resolve_project_paths
+
             # Apply product path substitution before preflight so checks
             # see the actual resolved paths (e.g. Cable1) instead of
             # the 'project' placeholder that lives in the raw config.
             preflight_config = (
                 resolve_project_paths(self.manager.config, product)
-                if product else self.manager.config
+                if product
+                else self.manager.config
             )
             issues = PreflightChecker().run(selected_tasks, preflight_config)
             if issues:
                 dlg = PreflightDialog(issues, parent=self)
                 if not dlg.exec_():
-                    return  # User cancelled or errors block execution
+                    return False  # User cancelled or errors block execution
         except Exception as exc:
             self.log_message(f"[WARNING] Preflight check failed: {exc}")
 
@@ -416,11 +509,191 @@ class MainWindow(QMainWindow):
 
         # Start via manager
         self.manager.start_pipeline(selected_tasks, config_path, product)
+        return True
+
+    def apply_operator_handoff(self, handoff_path: str | Path) -> None:
+        """Load an inference handoff and prepare one-click train/deploy.
+
+        Args:
+            handoff_path: Validated JSON contract exported by the inference GUI.
+        """
+        handoff = None
+        try:
+            from picture_tool.gui.operator_handoff import (
+                OperatorHandoffError,
+                apply_handoff_to_config,
+                load_operator_handoff,
+                materialize_job_dataset_snapshot,
+            )
+            from picture_tool.operator_job import (
+                acquire_target_training_lock,
+            )
+
+            training_root = Path.cwd()
+            handoff = load_operator_handoff(handoff_path, training_root=training_root)
+            self._operator_handoff = handoff
+            target = handoff.selected_target
+            specific_config = (
+                training_root / "configs" / f"{target.product.lower()}_pipeline.yaml"
+            )
+            config_path = (
+                specific_config
+                if specific_config.exists()
+                else training_root / "configs" / "default_pipeline.yaml"
+            )
+            self.config_panel.config_path_edit.setText(str(config_path))
+            self.config_panel.load_config()
+            prepared = apply_handoff_to_config(self.manager.config, handoff)
+            self.manager.update_config(prepared)
+            self.config_panel.set_product_override(target.product, target.area)
+            self.config_editor.set_config(prepared)
+            feedback_count = len(target.sample_ids) or (
+                target.ready_count + target.pending_count
+            )
+            self.operator_workflow_panel.configure_target(
+                target.product,
+                target.area,
+                feedback_count=feedback_count,
+                pending_count=target.pending_count,
+            )
+            self._set_operator_mode(pending=target.pending_count > 0)
+            if target.pending_count > 0:
+                class_names = list(
+                    (prepared.get("yolo_training", {}) or {}).get("class_names") or []
+                )
+                self.annotation_panel.configure_operator_pending(
+                    target.dataset_root,
+                    class_names,
+                    handoff.path,
+                )
+                self.log_viewer.tabs.setCurrentWidget(self.annotation_panel)
+                self._operator_handoff_target = None
+                self._operator_handoff = handoff
+                self._publish_operator_status(
+                    state="waiting_annotation",
+                    message=f"等待完成 {target.pending_count} 張補標",
+                    pending_count=target.pending_count,
+                    progress=0,
+                )
+                self.status_label.setText(
+                    f"待標註：{target.product}/{target.area}（{target.pending_count} 張）"
+                )
+                self.status_label.setStyleSheet(
+                    "color: #F0AD4E; font-size: 10pt; font-weight: bold;"
+                )
+                return
+            self._operator_training_lock = acquire_target_training_lock(
+                handoff.data_root,
+                product=target.product,
+                area=target.area,
+                job_id=handoff.job_id or handoff.path.stem,
+            )
+            self._publish_operator_status(
+                state="preparing_dataset",
+                message="正在建立固定的訓練資料快照",
+                pending_count=0,
+                progress=10,
+            )
+            handoff = materialize_job_dataset_snapshot(handoff)
+            target = handoff.selected_target
+            prepared = apply_handoff_to_config(self.manager.config, handoff)
+            self.manager.update_config(prepared)
+            self.config_editor.set_config(prepared)
+            if not self.task_control.apply_workflow("YOLO: train and deploy"):
+                raise OperatorHandoffError(
+                    "The 'YOLO: train and deploy' workflow is unavailable."
+                )
+
+            self._operator_handoff_target = target
+            self._operator_handoff = handoff
+            self._operator_cancel_requested = False
+            self.config_panel.setEnabled(False)
+            self.task_control.setEnabled(False)
+            self.status_label.setText(f"待開始：{target.product}/{target.area}")
+            self.status_label.setStyleSheet(
+                "color: #6BCB77; font-size: 10pt; font-weight: bold;"
+            )
+            self.start_btn.setText("開始訓練並部署")
+            if not self.start_pipeline():
+                raise OperatorHandoffError("Training was not started.")
+        except (OSError, RuntimeError, ValueError, yaml.YAMLError) as exc:
+            operator_message = _operator_error_message(str(exc))
+            if handoff is not None:
+                self._publish_operator_status(
+                    state="failed",
+                    message=operator_message.splitlines()[0],
+                    error=operator_message,
+                )
+            self._release_operator_training_lock()
+            self._operator_handoff_target = None
+            self._operator_handoff = None
+            QMessageBox.critical(self, "無法接收訓練資料", operator_message)
+
+    def _publish_operator_status(self, *, state: str, message: str, **values) -> None:
+        """Publish the current operator job state without masking pipeline errors."""
+        if self._operator_mode_enabled:
+            self.operator_workflow_panel.set_state(
+                state,
+                message=message,
+                progress=values.get("progress"),
+                pending_count=values.get("pending_count"),
+            )
+        handoff = self._operator_handoff
+        if handoff is None:
+            return
+        try:
+            from picture_tool.operator_job import update_job_status
+
+            update_job_status(
+                handoff.status_path,
+                state=state,
+                message=message,
+                **values,
+            )
+        except RuntimeError as exc:
+            self.log_message(f"[WARNING] Unable to update operator status: {exc}")
+
+    def _release_operator_training_lock(self) -> None:
+        """Release the product/station lifecycle lock when a job terminates."""
+        lock = self._operator_training_lock
+        self._operator_training_lock = None
+        if lock is None:
+            return
+        try:
+            from picture_tool.operator_job import release_target_training_lock
+
+            release_target_training_lock(lock)
+        except RuntimeError as exc:
+            self.log_message(f"[WARNING] Unable to release training lock: {exc}")
+
+    def _set_operator_mode(self, *, pending: bool) -> None:
+        """Reduce the training GUI to the controls required by an operator."""
+        self._operator_mode_enabled = True
+        self.setWindowTitle("產線模型補訓")
+        self.side_bar.setVisible(False)
+        self.operator_workflow_panel.setVisible(True)
+        self.training_metrics.setVisible(False)
+        self.pipeline_status_header.setVisible(False)
+        self.status_list.setVisible(False)
+        self.log_controls_container.setVisible(False)
+        self.log_viewer.tabs.setVisible(pending)
+        self.log_viewer.tabs.tabBar().setVisible(False)
+        if pending:
+            annotation_index = self.log_viewer.tabs.indexOf(self.annotation_panel)
+            for index in range(self.log_viewer.tabs.count()):
+                self.log_viewer.tabs.setTabVisible(index, index == annotation_index)
+            self.log_viewer.tabs.setCurrentIndex(annotation_index)
 
     def stop_pipeline(self) -> None:
         """Stop the running pipeline"""
+        if self._operator_handoff_target is not None:
+            self._operator_cancel_requested = True
+            self._publish_operator_status(
+                state="cancelled",
+                message="模型更新已由使用者停止",
+            )
         self.manager.stop_pipeline()
-    
+
         # Update UI state
         if hasattr(self, "start_btn"):
             self.start_btn.setEnabled(True)
@@ -432,7 +705,7 @@ class MainWindow(QMainWindow):
         self._log_history.append(message)
         self.log_viewer.log_message(message)
         # Extract training metrics from ultralytics epoch lines
-        if hasattr(self, "training_metrics"):
+        if hasattr(self, "training_metrics") and not self._operator_mode_enabled:
             metrics = TrainingMetricsParser.parse_epoch_line(message)
             if metrics:
                 self.training_metrics.setVisible(True)
@@ -487,7 +760,7 @@ class MainWindow(QMainWindow):
 
         # Update status list based on provided list or current selection
         targets = only if only is not None else self.task_control.get_selected_tasks()
-    
+
         for task in targets:
             label_text = TASK_OPTIONS_MAP.get(task, task)
             item = QListWidgetItem(f"⚪  {label_text} : {default_state}")
@@ -527,6 +800,12 @@ class MainWindow(QMainWindow):
 
     def on_tasks_changed(self, tasks: list) -> None:
         """Handle tasks changed signal from TaskControlPanel."""
+        if self._operator_mode_enabled:
+            # The operator facade does not render dependency details. Resolving
+            # them here imports the training registry (and potentially Torch)
+            # on the UI thread, delaying the transition after annotation.
+            self._rebuild_status_items(only=tasks)
+            return
         # Resolve dependency chain for preview
         try:
             ordered, auto_added = self.manager.resolve_task_chain(tasks)
@@ -542,6 +821,24 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def on_pipeline_finished(self):
         """Handle pipeline completion."""
+        operator_target = self._operator_handoff_target
+        self._operator_handoff_target = None
+        if operator_target is not None:
+            if self._operator_cancel_requested:
+                self._publish_operator_status(
+                    state="cancelled",
+                    message="模型更新已停止",
+                )
+            else:
+                self._publish_operator_status(
+                    state="deployed",
+                    message="模型訓練、驗證與部署已完成",
+                    progress=100,
+                    pending_count=0,
+                )
+            self._release_operator_training_lock()
+            self._operator_handoff = None
+            self._operator_cancel_requested = False
         self.log_message("[SUCCESS] Pipeline finished successfully.")
         self._reset_ui_state()
         if hasattr(self, "progress_bar"):
@@ -549,19 +846,72 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Pipeline Completed")
         if hasattr(self, "training_metrics"):
             self.training_metrics.reset()
+        if operator_target is not None:
+            self.config_panel.setEnabled(True)
+            self.task_control.setEnabled(True)
+            self.start_btn.setText("▶ RUN PIPELINE")
+            QMessageBox.information(
+                self,
+                "訓練與部署完成",
+                f"{operator_target.product}/{operator_target.area} 已部署完成。\n"
+                "推理系統將於下一次檢測時自動載入新模型。",
+            )
 
     def on_pipeline_error(self, message: str):
         """Handle pipeline error."""
+        operator_target = self._operator_handoff_target
+        self._operator_handoff_target = None
+        operator_message = _operator_error_message(message)
+        if operator_target is not None:
+            self._publish_operator_status(
+                state="cancelled" if self._operator_cancel_requested else "failed",
+                message=(
+                    "模型更新已停止"
+                    if self._operator_cancel_requested
+                    else operator_message.splitlines()[0]
+                ),
+                error=operator_message,
+            )
+            self._release_operator_training_lock()
+            self._operator_handoff = None
+            self._operator_cancel_requested = False
         self.log_message(f"[ERROR] Pipeline failed: {message}")
         self._reset_ui_state()
         if hasattr(self, "status_label"):
             self.status_label.setText("Pipeline Error")
         if hasattr(self, "training_metrics"):
             self.training_metrics.reset()
+        if operator_target is not None:
+            self.config_panel.setEnabled(True)
+            self.task_control.setEnabled(True)
+            self.start_btn.setText("▶ RUN PIPELINE")
+            QMessageBox.critical(
+                self,
+                "訓練未完成",
+                f"{operator_target.product}/{operator_target.area} 未部署。\n\n"
+                f"{operator_message}",
+            )
 
     def on_task_started(self, task_name: str):
         """Handle task start."""
         self._set_task_status(task_name, "Running...", color="#4D96FF")
+        operator_states = {
+            "dataset_lint": ("preparing_dataset", "正在檢查訓練資料", 15),
+            "dataset_readiness": ("preparing_dataset", "正在檢查資料量", 20),
+            "dataset_splitter": ("preparing_dataset", "正在切分訓練資料", 25),
+            "yolo_augmentation": ("preparing_dataset", "正在進行資料增強", 30),
+            "yolo_train": ("training", "模型訓練中", 35),
+            "yolo_evaluation": ("evaluating", "正在驗證模型品質", 85),
+            "deploy": ("deploying", "正在部署新模型", 95),
+        }
+        if task_name in operator_states:
+            state, message, progress = operator_states[task_name]
+            self._publish_operator_status(
+                state=state,
+                message=message,
+                current_task=task_name,
+                progress=progress,
+            )
         if hasattr(self, "status_label"):
             self.status_label.setText(f"Running: {task_name}")
 
@@ -616,6 +966,3 @@ class MainWindow(QMainWindow):
         self._log_history.clear()
         if self.log_text is not None:
             self.log_text.clear()
-
-
-

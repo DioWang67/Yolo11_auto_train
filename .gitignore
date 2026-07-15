@@ -25,6 +25,8 @@ logs/
 runs/
 reports/
 data/
+datasets/
+pre_trained/
 models/
 debug_visualizations/
 augmentation_fixed.log

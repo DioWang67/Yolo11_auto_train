@@ -14,7 +14,6 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from picture_tool import main_pipeline as pipeline
 from picture_tool.exceptions import ConfigurationError, PipelineError
-from picture_tool.pipeline.core import Pipeline, Task
 
 
 class _SignalLoggingHandler(logging.Handler):
@@ -92,8 +91,6 @@ class WorkerThread(QThread):
             config = self._resolve_config()
             args = self._build_args()
 
-            registry = pipeline.build_task_registry(config)
-
             log_file = config.get("pipeline", {}).get("log_file", "logs/pipeline.log")
             try:
                 log_path = Path(log_file)
@@ -107,33 +104,33 @@ class WorkerThread(QThread):
             except OSError as e:
                 logger.warning(f"Failed to setup file logging: {e}")
 
-            # --- before_task hook: apply overrides + emit signal ---
-            def _before_task(task_obj: Task, cfg: dict) -> dict:
+            def _on_task_start(task_obj) -> None:
                 if self._cancel_requested:
                     self.stop_event.set()
                 self.task_started.emit(task_obj.name)
-                cfg = pipeline._apply_cli_overrides(cfg, args, logger)
-                pipeline._auto_device(cfg, logger)
-                return cfg
 
-            # --- after_task hook: emit progress + completion signal ---
-            def _after_task(task_obj: Task, index: int, total: int) -> None:
+            def _on_task_complete(task_obj, index: int, total: int) -> None:
                 self.task_completed.emit(task_obj.name)
                 self._emit_progress(index + 1, max(total, 1))
 
-            pipe = Pipeline(registry, logger=logger)
-            pipe.run(
+            pipeline.run_pipeline(
                 self.tasks,
                 config,
+                logger,
                 args,
-                before_task=_before_task,
-                after_task=_after_task,
+                stop_event=self.stop_event,
+                on_task_start=_on_task_start,
+                on_task_complete=_on_task_complete,
             )
 
             if not self._cancel_requested:
                 logger.info("All tasks completed.")
-            self.finished_signal.emit()
-        except (PipelineError, RuntimeError, OSError) as exc:  # pragma: no cover
+                self.finished_signal.emit()
+            else:
+                self.error_occurred.emit(
+                    "Training was stopped before deployment completed."
+                )
+        except (PipelineError, RuntimeError, OSError, ValueError) as exc:  # pragma: no cover
             logger.exception(f"Pipeline execution failed: {exc}")
             self.error_occurred.emit(str(exc))
         finally:

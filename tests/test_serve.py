@@ -2,12 +2,14 @@ import io
 import pytest
 from unittest.mock import MagicMock, patch
 from PIL import Image
-from fastapi.testclient import TestClient
+
+from picture_tool import serve
+
+TestClient = pytest.importorskip("fastapi.testclient").TestClient
 
 # Import the app object from serve.py
 # We handle the case where imports might strictly fail if dependencies missing,
 # although for this test file to run, dev deps should be installed.
-from picture_tool import serve
 
 
 @pytest.fixture

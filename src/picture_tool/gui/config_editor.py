@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import (
     QLabel,
 )
 
+from picture_tool.gui.constants import ANOMALIB_MODEL_DESCRIPTIONS
+
 
 class ConfigEditor(QWidget):
     """
@@ -48,18 +50,21 @@ class ConfigEditor(QWidget):
         # For validation plan, we support: Training, Augmentation, Format
 
         self.training_tab = QWidget()
+        self.anomalib_tab = QWidget()
         self.aug_tab = QWidget()
         self.general_tab = QWidget()
 
-        for tab in (self.general_tab, self.training_tab, self.aug_tab):
+        for tab in (self.general_tab, self.training_tab, self.anomalib_tab, self.aug_tab):
             tab.setObjectName("ConfigEditorTab")
 
         self.tabs.addTab(self.general_tab, "General / Paths")
         self.tabs.addTab(self.training_tab, "YOLO Training")
+        self.tabs.addTab(self.anomalib_tab, "Anomalib")
         self.tabs.addTab(self.aug_tab, "Augmentation")
 
         self._setup_general_tab()
         self._setup_training_tab()
+        self._setup_anomalib_tab()
         self._setup_augmentation_tab()
 
     def _setup_general_tab(self):
@@ -164,6 +169,97 @@ class ConfigEditor(QWidget):
         main_layout = QVBoxLayout(self.training_tab)
         main_layout.addWidget(scroll)
 
+    def _setup_anomalib_tab(self):
+        """Setup Anomalib training and package settings."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("ConfigEditorScroll")
+        content = QWidget()
+        content.setObjectName("ConfigEditorContent")
+        layout = QFormLayout(content)
+
+        cfg = self.config.get("anomalib_training", {})
+        package_cfg = self.config.get("anomalib_package", {})
+
+        model_combo = QComboBox()
+        model_combo.addItems(["efficientad", "padim", "patchcore"])
+        current_model = str(cfg.get("model", "efficientad")).lower()
+        idx = model_combo.findText(current_model)
+        model_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        model_combo.currentTextChanged.connect(self._on_anomalib_model_changed)
+        layout.addRow("Model", model_combo)
+        self._inputs["anomalib_training.model"] = model_combo
+
+        self.anomalib_model_hint = QLabel("")
+        self.anomalib_model_hint.setWordWrap(True)
+        self.anomalib_model_hint.setStyleSheet("color: #b5b5b5; font-size: 9pt;")
+        layout.addRow("", self.anomalib_model_hint)
+        self._set_anomalib_model_hint(model_combo.currentText())
+
+        self._add_input(
+            layout,
+            "anomalib_training.product",
+            "Product",
+            cfg.get("product", "project"),
+        )
+        self._add_input(
+            layout,
+            "anomalib_training.area",
+            "Area",
+            cfg.get("area", "A"),
+        )
+        self._add_input(
+            layout,
+            "anomalib_training.root",
+            "Dataset root",
+            cfg.get("root", "./data/project/A"),
+        )
+        self._add_input(
+            layout,
+            "anomalib_training.normal_dir",
+            "Normal folder",
+            cfg.get("normal_dir", "train/good"),
+        )
+        self._add_input(
+            layout,
+            "anomalib_training.abnormal_dir",
+            "Abnormal folder",
+            cfg.get("abnormal_dir", "test/bad"),
+        )
+        self._add_input(
+            layout,
+            "anomalib_training.max_epochs",
+            "Max epochs",
+            cfg.get("max_epochs", 1),
+            int,
+        )
+        self._add_input(
+            layout,
+            "anomalib_training.image_size",
+            "Image size",
+            cfg.get("image_size", 256),
+            int,
+        )
+
+        layout.addRow(QLabel("<b>Package for inference</b>"))
+        self._add_input(
+            layout,
+            "anomalib_package.output_dir",
+            "Package output dir",
+            package_cfg.get("output_dir", "./runs/anomalib_packages"),
+        )
+        self._add_input(
+            layout,
+            "anomalib_package.force",
+            "Overwrite package",
+            package_cfg.get("force", True),
+            bool,
+        )
+
+        scroll.setWidget(content)
+        main_layout = QVBoxLayout(self.anomalib_tab)
+        main_layout.addWidget(scroll)
+
     def _setup_augmentation_tab(self):
         """Setup Augmentation settings."""
         scroll = QScrollArea()
@@ -257,6 +353,10 @@ class ConfigEditor(QWidget):
                     else:
                         widget.setCurrentText(str(val))
             widget.blockSignals(False)
+        if hasattr(self, "anomalib_model_hint"):
+            self._set_anomalib_model_hint(
+                str(self._get_config_value("anomalib_training.model") or "efficientad")
+            )
 
     def _get_config_value(self, key: str) -> Any:
         keys = key.split(".")
@@ -267,3 +367,19 @@ class ConfigEditor(QWidget):
             return val
         except (KeyError, TypeError):
             return None
+
+    def _on_anomalib_model_changed(self, value: str) -> None:
+        self._update_config_value("anomalib_training.model", value)
+        if value == "efficientad":
+            self._update_config_value("anomalib_training.train_batch_size", 1)
+        self._set_anomalib_model_hint(value)
+
+    def _set_anomalib_model_hint(self, model_name: str) -> None:
+        if not hasattr(self, "anomalib_model_hint"):
+            return
+        key = model_name.lower()
+        description = ANOMALIB_MODEL_DESCRIPTIONS.get(
+            key,
+            "Choose the anomaly model used for training and packaging.",
+        )
+        self.anomalib_model_hint.setText(description)

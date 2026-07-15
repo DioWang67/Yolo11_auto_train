@@ -6,10 +6,19 @@ from pathlib import Path
 from picture_tool.anomaly import process_anomaly_detection
 from picture_tool.split import split_dataset
 from picture_tool.quality.dataset_linter import lint_dataset
+from picture_tool.quality.dataset_readiness import (
+    DatasetReadinessError,
+    validate_training_dataset,
+)
 from picture_tool.report.report_generator import generate_report
 from picture_tool.infer.batch_infer import run_batch_inference
 from picture_tool.color import color_verifier
 from picture_tool.report.qc_summary import generate_qc_summary
+from picture_tool.pipeline.cache import (
+    task_cache_exists,
+    task_cache_matches,
+    write_task_cache,
+)
 from picture_tool.pipeline.utils import mtime_latest
 from picture_tool.pipeline.core import Task
 from picture_tool.tasks.quality_schemas import ColorInspectionConfig, ColorVerificationConfig
@@ -78,11 +87,19 @@ def run_anomaly_detection(config, args):
 
 
 def run_dataset_splitter(config, args):
-    split_dataset(_config_with_effective_split_inputs(config))
+    effective_config = _config_with_effective_split_inputs(config)
+    split_dataset(effective_config)
+    image_dir, label_dir, _ = resolve_split_input_dirs(effective_config)
+    out_root = Path(effective_config["train_test_split"]["output"]["output_dir"])
+    write_task_cache(
+        out_root,
+        "dataset_splitter",
+        effective_config["train_test_split"],
+        [image_dir, label_dir],
+    )
 
 
 def skip_dataset_splitter(config, args):
-    sc = config.get("train_test_split")
     sc = config.get("train_test_split")
     if not sc:
         return None
@@ -98,6 +115,21 @@ def skip_dataset_splitter(config, args):
         out_root / "test" / "images",
     ]
     if all(p.exists() for p in in_dirs) and all(p.exists() for p in out_dirs):
+        yolo_cfg = config.get("yolo_training", {}) or {}
+        if yolo_cfg.get("class_names") and Path(
+            str(yolo_cfg.get("dataset_dir") or out_root)
+        ) == out_root:
+            try:
+                validate_training_dataset(config, logger=logging.getLogger(__name__))
+            except DatasetReadinessError as exc:
+                logging.getLogger(__name__).warning(
+                    "Existing split is unsafe and will be rebuilt: %s", exc
+                )
+                return None
+        if task_cache_matches(out_root, "dataset_splitter", sc, in_dirs):
+            return "Output cache matches inputs and config; skipping."
+        if task_cache_exists(out_root):
+            return None
         if mtime_latest(out_dirs) >= mtime_latest(in_dirs):
             return "Split dataset is up-to-date; skipping."
     return None
@@ -122,7 +154,15 @@ def run_generate_report(config, args):
 
 
 def run_batch_infer(config, args):
-    run_batch_inference(config)
+    output_dir = run_batch_inference(config)
+    bi = config.get("batch_inference", {})
+    input_dir = Path(bi.get("input_dir", "./data/project/split/test/images"))
+    write_task_cache(
+        Path(output_dir),
+        "batch_inference",
+        bi,
+        [input_dir],
+    )
 
 
 def skip_batch_infer(config, args):
@@ -130,6 +170,11 @@ def skip_batch_infer(config, args):
     in_dir = Path(bi.get("input_dir", "./data/project/split/test/images"))
     out_dir = Path(bi.get("output_dir", "./runs/project/infer"))
     csv = out_dir / "predictions.csv"
+    if csv.exists():
+        if task_cache_matches(out_dir, "batch_inference", bi, [in_dir]):
+            return "Output cache matches inputs and config; skipping."
+        if task_cache_exists(out_dir):
+            return None
     if csv.exists() and csv.stat().st_mtime >= mtime_latest([in_dir]):
         return "Batch inference output is newer; skipping."
     return None

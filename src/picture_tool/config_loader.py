@@ -76,16 +76,21 @@ def load_config_if_updated(
     config_file = Path(config_path)
     if not config_file.exists():
         return config
+    resolved_path = str(config_file.resolve())
     current_mtime = config_file.stat().st_mtime
-    last_mtime = getattr(load_config_if_updated, "last_mtime", None)
+    last_mtimes = getattr(load_config_if_updated, "_last_mtimes", None)
+    if last_mtimes is None:
+        last_mtimes = {}
+        load_config_if_updated._last_mtimes = last_mtimes  # type: ignore[attr-defined]
+    last_mtime = last_mtimes.get(resolved_path)
 
     if last_mtime is None:
-        load_config_if_updated.last_mtime = current_mtime  # type: ignore[attr-defined]
+        last_mtimes[resolved_path] = current_mtime
         return config
 
     if current_mtime > last_mtime:
         log.info("Detected configuration change; reloading.")
-        load_config_if_updated.last_mtime = current_mtime  # type: ignore[attr-defined]
-        return _load_config_snapshot(str(config_file.resolve()), current_mtime)
+        last_mtimes[resolved_path] = current_mtime
+        return _load_config_snapshot(resolved_path, current_mtime)
 
     return config

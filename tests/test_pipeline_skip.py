@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from picture_tool.tasks import augmentation, quality, training
+from picture_tool.pipeline.cache import write_task_cache
 
 
 @pytest.fixture()
@@ -22,10 +23,15 @@ def temp_dirs(tmp_path):
     augmented_labels.mkdir(parents=True)
 
     split_root = tmp_path / "split"
-    for subset in ("train", "val", "test"):
-        d = split_root / subset / "images"
-        d.mkdir(parents=True)
-        (d / "dummy.jpg").write_bytes(b"img")
+    for index, subset in enumerate(("train", "val", "test")):
+        image_dir = split_root / subset / "images"
+        label_dir = split_root / subset / "labels"
+        image_dir.mkdir(parents=True)
+        label_dir.mkdir(parents=True)
+        (image_dir / f"dummy_{subset}.jpg").write_bytes(f"img-{index}".encode())
+        (label_dir / f"dummy_{subset}.txt").write_text(
+            "0 0.5 0.5 1 1", encoding="utf-8"
+        )
 
     runs_root = tmp_path / "runs" / "detect" / "train"
     (runs_root / "weights").mkdir(parents=True)
@@ -154,9 +160,50 @@ def test_yolo_augmentation_skips_when_expected_outputs_complete(
     assert reason is not None
 
 
+def test_yolo_augmentation_cache_mismatch_forces_rerun(base_config, temp_dirs):
+    base_config["yolo_augmentation"]["augmentation"] = {"num_images": 2}
+    for index in (1, 2):
+        _touch(temp_dirs["aug_images"] / f"a_aug_{index}.png")
+        _touch(temp_dirs["aug_labels"] / f"a_aug_{index}.txt")
+    old_cfg = dict(base_config["yolo_augmentation"])
+    old_cfg["augmentation"] = {"num_images": 1}
+    write_task_cache(
+        temp_dirs["aug_images"].parent,
+        "yolo_augmentation",
+        old_cfg,
+        [temp_dirs["raw_images"], temp_dirs["raw_labels"]],
+    )
+
+    reason = augmentation.skip_yolo_augmentation(
+        base_config, SimpleNamespace(force=False)
+    )
+
+    assert reason is None
+
+
 def test_should_skip_dataset_splitter_when_split_ready(base_config):
     reason = quality.skip_dataset_splitter(base_config, SimpleNamespace(force=False))
     assert reason is not None
+
+
+def test_dataset_splitter_cache_mismatch_forces_rerun(base_config, temp_dirs):
+    old_cfg = dict(base_config["train_test_split"])
+    old_cfg["split_ratios"] = {"train": 0.8, "val": 0.1, "test": 0.1}
+    write_task_cache(
+        temp_dirs["split"],
+        "dataset_splitter",
+        old_cfg,
+        [temp_dirs["aug_images"], temp_dirs["aug_labels"]],
+    )
+    base_config["train_test_split"]["split_ratios"] = {
+        "train": 0.7,
+        "val": 0.2,
+        "test": 0.1,
+    }
+
+    reason = quality.skip_dataset_splitter(base_config, SimpleNamespace(force=False))
+
+    assert reason is None
 
 
 def test_resolve_split_input_dirs_falls_back_to_raw(tmp_path):
@@ -231,6 +278,22 @@ def test_should_skip_aug_preview_when_preview_exists(base_config):
 def test_should_skip_batch_inference_when_predictions_exist(base_config):
     reason = quality.skip_batch_infer(base_config, SimpleNamespace(force=False))
     assert reason is not None
+
+
+def test_batch_inference_cache_mismatch_forces_rerun(base_config, temp_dirs):
+    old_cfg = dict(base_config["batch_inference"])
+    old_cfg["conf"] = 0.25
+    write_task_cache(
+        temp_dirs["infer_out"],
+        "batch_inference",
+        old_cfg,
+        [temp_dirs["infer_in"]],
+    )
+    base_config["batch_inference"]["conf"] = 0.5
+
+    reason = quality.skip_batch_infer(base_config, SimpleNamespace(force=False))
+
+    assert reason is None
 
 
 # --- _find_latest_run_dir & versioning tests ---

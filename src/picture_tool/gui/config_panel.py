@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import pyqtSignal
 
 from picture_tool.gui.wizards import NewProjectWizard
+from picture_tool.gui.readiness import build_project_readiness, format_readiness_preview
 from picture_tool.path_resolver import parse_project_area_override
 
 class ConfigPanel(QWidget):
@@ -76,6 +77,12 @@ class ConfigPanel(QWidget):
         self.path_preview_label.setStyleSheet("color: #6BCB77; font-size: 8pt; font-family: Consolas;")
         self.path_preview_label.setWordWrap(True)
 
+        self.readiness_preview_label = QLabel("")
+        self.readiness_preview_label.setStyleSheet(
+            "color: #b5b5b5; font-size: 8pt; font-family: Consolas;"
+        )
+        self.readiness_preview_label.setWordWrap(True)
+
         row1 = QHBoxLayout()
         row1.addWidget(self.config_path_edit)
         row1.addWidget(browse_btn)
@@ -93,6 +100,7 @@ class ConfigPanel(QWidget):
         layout.addLayout(row1)
         layout.addLayout(row_prod)
         layout.addWidget(self.path_preview_label)
+        layout.addWidget(self.readiness_preview_label)
         layout.addLayout(row2)
 
         self.config_status_label = QLabel("尚未載入設定")
@@ -104,6 +112,7 @@ class ConfigPanel(QWidget):
         text = text.strip()
         if not text:
             self.path_preview_label.setText("")
+            self.readiness_preview_label.setText("")
             return
 
         try:
@@ -113,6 +122,7 @@ class ConfigPanel(QWidget):
                 "color: #ff6b6b; font-size: 8pt; font-family: Consolas;"
             )
             self.path_preview_label.setText(f"Invalid product input: {exc}")
+            self.readiness_preview_label.setText("")
             return
 
         self.path_preview_label.setStyleSheet(
@@ -131,6 +141,30 @@ class ConfigPanel(QWidget):
             f"   Runs:      {runs_root}/"
         )
         self.path_preview_label.setText(preview)
+        self._update_readiness_preview(text)
+
+    def _update_readiness_preview(self, product_override: str) -> None:
+        """Update dataset/model readiness preview for the selected target."""
+        if not self.manager.config:
+            self.readiness_preview_label.setText("Load a config to check readiness.")
+            return
+        try:
+            readiness = build_project_readiness(self.manager.config, product_override)
+        except (OSError, ValueError) as exc:
+            self.readiness_preview_label.setStyleSheet(
+                "color: #ff6b6b; font-size: 8pt; font-family: Consolas;"
+            )
+            self.readiness_preview_label.setText(f"Readiness check failed: {exc}")
+            return
+
+        has_blocking_warning = not (
+            readiness.is_ready_for_yolo or readiness.is_ready_for_anomalib
+        )
+        color = "#ff6b6b" if has_blocking_warning else "#b5b5b5"
+        self.readiness_preview_label.setStyleSheet(
+            f"color: {color}; font-size: 8pt; font-family: Consolas;"
+        )
+        self.readiness_preview_label.setText(format_readiness_preview(readiness))
 
     def _update_config_status(self) -> None:
         """Update status label based on current configuration."""
@@ -180,6 +214,9 @@ class ConfigPanel(QWidget):
             # Notify listeners
             self.config_loaded.emit(self.manager.config)
             self.log_message.emit(f"[INFO] Config loaded from {path or 'Default'}")
+            product = self.get_product_override()
+            if product:
+                self._update_readiness_preview(product)
             
         except Exception as e:
             self.log_message.emit(f"[ERROR] Failed to load config: {e}")
@@ -196,6 +233,9 @@ class ConfigPanel(QWidget):
             self._update_config_status()
             self.config_loaded.emit(self.manager.config)
             self.log_message.emit("[INFO] Loaded default config")
+            product = self.get_product_override()
+            if product:
+                self._update_readiness_preview(product)
             
         except Exception as e:
             self.log_message.emit(f"[ERROR] Failed to load default config: {e}")
@@ -226,6 +266,12 @@ class ConfigPanel(QWidget):
     def get_product_override(self) -> Optional[str]:
         text = self.product_override_edit.text().strip()
         return text if text else None
+
+    def set_product_override(self, product: str, area: str | None = None) -> None:
+        """Set a validated product/area received from an operator handoff."""
+        value = f"{product},{area}" if area else product
+        parse_project_area_override(value)
+        self.product_override_edit.setText(value)
 
     def get_config_path(self) -> Optional[str]:
         text = self.config_path_edit.text().strip()

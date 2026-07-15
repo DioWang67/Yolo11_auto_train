@@ -6,6 +6,7 @@ from pathlib import Path
 
 from picture_tool.train.anomalib_trainer import (
     deploy_anomalib_run,
+    package_anomalib_run,
     supported_anomalib_models,
     train_anomalib_folder,
 )
@@ -25,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Model choices:\n"
             "  padim     Fast CPU-friendly baseline; good first choice for PCBA smoke runs.\n"
             "  patchcore Higher-quality memory-bank method; heavier and better for validated runs.\n"
+            "  efficientad Student-teacher training; slower, useful once data layout is validated.\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -44,7 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     train_folder.add_argument("--product", required=True)
     train_folder.add_argument("--area", required=True)
     train_folder.add_argument("--project", type=Path, default=None)
-    train_folder.add_argument("--model", default="padim", choices=["padim", "patchcore"])
+    train_folder.add_argument(
+        "--model",
+        default="padim",
+        choices=["padim", "patchcore", "efficientad"],
+    )
     train_folder.add_argument("--image-size", type=int, default=256)
     train_folder.add_argument("--batch-size", type=int, default=8)
     train_folder.add_argument("--max-epochs", type=int, default=1)
@@ -64,6 +70,16 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--area", required=True)
     deploy.add_argument("--threshold", type=float, default=0.5)
     deploy.add_argument("--force", action="store_true", help="Overwrite existing deployed files.")
+    package = subparsers.add_parser(
+        "package",
+        help="Create a zip package that can be extracted under yolo11_inference/models.",
+    )
+    package.add_argument("--run", required=True, type=Path, dest="run_dir")
+    package.add_argument("--output-dir", type=Path, default=Path("runs/anomalib_packages"))
+    package.add_argument("--product", required=True)
+    package.add_argument("--area", required=True)
+    package.add_argument("--threshold", type=float, default=0.5)
+    package.add_argument("--force", action="store_true", help="Overwrite existing package files.")
     return parser
 
 
@@ -133,6 +149,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config: {result.config_path}")
         print(f"Checkpoint: {result.checkpoint_path}")
         print(f"Report: {result.report_path or 'not copied'}")
+        print(f"baseline_only: {str(result.baseline_only).lower()}")
+        print(f"usable_for_deployment: {str(result.usable_for_deployment).lower()}")
+        for warning in result.warnings:
+            print(f"warning: {warning}")
+        return 0
+
+    if args.command == "package":
+        try:
+            result = package_anomalib_run(
+                run_dir=args.run_dir,
+                output_dir=args.output_dir,
+                product=args.product,
+                area=args.area,
+                threshold=args.threshold,
+                force=args.force,
+            )
+        except (FileNotFoundError, FileExistsError, ValueError, OSError) as exc:
+            parser.exit(1, f"Anomalib package failed: {exc}\n")
+
+        print(f"Package zip: {result.zip_path}")
+        print(f"Package directory: {result.package_dir}")
+        print("Extract under: yolo11_inference/models")
+        print(f"Config: {result.config_path}")
+        print(f"Checkpoint: {result.checkpoint_path}")
+        print(f"Manifest: {result.manifest_path}")
         print(f"baseline_only: {str(result.baseline_only).lower()}")
         print(f"usable_for_deployment: {str(result.usable_for_deployment).lower()}")
         for warning in result.warnings:

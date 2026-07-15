@@ -34,6 +34,51 @@ def test_initial_state(panel):
     assert panel.annotation_input_dir is None
     assert panel.annotation_output_dir is None
 
+
+def test_operator_mode_hides_engineering_controls(panel):
+    panel.set_operator_mode(True)
+
+    assert panel.class_management_panel.isHidden()
+    assert panel.annotation_input_edit.isHidden()
+    assert panel.annotation_output_edit.isHidden()
+    assert panel.validate_annotations_btn.isHidden()
+    assert panel.operator_instruction_label.isHidden() is False
+
+
+def test_operator_pending_schedules_annotation_tool_once(
+    panel, monkeypatch, tmp_path
+):
+    callbacks = []
+    monkeypatch.setattr(panel, "_scan_annotation_progress", MagicMock())
+    monkeypatch.setattr(
+        "picture_tool.gui.annotation_panel.QtCore.QTimer.singleShot",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    panel.configure_operator_pending(
+        tmp_path / "Cable1" / "A",
+        ["defect"],
+        tmp_path / "handoff.json",
+    )
+    panel.configure_operator_pending(
+        tmp_path / "Cable1" / "A",
+        ["defect"],
+        tmp_path / "handoff.json",
+    )
+
+    assert panel.operator_mode_enabled is True
+    assert callbacks == [panel._launch_labelimg]
+
+
+def test_operator_annotation_close_triggers_automatic_validation(panel, monkeypatch):
+    monkeypatch.setattr(panel.labelimg_launcher, "is_running", lambda: False)
+    complete = MagicMock()
+    monkeypatch.setattr(panel, "_complete_operator_pending", complete)
+
+    panel._poll_operator_labelimg()
+
+    complete.assert_called_once_with(automatic=True)
+
 def test_add_class_success(panel, monkeypatch, qtbot):
     # Mock QInputDialog.getText
     monkeypatch.setattr(

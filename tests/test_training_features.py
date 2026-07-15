@@ -11,6 +11,34 @@ from unittest.mock import MagicMock
 class TestYoloTrainingFunctionality:
     """测试YOLO训练功能"""
 
+    def test_finetuning_profile_is_passed_to_ultralytics(self, tmp_path):
+        from picture_tool.train.yolo_trainer import _parse_yolo_config
+
+        params = _parse_yolo_config(
+            {
+                "yolo_training": {
+                    "dataset_dir": str(tmp_path),
+                    "epochs": 20,
+                    "optimizer": "AdamW",
+                    "lr0": 0.0005,
+                    "lrf": 0.1,
+                    "patience": 10,
+                    "freeze": 10,
+                    "mosaic": 0.0,
+                    "fliplr": 0.0,
+                    "close_mosaic": 0,
+                    "cos_lr": True,
+                    "warmup_epochs": 1.0,
+                }
+            }
+        )
+
+        assert params["optimizer"] == "AdamW"
+        assert params["lr0"] == 0.0005
+        assert params["freeze"] == 10
+        assert params["mosaic"] == 0.0
+        assert params["warmup_epochs"] == 1.0
+
     def test_training_workflow_executes(self, tmp_path, monkeypatch):
         """功能：执行完整的训练工作流"""
         from picture_tool.train.yolo_trainer import train_yolo
@@ -98,6 +126,71 @@ names:
         # 验证权重文件
         assert (weights_dir / "best.pt").exists()
         assert (weights_dir / "last.pt").exists()
+
+    def test_position_validation_prefers_auto_config_when_target_area_missing(
+        self, tmp_path, monkeypatch
+    ):
+        """Should use run-local auto_position_config when default config lacks area."""
+        import yaml
+
+        from picture_tool.tasks import training
+
+        run_dir = tmp_path / "runs" / "PCBA1" / "B" / "train2"
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        weights_path = weights_dir / "best.pt"
+        weights_path.write_bytes(b"weights")
+        auto_config = run_dir / "auto_position_config.yaml"
+        auto_config.write_text(
+            yaml.safe_dump(
+                {"PCBA1": {"B": {"enabled": True, "expected_boxes": {"J2-1": {}}}}}
+            ),
+            encoding="utf-8",
+        )
+
+        default_config = tmp_path / "position_config.yaml"
+        default_config.write_text(
+            yaml.safe_dump(
+                {"PCBA1": {"A": {"enabled": True, "expected_boxes": {"J5-1": {}}}}}
+            ),
+            encoding="utf-8",
+        )
+
+        config = {
+            "yolo_training": {
+                "project": str(run_dir.parent),
+                "name": "train",
+                "position_validation": {
+                    "enabled": True,
+                    "product": "PCBA1",
+                    "area": "B",
+                    "config": {},
+                    "config_path": str(default_config),
+                },
+            }
+        }
+        captured = {}
+
+        def fake_run_position_validation(updated_config, detected_run_dir, logger=None):
+            captured["config"] = updated_config
+            captured["run_dir"] = detected_run_dir
+            return tmp_path / "position_validation.json"
+
+        monkeypatch.setattr(
+            training,
+            "detect_existing_weights",
+            lambda *_args, **_kwargs: (weights_path, run_dir),
+        )
+        monkeypatch.setattr(
+            training, "run_position_validation", fake_run_position_validation
+        )
+
+        result = training.run_position_validation_task(config, MagicMock())
+
+        assert result == tmp_path / "position_validation.json"
+        pv_cfg = captured["config"]["yolo_training"]["position_validation"]
+        assert pv_cfg["config"] == str(auto_config)
+        assert captured["run_dir"] == run_dir
 
 
 class TestYoloEvaluationFunctionality:

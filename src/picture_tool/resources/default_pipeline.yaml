@@ -7,6 +7,43 @@ anomaly_detection:
   reference_folder: ./data/project/raw/good
   test_folder: ./data/project/raw/test
   threshold: 50
+anomalib_training:
+  root: ./data/anomaly
+  normal_dir: train/good
+  abnormal_dir: null
+  normal_test_dir: null
+  mask_dir: null
+  project: ./runs/anomalib
+  name: project_anomaly
+  model: padim
+  task: segmentation
+  image_size: 256
+  train_batch_size: 8
+  eval_batch_size: 8
+  num_workers: 0
+  accelerator: auto
+  devices: auto
+  max_epochs: 1
+  seed: 42
+  normal_split_ratio: 0.2
+  val_split_mode: from_train
+  val_split_ratio: 0.2
+  test_split_mode: none
+  test_split_ratio: 0.2
+  pre_trained: false
+  backbone: resnet18
+  layers:
+  - layer1
+  n_features: 16
+  patch_anomalib_symlink: true
+  require_anomalous_validation: false
+anomalib_package:
+  run_dir: null
+  output_dir: ./runs/anomalib_packages
+  product: project
+  area: A
+  threshold: 0.5
+  force: true
 format_conversion:
   input_dir: ./data/project/raw/images
   input_formats:
@@ -81,6 +118,9 @@ pipeline:
       - yolo_train
       - yolo_evaluation
       - generate_report
+    anomalib:
+      - anomalib_train
+      - anomalib_package
     inference:
       - batch_inference
     full:
@@ -121,6 +161,12 @@ pipeline:
     - dataset_splitter
     enabled: true
     name: yolo_train
+  - dependencies: []
+    enabled: false
+    name: anomalib_train
+  - dependencies: []
+    enabled: false
+    name: anomalib_package
   - dependencies:
     - yolo_train
     enabled: true
@@ -234,7 +280,7 @@ yolo_training:
   export_detection_config:
     enabled: true
     output_path: null  # default to run directory when null
-    weights_name: best.pt
+    weights_name: best.onnx
     device: null  # fallback to training device
     conf_thres: 0.4
     iou_thres: 0.45
@@ -269,8 +315,8 @@ yolo_training:
     include_detection_config: true
     include_position_config: true
     include_onnx: true
-    include_results_csv: true
-    include_args_yaml: true
+    include_results_csv: false
+    include_args_yaml: false
 
 # YOLO evaluation settings
 yolo_evaluation:
@@ -278,6 +324,14 @@ yolo_evaluation:
   weights: null
   imgsz: 640
   device: cpu
+  gate:
+    enabled: false
+    require_metrics: true
+    min_precision: 0.50
+    min_recall: 0.50
+    min_map50: 0.50
+    min_map50_95: 0.25
+    max_regression: 0.05
 
 # Batch inference settings
 batch_inference:

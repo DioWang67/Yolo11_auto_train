@@ -33,6 +33,7 @@ dependencies = [
   "scikit-learn>=1.0",
   "tqdm>=4.60",
   "ultralytics>=8.0",
+  "anomalib>=1.2,<1.3",
   "typer>=0.9",
   "mlflow>=2.0",
   "fastapi>=0.88",
@@ -58,6 +59,8 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
 filterwarnings = ["error"]
+pythonpath = ["src"]
+testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
@@ -83,6 +86,8 @@ picture-tool-pipeline = "picture_tool.main_pipeline:main"
 picture-tool-gui = "picture_tool.gui.app:main"
 picture-tool-color-verify = "picture_tool.color.color_verifier:main"
 picture-tool-doctor = "picture_tool.doctor:main"
+picture-tool-anomalib = "picture_tool.anomalib_cli:main"
+picture-tool-dataset-inventory = "picture_tool.dataset_inventory:main"
 
 [project.urls]
 Homepage = "https://github.com/robotlearning/Yolo11_auto_train"

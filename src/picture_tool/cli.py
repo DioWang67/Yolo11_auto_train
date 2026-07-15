@@ -176,7 +176,7 @@ def anomalib_train_folder(
     project: Optional[Path] = typer.Option(
         None, help="Output project directory. Defaults to runs/anomalib/<product>/<area>."
     ),
-    model: str = typer.Option("padim", help="Anomalib model: padim or patchcore."),
+    model: str = typer.Option("padim", help="Anomalib model: padim, patchcore, or efficientad."),
     image_size: int = typer.Option(256, min=1, help="Square training image size."),
     batch_size: int = typer.Option(8, min=1, help="Train/eval batch size."),
     max_epochs: int = typer.Option(1, min=1, help="Maximum training epochs."),

@@ -122,6 +122,27 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
         data_root = data_root / area_override
         runs_root = runs_root / area_override
 
+    handoff_cfg = cfg.get("operator_handoff", {}) or {}
+    handoff_source_stage = "processed"
+    if handoff_cfg.get("enabled", False):
+        handoff_dataset_value = str(handoff_cfg.get("dataset_root") or "").strip()
+        if not handoff_dataset_value:
+            raise ValueError("operator_handoff.dataset_root is required")
+        handoff_dataset_root = Path(handoff_dataset_value).expanduser().resolve()
+        allowed_data_root = (Path.cwd() / "data").resolve()
+        if not handoff_dataset_root.is_relative_to(allowed_data_root):
+            raise ValueError(
+                "operator_handoff.dataset_root must stay under the training data directory"
+            )
+        data_root = handoff_dataset_root
+        handoff_source_stage = str(
+            handoff_cfg.get("source_stage") or "raw"
+        ).lower()
+        if handoff_source_stage not in {"raw", "processed"}:
+            raise ValueError(
+                "operator_handoff.source_stage must be 'raw' or 'processed'"
+            )
+
     raw_root = data_root / "raw"
     processed_root = data_root / "processed"
     split_root = data_root / "split"
@@ -148,6 +169,24 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     if "pipeline" in cfg:
         cfg["pipeline"]["log_file"] = str(runs_root / "logs" / "pipeline.log")
 
+    # --- Anomalib Training / Package ---
+    if "anomalib_training" in cfg:
+        at = cfg["anomalib_training"]
+        at["root"] = str(data_root)
+        at["product"] = project
+        if area_override:
+            at["area"] = area_override
+        at["name"] = f"{project}_{area_override}" if area_override else project
+        at["project"] = str(Path("runs") / "anomalib" / project / (area_override or "A"))
+        cfg["anomalib_training"] = at
+
+    if "anomalib_package" in cfg:
+        apkg = cfg["anomalib_package"]
+        apkg["product"] = project
+        if area_override:
+            apkg["area"] = area_override
+        cfg["anomalib_package"] = apkg
+
     # --- YOLO Augmentation ---
     if "yolo_augmentation" in cfg:
         ya = cfg["yolo_augmentation"]
@@ -170,8 +209,11 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     # --- Dataset Splitter ---
     if "train_test_split" in cfg:
         tts = cfg["train_test_split"]
-        tts.setdefault("input", {})["image_dir"] = str(processed_root / "images")
-        tts.setdefault("input", {})["label_dir"] = str(processed_root / "labels")
+        split_input_root = (
+            raw_root if handoff_source_stage == "raw" else processed_root
+        )
+        tts.setdefault("input", {})["image_dir"] = str(split_input_root / "images")
+        tts.setdefault("input", {})["label_dir"] = str(split_input_root / "labels")
         tts.setdefault("output", {})["output_dir"] = str(split_root)
 
     # --- YOLO Training ---

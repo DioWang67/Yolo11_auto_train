@@ -60,7 +60,7 @@ class TestDatasetSplitFunctionality:
 
         # 创建100个文件
         for i in range(100):
-            (images_dir / f"img_{i:03d}.jpg").write_text("img")
+            (images_dir / f"img_{i:03d}.jpg").write_text(f"img-{i}")
             (labels_dir / f"img_{i:03d}.txt").write_text("label")
 
         output_dir = tmp_path / "split"

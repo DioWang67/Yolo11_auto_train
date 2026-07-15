@@ -4,6 +4,7 @@ CRITICAL: This must execute before any test imports that use tqdm or matplotlib.
 """
 
 import os
+import pytest
 
 # Bypass fatal PyTorch/OpenMP DLL conflicts under Windows Pytest
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -32,3 +33,13 @@ tqdm.std.TMonitor = type(
 tqdm.tqdm.monitor_interval = 0
 
 # Disabled explicit gc.collect() to prevent PyTorch DLL teardown segfaults
+
+
+try:
+    import pytestqt.plugin  # type: ignore  # noqa: F401
+except ImportError:
+
+    @pytest.fixture
+    def qtbot():
+        """Skip Qt tests cleanly when pytest-qt is not installed."""
+        pytest.skip("pytest-qt is not installed")

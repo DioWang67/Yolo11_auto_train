@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 import yaml
@@ -196,6 +197,7 @@ def test_supported_models_cli_explains_tradeoffs(capsys):
     assert exit_code == 0
     assert "padim" in output
     assert "patchcore" in output
+    assert "efficientad" in output
     assert "trade_off" in output
 
 
@@ -268,3 +270,149 @@ def test_lightweight_deploy_cli_reports_result(tmp_path, capsys):
     assert exit_code == 0
     assert "Deploy directory:" in output
     assert "baseline_only: true" in output
+
+
+def test_package_anomalib_run_creates_drop_in_zip(tmp_path):
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "weights" / "lightning"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "model.ckpt").write_text("checkpoint", encoding="utf-8")
+    (run_dir / "training_report.json").write_text(
+        """
+{
+  "baseline_only": true,
+  "usable_for_deployment": false,
+  "warnings": ["baseline only"],
+  "config": {"model": "efficientad"}
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = anomalib_trainer.package_anomalib_run(
+        run_dir,
+        output_dir=tmp_path / "packages",
+        product="PCBA1",
+        area="B",
+        threshold=0.37,
+    )
+
+    assert result.zip_path.is_file()
+    assert result.checkpoint_path.is_file()
+    with zipfile.ZipFile(result.zip_path) as package:
+        names = set(package.namelist())
+        cfg = yaml.safe_load(package.read("PCBA1/B/anomalib/config.yaml").decode("utf-8"))
+
+    assert "PCBA1/B/anomalib/config.yaml" in names
+    assert "PCBA1/B/anomalib/training_report.json" in names
+    assert "PCBA1/B/anomalib/weights/model.ckpt" in names
+    assert "PCBA1/B/anomalib/package_manifest.json" in names
+    acfg = cfg["anomalib_config"]
+    assert acfg["model"]["class_path"] == "anomalib.models.EfficientAd"
+    assert acfg["models"]["PCBA1"]["B"]["ckpt_path"] == (
+        "models/PCBA1/B/anomalib/weights/model.ckpt"
+    )
+    assert acfg["models"]["PCBA1"]["B"]["threshold"] == 0.37
+
+
+def test_package_anomalib_run_force_replaces_existing_package(tmp_path):
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "weights" / "lightning"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "model.ckpt").write_text("new checkpoint", encoding="utf-8")
+    (run_dir / "training_report.json").write_text(
+        '{"baseline_only": true, "usable_for_deployment": false, "config": {"model": "padim"}}',
+        encoding="utf-8",
+    )
+    package_dir = tmp_path / "packages" / "PCBA1_B_anomalib_padim_package"
+    stale_file = package_dir / "PCBA1" / "B" / "anomalib" / "stale.txt"
+    stale_file.parent.mkdir(parents=True)
+    stale_file.write_text("stale", encoding="utf-8")
+    (tmp_path / "packages" / "PCBA1_B_anomalib_padim_package.zip").write_text(
+        "old zip",
+        encoding="utf-8",
+    )
+
+    result = anomalib_trainer.package_anomalib_run(
+        run_dir,
+        output_dir=tmp_path / "packages",
+        product="PCBA1",
+        area="B",
+        force=True,
+    )
+
+    assert result.zip_path.is_file()
+    assert not stale_file.exists()
+    assert result.checkpoint_path.read_text(encoding="utf-8") == "new checkpoint"
+
+
+def test_lightweight_package_cli_reports_result(tmp_path, capsys):
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "weights" / "lightning"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "model.ckpt").write_text("checkpoint", encoding="utf-8")
+    (run_dir / "training_report.json").write_text(
+        '{"baseline_only": true, "usable_for_deployment": false, "config": {"model": "padim"}}',
+        encoding="utf-8",
+    )
+
+    exit_code = anomalib_cli.main(
+        [
+            "package",
+            "--run",
+            str(run_dir),
+            "--output-dir",
+            str(tmp_path / "packages"),
+            "--product",
+            "PCBA1",
+            "--area",
+            "B",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Package zip:" in output
+    assert "Extract under: yolo11_inference/models" in output
+
+
+def test_efficientad_is_supported_model_option():
+    options = {option.name: option for option in anomalib_trainer.supported_anomalib_models()}
+
+    assert "efficientad" in options
+    assert options["efficientad"].class_path == "anomalib.models.EfficientAd"
+
+
+def test_train_anomalib_folder_forces_efficientad_batch_size_one(tmp_path, monkeypatch):
+    train_dir = tmp_path / "PCBA1" / "B" / "split" / "train" / "images"
+    train_dir.mkdir(parents=True)
+    _write_png(train_dir / "sample.png")
+    captured_config = {}
+
+    def fake_train(config, logger=None):
+        captured_config.update(config["anomalib_training"])
+        run_dir = tmp_path / "runs" / "EfficientAd" / "PCBA1_B" / "latest"
+        checkpoint_dir = run_dir / "weights" / "lightning"
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "model.ckpt").write_text("checkpoint", encoding="utf-8")
+        anomalib_trainer._write_training_metadata(
+            run_dir,
+            anomalib_trainer.parse_anomalib_training_config(config),
+        )
+        return run_dir
+
+    monkeypatch.setattr(anomalib_trainer, "train_anomalib", fake_train)
+
+    anomalib_trainer.train_anomalib_folder(
+        tmp_path / "PCBA1" / "B",
+        product="PCBA1",
+        area="B",
+        project=tmp_path / "runs",
+        model="efficientad",
+        batch_size=8,
+        force=True,
+    )
+
+    assert captured_config["model"] == "efficientad"
+    assert captured_config["train_batch_size"] == 1
+    assert captured_config["eval_batch_size"] == 1

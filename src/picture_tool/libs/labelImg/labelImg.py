@@ -1357,7 +1357,11 @@ class MainWindow(QMainWindow, WindowMixin):
             target_dir_path = ustr(default_open_dir_path)
         self.last_open_dir = target_dir_path
         self.import_dir_images(target_dir_path)
-        self.default_save_dir = target_dir_path
+        # Keep the output directory supplied by the caller.  The original
+        # LabelImg behaviour replaced it with the image directory during the
+        # silent startup open, causing annotations to be saved beside images.
+        if self.default_save_dir is None:
+            self.default_save_dir = target_dir_path
         if self.file_path:
             self.show_bounding_box_from_annotation_file(file_path=self.file_path)
 
@@ -1699,6 +1703,7 @@ def get_main_app(argv=None):
                            default=os.path.join(os.path.dirname(__file__), "data", "predefined_classes.txt"),
                            nargs="?")
     argparser.add_argument("save_dir", nargs="?")
+    argparser.add_argument("--format", choices=("pascalvoc", "yolo", "createml"))
     args = argparser.parse_args(argv[1:])
 
     args.image_dir = args.image_dir and os.path.normpath(args.image_dir)
@@ -1709,6 +1714,12 @@ def get_main_app(argv=None):
     win = MainWindow(args.image_dir,
                      args.class_file,
                      args.save_dir)
+    if args.format == "yolo":
+        win.set_format(FORMAT_YOLO)
+    elif args.format == "createml":
+        win.set_format(FORMAT_CREATEML)
+    elif args.format == "pascalvoc":
+        win.set_format(FORMAT_PASCALVOC)
     win.show()
     return app, win
 

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, MutableMapping
@@ -46,7 +48,9 @@ class OnnxExporter:
                 f"Use one of: {supported}"
             )
         if bool(export_cfg.get("half", False)) and bool(export_cfg.get("int8", False)):
-            raise ValueError("Use either half precision or int8 quantization, not both.")
+            raise ValueError(
+                "Use either half precision or int8 quantization, not both."
+            )
 
         cwd = Path.cwd()
 
@@ -187,6 +191,12 @@ class OnnxExporter:
 
             # 5. Validation using helper
             if export_format != "onnx":
+                _write_export_contract(
+                    run_dir,
+                    runtime_path=export_path,
+                    training_weight_path=weights_path,
+                    runtime_format=export_format,
+                )
                 return export_path
 
             try:
@@ -208,6 +218,12 @@ class OnnxExporter:
                     f"ONNX validation failed for {export_path}"
                 ) from val_err
 
+            _write_export_contract(
+                run_dir,
+                runtime_path=export_path,
+                training_weight_path=weights_path,
+                runtime_format=export_format,
+            )
             return export_path
 
         except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
@@ -215,7 +231,74 @@ class OnnxExporter:
             return None
 
 
-def _select_export_config(ycfg: dict[str, Any]) -> tuple[Optional[dict[str, Any]], bool]:
+def _write_export_contract(
+    run_dir: Path,
+    *,
+    runtime_path: Path,
+    training_weight_path: Path,
+    runtime_format: str,
+) -> Path:
+    """Record the exact PT-to-runtime lineage used by safe deployment."""
+    resolved_run_dir = run_dir.resolve()
+    resolved_runtime = runtime_path.resolve()
+    resolved_training_weight = training_weight_path.resolve()
+    if not resolved_runtime.is_relative_to(resolved_run_dir):
+        raise RuntimeError("Exported runtime artifact is outside the training run.")
+    if not resolved_training_weight.is_relative_to(resolved_run_dir):
+        raise RuntimeError("Export source training weight is outside the training run.")
+    if resolved_training_weight.suffix.lower() != ".pt":
+        raise RuntimeError("Export source training weight must be a .pt checkpoint.")
+
+    payload = {
+        "schema_version": 1,
+        "runtime_format": runtime_format,
+        "runtime_file": resolved_runtime.relative_to(resolved_run_dir).as_posix(),
+        "runtime_sha256": _sha256_artifact(resolved_runtime),
+        "training_weight_file": resolved_training_weight.relative_to(
+            resolved_run_dir
+        ).as_posix(),
+        "training_weight_sha256": _sha256_artifact(resolved_training_weight),
+    }
+    contract_path = resolved_run_dir / "runtime_export_manifest.json"
+    temporary = contract_path.with_name(f".{contract_path.name}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(contract_path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    return contract_path
+
+
+def _sha256_artifact(path: Path) -> str:
+    """Hash a file or directory export deterministically."""
+    digest = hashlib.sha256()
+    if path.is_file():
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    if not path.is_dir():
+        raise FileNotFoundError(path)
+    files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+    if not files:
+        raise RuntimeError(f"Runtime export directory is empty: {path}")
+    for candidate in files:
+        digest.update(candidate.relative_to(path).as_posix().encode("utf-8"))
+        with candidate.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _select_export_config(
+    ycfg: dict[str, Any],
+) -> tuple[Optional[dict[str, Any]], bool]:
     """Select the runtime export configuration to apply.
 
     Args:

@@ -89,8 +89,37 @@ if BaseModel is not None:
                 raise ValueError(f"dataset_dir does not exist: {v}")
             return v
 
+    class AnomalibTrainingSchema(BaseSchema):
+        root: Path = Path("./data/anomaly")
+        normal_dir: Union[str, Path] = "train/good"
+        abnormal_dir: Optional[Union[str, Path]] = None
+        normal_test_dir: Optional[Union[str, Path]] = None
+        mask_dir: Optional[Union[str, Path]] = None
+        project: Path = Path("./runs/anomalib")
+        name: str = "anomaly"
+        model: str = "padim"
+        task: str = "segmentation"
+        image_size: int = Field(default=256, gt=0)
+        train_batch_size: int = Field(default=8, gt=0)
+        eval_batch_size: int = Field(default=8, gt=0)
+        num_workers: int = Field(default=0, ge=0)
+        max_epochs: int = Field(default=1, gt=0)
+        normal_split_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+        val_split_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+        test_split_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+        n_features: Optional[int] = Field(default=16, gt=0)
+
+        @field_validator("model")
+        @classmethod
+        def _supported_model(cls, v: str) -> str:
+            normalized = v.strip().lower().replace("_", "").replace("-", "")
+            if normalized not in {"padim", "patchcore", "efficientad"}:
+                raise ValueError("model must be one of: padim, patchcore, efficientad")
+            return v
+
     class PipelineSchema(BaseSchema):
         yolo_training: Optional[YoloTrainingSchema] = None
+        anomalib_training: Optional[AnomalibTrainingSchema] = None
         augmentation: Optional[AugmentationSchema] = None
         processing: Optional[ProcessingSchema] = None
 
@@ -109,6 +138,16 @@ def _manual_validate(config: Dict[str, Any]) -> None:
     names = ycfg.get("class_names")
     if names is not None and not names:
         errors.append("yolo_training.class_names cannot be empty")
+
+    acfg = config.get("anomalib_training") or {}
+    if acfg:
+        model = str(acfg.get("model", "padim")).strip().lower().replace("_", "").replace("-", "")
+        if model not in {"padim", "patchcore", "efficientad"}:
+            errors.append("anomalib_training.model must be one of: padim, patchcore, efficientad")
+        for key in ("image_size", "train_batch_size", "eval_batch_size", "max_epochs"):
+            value = acfg.get(key)
+            if value is not None and int(value) <= 0:
+                errors.append(f"anomalib_training.{key} must be greater than 0")
 
     # Augmentation Check
     aug = config.get("augmentation") or {}
