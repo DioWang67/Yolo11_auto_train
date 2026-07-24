@@ -32,7 +32,8 @@ from picture_tool.gui.annotation_tracker import AnnotationTracker
 from picture_tool.gui.labelimg_launcher import LabelImgLauncher
 from picture_tool.pending_annotations import (
     PendingAnnotationError,
-    configure_pending_workspace,
+    configure_pending_job_workspace,
+    inspect_pending_annotation_progress,
     promote_completed_pending,
     record_label_verification,
 )
@@ -283,11 +284,14 @@ class AnnotationPanel(QWidget):
         self.launch_annotation_btn.setText(
             "開啟／繼續標註" if enabled else "開始標註"
         )
+        self.annotation_unannotated_label.setText(
+            "尚待修正圖片：" if enabled else "未標註圖片："
+        )
+        self.annotation_unannotated_label.setVisible(True)
+        self.annotation_unannotated_list.setVisible(True)
         for widget in (
             self.annotation_class_dist_label,
             self.annotation_class_dist,
-            self.annotation_unannotated_label,
-            self.annotation_unannotated_list,
             self.validate_annotations_btn,
             self.rescan_annotation_btn,
             self.augment_annotation_btn,
@@ -320,11 +324,12 @@ class AnnotationPanel(QWidget):
         root = Path(dataset_root).expanduser().resolve()
         if root != self.operator_dataset_root:
             self.operator_auto_launch_used = False
-        images_dir, labels_dir, _classes_file = configure_pending_workspace(
-            root, [str(name) for name in class_names]
+        handoff = Path(handoff_path).expanduser().resolve()
+        images_dir, labels_dir, _classes_file = configure_pending_job_workspace(
+            root, [str(name) for name in class_names], handoff
         )
         self.operator_dataset_root = root
-        self.operator_handoff_path = Path(handoff_path).expanduser().resolve()
+        self.operator_handoff_path = handoff
         self.operator_class_names = tuple(str(name) for name in class_names)
         self.annotation_input_dir = images_dir
         self.annotation_output_dir = labels_dir
@@ -336,8 +341,8 @@ class AnnotationPanel(QWidget):
         self._scan_annotation_progress()
         if not self.operator_auto_launch_used:
             self.operator_instruction_label.setText(
-                "第 2 步：標註工具將自動開啟。拖曳框住漏檢物件、選擇類別，"
-                "按 Ctrl+S 儲存；關閉工具後，系統會自動檢查並繼續補訓。"
+                "第 2 步：標註工具將自動開啟。請新增漏框、刪除錯框或修正類別；"
+                "若預填框確認正確也要按 Ctrl+S。關閉工具後系統會自動檢查。"
             )
             self.operator_auto_launch_used = True
             QtCore.QTimer.singleShot(300, self._launch_labelimg)
@@ -364,6 +369,7 @@ class AnnotationPanel(QWidget):
                 self.annotation_classes,
                 self.operator_handoff_path,
             )
+            self._refresh_operator_workspace()
         except (OSError, PendingAnnotationError) as exc:
             QMessageBox.critical(self, "標註資料未加入", str(exc))
             return
@@ -373,16 +379,15 @@ class AnnotationPanel(QWidget):
                 self.complete_pending_btn.setVisible(True)
                 self.complete_pending_btn.setEnabled(True)
                 self.operator_instruction_label.setText(
-                    f"尚有 {report.remaining_count} 張未完成。"
-                    "若已按 Ctrl+S，請按「重新檢查已儲存標註」；"
-                    "否則再開啟標註工具。"
+                    f"尚有 {report.remaining_count} 張未完成修正或儲存確認。"
+                    "下方會列出檔名與原因；請重新開啟標註工具處理。"
                 )
                 self.complete_pending_btn.setText("重新檢查已儲存標註")
                 return
             QMessageBox.warning(
                 self,
                 "尚未完成",
-                f"沒有可加入的完整標註；仍有 {report.remaining_count} 張待處理。",
+                f"沒有可加入的完整修正；仍有 {report.remaining_count} 張待處理。",
             )
             return
         if not automatic:
@@ -390,10 +395,24 @@ class AnnotationPanel(QWidget):
                 self,
                 "標註已加入",
                 f"本次加入 {report.promoted_count} 張；"
-                f"仍待標註 {report.remaining_count} 張。",
+                f"仍有 {report.remaining_count} 張待完成修正或確認。",
             )
         self.complete_pending_btn.setVisible(False)
         self.pending_ready.emit(str(report.handoff_path))
+
+    def _refresh_operator_workspace(self) -> None:
+        """Synchronize LabelImg input with the current job's remaining rows."""
+        if self.operator_dataset_root is None or self.operator_handoff_path is None:
+            return
+        images_dir, labels_dir, _classes_file = configure_pending_job_workspace(
+            self.operator_dataset_root,
+            self.annotation_classes,
+            self.operator_handoff_path,
+        )
+        self.annotation_input_dir = images_dir
+        self.annotation_output_dir = labels_dir
+        self.annotation_input_edit.setText(str(images_dir))
+        self.annotation_output_edit.setText(str(labels_dir))
 
     def _poll_operator_labelimg(self) -> None:
         """Continue the operator workflow after the annotation window closes."""
@@ -760,13 +779,50 @@ class AnnotationPanel(QWidget):
     def _on_scan_completed(self, stats: dict) -> None:
         """Handle successful scan completion."""
         self._set_ui_locked(False)
-        
+
+        if (
+            self.operator_mode_enabled
+            and self.operator_dataset_root is not None
+            and self.operator_handoff_path is not None
+        ):
+            try:
+                progress = inspect_pending_annotation_progress(
+                    self.operator_dataset_root,
+                    self.annotation_classes,
+                    self.operator_handoff_path,
+                )
+            except (OSError, PendingAnnotationError) as exc:
+                self._on_scan_error(str(exc))
+                return
+            total = progress.total_count
+            completed = progress.completed_count
+            pending_display = [
+                f"{item.image_name} — {item.detail}" for item in progress.pending_items
+            ]
+            progress_percent = (completed / total * 100.0) if total else 100.0
+            stats = {
+                **stats,
+                "total_images": total,
+                "annotated_images": completed,
+                "unannotated_images": pending_display,
+                "progress_percent": progress_percent,
+            }
+
         # Update statistics label
-        self.annotation_stats_label.setText(
-            f"📊 總圖片：{stats['total_images']}  |  "
-            f"✅ 已標註：{stats['annotated_images']} ({stats['progress_percent']:.1f}%)  |  "
-            f"⏳ 未標註：{len(stats['unannotated_images'])}"
-        )
+        if self.operator_mode_enabled:
+            self.annotation_stats_label.setText(
+                f"📊 本次待處理：{stats['total_images']}  |  "
+                f"✅ 已完成修正：{stats['annotated_images']} "
+                f"({stats['progress_percent']:.1f}%)  |  "
+                f"⏳ 尚待修正：{len(stats['unannotated_images'])}"
+            )
+        else:
+            self.annotation_stats_label.setText(
+                f"📊 總圖片：{stats['total_images']}  |  "
+                f"✅ 已標註：{stats['annotated_images']} "
+                f"({stats['progress_percent']:.1f}%)  |  "
+                f"⏳ 未標註：{len(stats['unannotated_images'])}"
+            )
 
         # Update progress bar
         self.annotation_progress_bar.setValue(int(stats["progress_percent"]))
@@ -781,7 +837,12 @@ class AnnotationPanel(QWidget):
             )
 
         # Update class distribution
-        if self.annotation_classes and stats["annotated_images"] > 0 and self.annotation_output_dir is not None:
+        if (
+            not self.operator_mode_enabled
+            and self.annotation_classes
+            and stats["annotated_images"] > 0
+            and self.annotation_output_dir is not None
+        ):
             class_dist = self.annotation_tracker.get_class_distribution(
                 self.annotation_output_dir,
                 self.annotation_classes,

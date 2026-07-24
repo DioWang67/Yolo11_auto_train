@@ -5,9 +5,15 @@ presets:
     - artifact_bundle
 
   "YOLO: train and deploy":
+    - yolo_augmentation
+    - dataset_lint
     - dataset_splitter
     - yolo_train
+    - position_validation
     - yolo_evaluation
+    - generate_report
+    - batch_inference
+    - qc_summary
     - deploy
 
   "YOLO: train only":

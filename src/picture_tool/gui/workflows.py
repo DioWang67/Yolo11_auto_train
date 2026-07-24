@@ -52,8 +52,23 @@ WORKFLOW_PRESETS: tuple[WorkflowPreset, ...] = (
     ),
     WorkflowPreset(
         name="YOLO: train and deploy",
-        tasks=("dataset_splitter", "yolo_train", "yolo_evaluation", "deploy"),
-        description="Split, train, evaluate, and deploy YOLO to yolo11_inference.",
+        tasks=(
+            "yolo_augmentation",
+            "dataset_lint",
+            "dataset_splitter",
+            "yolo_train",
+            "position_validation",
+            "yolo_evaluation",
+            "generate_report",
+            "batch_inference",
+            "qc_summary",
+            "deploy",
+        ),
+        description=(
+            "Augment and lint data, split by source family, train, run position "
+            "and detection validation, create reports, smoke-test inference, and "
+            "deploy YOLO to yolo11_inference."
+        ),
     ),
     WorkflowPreset(
         name="YOLO: train only",

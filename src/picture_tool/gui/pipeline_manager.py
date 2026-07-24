@@ -269,12 +269,9 @@ class PipelineManager(QObject):
             timeout_ms: Max milliseconds to wait for graceful shutdown.
                         If exceeded, the thread is terminated forcefully.
         """
-        if not self.is_running() or not self.worker_thread:
+        if not self.request_pipeline_stop():
             self.status_message.emit("Pipeline is not running.", "info")
             return
-
-        self.worker_thread.request_stop()
-        self.log_message.emit("Stop requested; waiting for current task...")
 
         if not self.worker_thread.wait(timeout_ms):
             self._logger.warning(
@@ -283,6 +280,14 @@ class PipelineManager(QObject):
             self.worker_thread.terminate()
             self.worker_thread.wait(2000)
             self.error_occurred.emit("Pipeline forcefully terminated (timeout)")
+
+    def request_pipeline_stop(self) -> bool:
+        """Request cooperative cancellation without blocking the GUI thread."""
+        if not self.is_running() or not self.worker_thread:
+            return False
+        self.worker_thread.request_stop()
+        self.log_message.emit("Stop requested; waiting for the current safe point...")
+        return True
 
     def _on_worker_finished(self) -> None:
         """Handler for worker thread completion."""
