@@ -124,6 +124,7 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
 
     handoff_cfg = cfg.get("operator_handoff", {}) or {}
     handoff_source_stage = "processed"
+    handoff_split_source_stage = "processed"
     if handoff_cfg.get("enabled", False):
         handoff_dataset_value = str(handoff_cfg.get("dataset_root") or "").strip()
         if not handoff_dataset_value:
@@ -141,6 +142,13 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
         if handoff_source_stage not in {"raw", "processed"}:
             raise ValueError(
                 "operator_handoff.source_stage must be 'raw' or 'processed'"
+            )
+        handoff_split_source_stage = str(
+            handoff_cfg.get("split_source_stage") or handoff_source_stage
+        ).lower()
+        if handoff_split_source_stage not in {"raw", "processed"}:
+            raise ValueError(
+                "operator_handoff.split_source_stage must be 'raw' or 'processed'"
             )
 
     raw_root = data_root / "raw"
@@ -210,7 +218,9 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     if "train_test_split" in cfg:
         tts = cfg["train_test_split"]
         split_input_root = (
-            raw_root if handoff_source_stage == "raw" else processed_root
+            raw_root
+            if handoff_split_source_stage == "raw"
+            else processed_root
         )
         tts.setdefault("input", {})["image_dir"] = str(split_input_root / "images")
         tts.setdefault("input", {})["label_dir"] = str(split_input_root / "labels")
@@ -298,6 +308,12 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     # --- Reports ---
     if "report" in cfg:
         cfg["report"]["output_dir"] = str(reports_root)
+
+    # --- QC Summary ---
+    if "qc_summary" in cfg:
+        cfg["qc_summary"]["output_path"] = str(
+            quality_root / "qc_summary.json"
+        )
 
     _check_for_placeholders(cfg)
     return cfg

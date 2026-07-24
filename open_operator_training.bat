@@ -1,16 +1,14 @@
 @echo off
 setlocal EnableExtensions
 title YOLO Operator Training Center
-cd /d "%~dp0"
-
-if /I "%~1"=="--check" (
-    echo Operator training launcher OK
-    exit /b 0
-)
-
-if "%~1"=="" (
-    echo ERROR: Missing operator handoff path.
-    pause
+set "PROJECT_ROOT=%~dp0"
+set "CHECK_MODE=0"
+set "BACKGROUND_ARG="
+if /I "%~1"=="--check" set "CHECK_MODE=1"
+if /I "%~2"=="--background" set "BACKGROUND_ARG=--background"
+cd /d "%PROJECT_ROOT%" || (
+    echo ERROR: Training project directory was not found: %PROJECT_ROOT%
+    if "%CHECK_MODE%"=="0" pause
     exit /b 1
 )
 
@@ -25,15 +23,41 @@ if not defined PYTHON_EXE (
 )
 if not defined PYTHON_EXE (
     echo ERROR: Python was not found.
-    pause
+    if "%CHECK_MODE%"=="0" if not defined BACKGROUND_ARG pause
     exit /b 1
 )
 
-set "PYTHONPATH=%CD%\src;%PYTHONPATH%"
-"%PYTHON_EXE%" -m picture_tool.gui.app --handoff "%~1"
+set "PYTHONPATH=%PROJECT_ROOT%src;%PYTHONPATH%"
+"%PYTHON_EXE%" -c "import picture_tool" >nul 2>nul
+if errorlevel 1 (
+    echo ERROR: Python cannot import picture_tool.
+    echo Python: %PYTHON_EXE%
+    echo Source: %PROJECT_ROOT%src
+    if "%CHECK_MODE%"=="0" if not defined BACKGROUND_ARG pause
+    exit /b 1
+)
+if "%CHECK_MODE%"=="1" (
+    echo Operator training launcher OK
+    echo Python: %PYTHON_EXE%
+    echo Source: %PROJECT_ROOT%src
+    exit /b 0
+)
+
+if /I "%~1"=="--import" (
+    if "%~2"=="" (
+        echo ERROR: Missing portable training ZIP path.
+        pause
+        exit /b 1
+    )
+    "%PYTHON_EXE%" -m picture_tool.gui.app --import-package "%~2"
+) else if "%~1"=="" (
+    "%PYTHON_EXE%" -m picture_tool.gui.app --resume-latest
+) else (
+    "%PYTHON_EXE%" -m picture_tool.gui.app --handoff "%~1" %BACKGROUND_ARG%
+)
 if errorlevel 1 (
     echo ERROR: Training center failed to start.
-    pause
+    if not defined BACKGROUND_ARG pause
     exit /b 1
 )
 exit /b 0

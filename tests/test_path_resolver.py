@@ -131,6 +131,27 @@ class TestResolveProjectPaths:
         assert yt["deploy"]["area"] == "B"
         assert yt["artifact_bundle"]["area"] == "B"
 
+    def test_operator_handoff_can_augment_raw_then_split_processed(
+        self, base_config, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        dataset_root = tmp_path / "data" / "Cable1" / "A"
+        base_config["operator_handoff"] = {
+            "enabled": True,
+            "dataset_root": str(dataset_root),
+            "source_stage": "raw",
+            "split_source_stage": "processed",
+        }
+
+        result = resolve_project_paths(base_config, "Cable1,A")
+
+        assert Path(result["yolo_augmentation"]["input"]["image_dir"]) == (
+            dataset_root / "raw" / "images"
+        )
+        assert Path(result["train_test_split"]["input"]["image_dir"]) == (
+            dataset_root / "processed" / "images"
+        )
+
     def test_pipeline_log_path(self, base_config):
         result = resolve_project_paths(base_config, "MyProduct")
         assert "MyProduct" in result["pipeline"]["log_file"]

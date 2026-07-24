@@ -1,0 +1,569 @@
+"""Verify and import a portable operator retraining package."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+import time
+import uuid
+import zipfile
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+PACKAGE_SCHEMA_VERSION = 1
+PACKAGE_METADATA_NAME = "package.json"
+MAX_PACKAGE_FILES = 100_000
+MAX_PACKAGE_BYTES = 100 * 1024 * 1024 * 1024
+
+
+class PortableTrainingImportError(ValueError):
+    """Raised when a portable package is invalid, unsafe, or conflicting."""
+
+
+@dataclass(frozen=True)
+class PortableTrainingImportReport:
+    """Result of importing one portable operator job."""
+
+    package_id: str
+    handoff_path: Path
+    product: str
+    area: str
+    ready_count: int
+    pending_count: int
+    reused_existing: bool = False
+
+
+def import_portable_training_package(
+    package_path: str | Path,
+    training_root: str | Path,
+) -> PortableTrainingImportReport:
+    """Verify a package, merge its data, and create a local immutable handoff."""
+    package = Path(package_path).expanduser().resolve()
+    root = Path(training_root).expanduser().resolve()
+    if not package.is_file():
+        raise PortableTrainingImportError(f"Training package not found: {package}")
+    data_root = (root / "data").resolve()
+    data_root.mkdir(parents=True, exist_ok=True)
+    package_sha256 = _sha256_file(package)
+
+    with _portable_import_lock(data_root):
+        with zipfile.ZipFile(package) as archive:
+            metadata, inventory = _validate_archive(archive)
+            package_id = _safe_segment(metadata.get("package_id"), "package_id")
+            product = _safe_segment(metadata.get("product"), "product")
+            area = _safe_segment(metadata.get("area"), "area")
+            receipt_dir = data_root / ".portable_imports" / package_id
+            receipt_path = receipt_dir / "import.json"
+            existing = _read_json_mapping(receipt_path, required=False)
+            if existing:
+                if existing.get("package_sha256") != package_sha256:
+                    raise PortableTrainingImportError(
+                        "A different package already uses this package_id."
+                    )
+                handoff_path = Path(str(existing.get("handoff_path") or "")).resolve()
+                if not handoff_path.is_file():
+                    raise PortableTrainingImportError(
+                        "The existing portable import receipt has no handoff."
+                    )
+                return PortableTrainingImportReport(
+                    package_id=package_id,
+                    handoff_path=handoff_path,
+                    product=product,
+                    area=area,
+                    ready_count=int(existing.get("ready_count", 0)),
+                    pending_count=int(existing.get("pending_count", 0)),
+                    reused_existing=True,
+                )
+
+            imports_root = data_root / ".portable_imports"
+            imports_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix=f".{package_id}-", dir=imports_root
+            ) as temporary_directory:
+                staging = Path(temporary_directory)
+                _extract_verified_files(archive, inventory, staging)
+                dataset_source = _resolved_staging_path(
+                    staging, metadata.get("dataset_path"), "dataset_path"
+                )
+                models_source = _resolved_staging_path(
+                    staging, metadata.get("models_path"), "models_path"
+                )
+                handoff_source = _resolved_staging_path(
+                    staging, metadata.get("handoff_path"), "handoff_path"
+                )
+                if not dataset_source.is_dir() or not models_source.is_dir():
+                    raise PortableTrainingImportError(
+                        "The portable dataset or model directory is missing."
+                    )
+                original_handoff = _read_json_mapping(handoff_source)
+                _validate_source_contract(
+                    original_handoff,
+                    metadata,
+                    product=product,
+                    area=area,
+                )
+
+                dataset_destination = data_root / product / area
+                _merge_dataset(
+                    dataset_source,
+                    dataset_destination,
+                    package_id=package_id,
+                )
+                portable_models = (
+                    data_root / ".portable_models" / package_id / "models"
+                )
+                _merge_directory_files(models_source, portable_models)
+
+                job_id = f"portable-{hashlib.sha256(package_id.encode()).hexdigest()[:24]}"
+                job_dir = data_root / ".operator_handoff" / "jobs" / job_id
+                handoff_path = job_dir / "handoff.json"
+                status_path = job_dir / "status.json"
+                sample_ids = _string_list(metadata.get("sample_ids"))
+                expected_pending = set(
+                    _string_list(metadata.get("pending_sample_ids"))
+                )
+                ready_ids = _manifest_ids(
+                    dataset_destination / "metadata" / "review_dataset_manifest.csv"
+                )
+                pending_ids = _manifest_ids(
+                    dataset_destination / "review_pending" / "manifest.csv"
+                )
+                job_pending_ids = sorted(expected_pending & pending_ids)
+                job_ready_count = len(set(sample_ids) & ready_ids)
+                total_ready_count = len(ready_ids)
+                local_handoff = dict(original_handoff)
+                local_handoff.update(
+                    {
+                        "schema_version": 4,
+                        "job_id": job_id,
+                        "source_package_id": package_id,
+                        "source_package_sha256": package_sha256,
+                        "data_root": str(data_root),
+                        "status_path": str(status_path.resolve()),
+                        "inference_models_dir": str(portable_models.resolve()),
+                        "source_manifest": str(receipt_path.resolve()),
+                        "ready_count": job_ready_count,
+                        "total_ready_count": total_ready_count,
+                        "pending_count": len(job_pending_ids),
+                    }
+                )
+                original_targets = local_handoff.get("targets")
+                if not isinstance(original_targets, list) or len(original_targets) != 1:
+                    raise PortableTrainingImportError(
+                        "The source handoff must contain exactly one target."
+                    )
+                local_target = dict(original_targets[0])
+                local_target.update(
+                    {
+                        "product": product,
+                        "area": area,
+                        "dataset_root": str(dataset_destination.resolve()),
+                        "ready_count": job_ready_count,
+                        "total_ready_count": total_ready_count,
+                        "pending_count": len(job_pending_ids),
+                        "sample_ids": sample_ids,
+                        "pending_sample_ids": _string_list(
+                            metadata.get("pending_sample_ids")
+                        ),
+                    }
+                )
+                local_handoff["targets"] = [local_target]
+                _write_json_atomic(handoff_path, local_handoff)
+                _write_json_atomic(
+                    data_root / ".operator_handoff" / "latest.json", local_handoff
+                )
+                initial_state = "waiting_annotation" if job_pending_ids else "queued"
+                _write_json_atomic(
+                    status_path,
+                    {
+                        "schema_version": 1,
+                        "job_id": job_id,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "product": product,
+                        "area": area,
+                        "ready_count": total_ready_count,
+                        "pending_count": len(job_pending_ids),
+                        "progress": 0,
+                        "state": initial_state,
+                        "message": (
+                            "Portable package imported; annotation is required."
+                            if job_pending_ids
+                            else "Portable package imported; ready to train."
+                        ),
+                    },
+                )
+                receipt = {
+                    "schema_version": 1,
+                    "package_id": package_id,
+                    "package_sha256": package_sha256,
+                    "imported_at": datetime.now(timezone.utc).isoformat(),
+                    "source_package": str(package),
+                    "handoff_path": str(handoff_path.resolve()),
+                    "product": product,
+                    "area": area,
+                    "ready_count": total_ready_count,
+                    "pending_count": len(job_pending_ids),
+                }
+                _write_json_atomic(receipt_path, receipt)
+
+    return PortableTrainingImportReport(
+        package_id=package_id,
+        handoff_path=handoff_path,
+        product=product,
+        area=area,
+        ready_count=total_ready_count,
+        pending_count=len(job_pending_ids),
+    )
+
+
+def _validate_archive(
+    archive: zipfile.ZipFile,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    members: dict[str, zipfile.ZipInfo] = {}
+    total_bytes = 0
+    for member in archive.infolist():
+        if member.is_dir():
+            continue
+        relative = _safe_archive_path(member.filename)
+        if relative in members:
+            raise PortableTrainingImportError(
+                f"Duplicate path in training package: {relative}"
+            )
+        file_type = (member.external_attr >> 16) & 0o170000
+        if file_type == 0o120000:
+            raise PortableTrainingImportError("Symbolic links are not allowed in ZIP files.")
+        members[relative] = member
+        total_bytes += member.file_size
+    if len(members) > MAX_PACKAGE_FILES or total_bytes > MAX_PACKAGE_BYTES:
+        raise PortableTrainingImportError("Training package exceeds the safe size limit.")
+    metadata_member = members.get(PACKAGE_METADATA_NAME)
+    if metadata_member is None or metadata_member.file_size > 2 * 1024 * 1024:
+        raise PortableTrainingImportError("Training package metadata is missing or too large.")
+    try:
+        metadata = json.loads(archive.read(metadata_member).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PortableTrainingImportError(
+            f"Invalid training package metadata: {exc}"
+        ) from exc
+    if not isinstance(metadata, dict) or metadata.get("schema_version") != PACKAGE_SCHEMA_VERSION:
+        raise PortableTrainingImportError("Unsupported training package schema.")
+    raw_inventory = metadata.get("files")
+    if not isinstance(raw_inventory, dict):
+        raise PortableTrainingImportError("Training package file inventory is missing.")
+    inventory: dict[str, dict[str, Any]] = {}
+    for raw_path, raw_contract in raw_inventory.items():
+        relative = _safe_archive_path(str(raw_path))
+        if not isinstance(raw_contract, dict):
+            raise PortableTrainingImportError(f"Invalid file contract: {relative}")
+        digest = str(raw_contract.get("sha256") or "").lower()
+        size = raw_contract.get("size")
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise PortableTrainingImportError(f"Invalid SHA-256 contract: {relative}")
+        if type(size) is not int or size < 0:
+            raise PortableTrainingImportError(f"Invalid file size contract: {relative}")
+        member = members.get(relative)
+        if member is None or member.file_size != size:
+            raise PortableTrainingImportError(f"File size mismatch: {relative}")
+        inventory[relative] = {"sha256": digest, "size": size}
+    allowed_untracked = {PACKAGE_METADATA_NAME}
+    if set(members) - allowed_untracked != set(inventory):
+        raise PortableTrainingImportError(
+            "Training package contains files outside its verified inventory."
+        )
+    return metadata, inventory
+
+
+def _extract_verified_files(
+    archive: zipfile.ZipFile,
+    inventory: dict[str, dict[str, Any]],
+    destination_root: Path,
+) -> None:
+    for relative, contract in inventory.items():
+        destination = (destination_root / Path(*PurePosixPath(relative).parts)).resolve()
+        if not destination.is_relative_to(destination_root.resolve()):
+            raise PortableTrainingImportError(f"Unsafe extraction path: {relative}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        written = 0
+        with archive.open(relative) as source, destination.open("wb") as target:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                target.write(chunk)
+                digest.update(chunk)
+                written += len(chunk)
+        if written != contract["size"] or digest.hexdigest() != contract["sha256"]:
+            raise PortableTrainingImportError(f"Checksum mismatch: {relative}")
+
+
+def _merge_dataset(source: Path, destination: Path, *, package_id: str) -> None:
+    for relative_directory in (
+        Path("raw/images"),
+        Path("raw/labels"),
+        Path("review_pending/images"),
+        Path("review_pending/labels"),
+        Path("color_review"),
+    ):
+        candidate = source / relative_directory
+        if candidate.is_dir():
+            _merge_directory_files(candidate, destination / relative_directory)
+    metadata_source = source / "metadata"
+    if metadata_source.is_dir():
+        for file_path in metadata_source.iterdir():
+            if file_path.is_file() and file_path.name != "review_dataset_manifest.csv":
+                _copy_verified(file_path, destination / "metadata" / file_path.name)
+    _merge_csv_manifest(
+        source / "metadata" / "review_dataset_manifest.csv",
+        destination / "metadata" / "review_dataset_manifest.csv",
+        dataset_root=destination,
+        pending=False,
+        package_id=package_id,
+    )
+    pending_manifest = source / "review_pending" / "manifest.csv"
+    if pending_manifest.is_file():
+        _merge_csv_manifest(
+            pending_manifest,
+            destination / "review_pending" / "manifest.csv",
+            dataset_root=destination,
+            pending=True,
+            package_id=package_id,
+        )
+
+
+def _merge_csv_manifest(
+    source: Path,
+    destination: Path,
+    *,
+    dataset_root: Path,
+    pending: bool,
+    package_id: str,
+) -> None:
+    if not source.is_file():
+        if pending:
+            return
+        raise PortableTrainingImportError(f"Dataset manifest is missing: {source}")
+    imported_rows = _read_csv(source)
+    existing_rows = _read_csv(destination)
+    merged = {_manifest_row_key(row, index): row for index, row in enumerate(existing_rows)}
+    for index, row in enumerate(imported_rows):
+        normalized = dict(row)
+        image_root = dataset_root / ("review_pending/images" if pending else "raw/images")
+        label_root = dataset_root / ("review_pending/labels" if pending else "raw/labels")
+        image_name = Path(str(row.get("output_image") or "")).name
+        label_name = Path(str(row.get("output_label") or "")).name
+        if image_name:
+            normalized["portable_original_source_image"] = str(row.get("source_image") or "")
+            normalized["output_image"] = str((image_root / image_name).resolve())
+            normalized["source_image"] = normalized["output_image"]
+        if label_name:
+            normalized["output_label"] = str((label_root / label_name).resolve())
+        if pending and image_name:
+            normalized["detection_source_image"] = normalized["output_image"]
+        normalized["portable_package_id"] = package_id
+        key = _manifest_row_key(normalized, index)
+        previous = merged.get(key)
+        if previous and previous.get("image_sha256") and normalized.get("image_sha256"):
+            if previous["image_sha256"] != normalized["image_sha256"]:
+                raise PortableTrainingImportError(
+                    f"Conflicting manifest sample identity: {key}"
+                )
+        merged[key] = normalized
+    _write_csv_atomic(destination, list(merged.values()))
+
+
+def _merge_directory_files(source_root: Path, destination_root: Path) -> None:
+    for source in sorted(source_root.rglob("*")):
+        if source.is_symlink():
+            raise PortableTrainingImportError(f"Symbolic link is not allowed: {source}")
+        if source.is_file():
+            _copy_verified(source, destination_root / source.relative_to(source_root))
+
+
+def _copy_verified(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if _sha256_file(source) != _sha256_file(destination):
+            raise PortableTrainingImportError(
+                f"Imported file conflicts with existing data: {destination}"
+            )
+        return
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, temporary)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _validate_source_contract(
+    handoff: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    product: str,
+    area: str,
+) -> None:
+    if str(handoff.get("job_id") or "") != str(metadata.get("source_job_id") or ""):
+        raise PortableTrainingImportError("Package job_id does not match its handoff.")
+    targets = handoff.get("targets")
+    if not isinstance(targets, list) or len(targets) != 1 or not isinstance(targets[0], dict):
+        raise PortableTrainingImportError("Package handoff target is invalid.")
+    if str(targets[0].get("product") or "") != product or str(
+        targets[0].get("area") or ""
+    ) != area:
+        raise PortableTrainingImportError("Package target does not match its metadata.")
+
+
+def _resolved_staging_path(root: Path, value: Any, field_name: str) -> Path:
+    relative = _safe_archive_path(str(value or ""))
+    resolved = (root / Path(*PurePosixPath(relative).parts)).resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise PortableTrainingImportError(f"Unsafe {field_name}.")
+    return resolved
+
+
+def _safe_archive_path(value: str) -> str:
+    if not value or "\\" in value:
+        raise PortableTrainingImportError(f"Unsafe ZIP path: {value!r}")
+    path = PurePosixPath(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise PortableTrainingImportError(f"Unsafe ZIP path: {value!r}")
+    return path.as_posix()
+
+
+def _safe_segment(value: Any, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text or text in {".", ".."} or any(
+        not (character.isalnum() or character in "._-") for character in text
+    ):
+        raise PortableTrainingImportError(f"Invalid {field_name}: {text!r}")
+    return text
+
+
+def _manifest_ids(path: Path) -> set[str]:
+    return {
+        str(row.get("sample_id") or "")
+        for row in _read_csv(path)
+        if str(row.get("sample_id") or "")
+    }
+
+
+def _manifest_row_key(row: dict[str, str], index: int) -> str:
+    return str(
+        row.get("sample_id")
+        or row.get("image_sha256")
+        or row.get("output_image")
+        or f"row:{index}"
+    )
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise PortableTrainingImportError(f"Unable to read CSV {path}: {exc}") from exc
+
+
+def _write_csv_atomic(path: Path, rows: list[dict[str, str]]) -> None:
+    if not rows:
+        raise PortableTrainingImportError(f"Cannot write an empty dataset manifest: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = list(rows[0])
+    for row in rows[1:]:
+        fields.extend(field for field in row if field not in fields)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_json_mapping(path: Path, *, required: bool = True) -> dict[str, Any]:
+    if not path.is_file():
+        if required:
+            raise PortableTrainingImportError(f"JSON file not found: {path}")
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PortableTrainingImportError(f"Unable to read JSON {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise PortableTrainingImportError(f"Invalid JSON mapping: {path}")
+    return payload
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@contextmanager
+def _portable_import_lock(data_root: Path, timeout_seconds: float = 15.0):
+    lock_path = data_root / ".operator_handoff" / "portable_import.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_seconds
+    descriptor: int | None = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise PortableTrainingImportError(
+                    "Another portable training package is being imported."
+                ) from None
+            time.sleep(0.05)
+    try:
+        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        yield
+    finally:
+        os.close(descriptor)
+        lock_path.unlink(missing_ok=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("package")
+    parser.add_argument("--training-root", default=".")
+    args = parser.parse_args()
+    try:
+        report = import_portable_training_package(args.package, args.training_root)
+    except (OSError, zipfile.BadZipFile, PortableTrainingImportError) as exc:
+        parser.exit(2, f"ERROR: {exc}\n")
+    print(report.handoff_path)
+
+
+if __name__ == "__main__":
+    main()
