@@ -177,7 +177,9 @@ class LabelImgLauncher:
             stdout_log, stderr_log = self._open_launch_logs(log_path)
             creationflags = 0
             if os.name == "nt":
-                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+                creationflags = int(
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
 
             self.process = subprocess.Popen(
                 cmd,
