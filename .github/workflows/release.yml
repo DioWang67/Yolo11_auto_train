@@ -28,6 +28,7 @@ jobs:
       - name: Run test suite
         env:
           PYTHONPATH: src
+          QT_QPA_PLATFORM: offscreen
         run: pytest -q
 
       - name: Build distribution artifacts
