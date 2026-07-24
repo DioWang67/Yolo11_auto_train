@@ -56,6 +56,7 @@ PENDING_FIELDS = [
     "class_schema_hash",
     "detections_json",
     "source_image",
+    "detection_source_image",
     "output_image",
     "output_label",
     "label_baseline_sha256",
@@ -66,9 +67,13 @@ MISSING_LABEL_BASELINE = "missing"
 VERIFICATION_RECEIPT_SCHEMA_VERSION = 1
 CORRECTION_REASONS = {
     "false_detection_requires_correction",
+    "box_geometry_requires_correction",
     "wrong_class_requires_correction",
     "operator_uncertain_requires_review",
 }
+YOLO_IMAGE_SUFFIXES = frozenset(
+    {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+)
 
 
 class PendingAnnotationError(ValueError):
@@ -83,6 +88,31 @@ class PendingPromotionReport:
     remaining_count: int
     total_ready_count: int
     handoff_path: Path
+
+
+@dataclass(frozen=True)
+class PendingProgressItem:
+    """One job-owned image that is not yet safe to promote."""
+
+    image_name: str
+    status: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class PendingAnnotationProgress:
+    """Promotion-aware progress for the current immutable operator job."""
+
+    total_count: int
+    completed_count: int
+    pending_items: tuple[PendingProgressItem, ...]
+
+
+@dataclass(frozen=True)
+class _PendingLabelInspection:
+    status: str
+    label_text: str = ""
+    detail: str = ""
 
 
 def configure_pending_workspace(
@@ -117,6 +147,195 @@ def configure_pending_workspace(
     return images_dir, labels_dir, classes_file
 
 
+def configure_pending_job_workspace(
+    dataset_root: str | Path,
+    class_names: list[str],
+    handoff_path: str | Path,
+) -> tuple[Path, Path, Path]:
+    """Prepare a LabelImg input directory scoped to one schema-v3 job.
+
+    Legacy or not-yet-created handoffs retain the shared pending directory for
+    backward compatibility.  Schema-v3 jobs receive copies of only their
+    currently pending images, preventing historical queues from appearing in
+    the same LabelImg session.
+    """
+    root = Path(dataset_root).expanduser().resolve()
+    shared_images, labels_dir, classes_file = configure_pending_workspace(
+        root, class_names
+    )
+    handoff = Path(handoff_path).expanduser().resolve()
+    if not handoff.is_file():
+        return shared_images, labels_dir, classes_file
+    scope = _handoff_pending_scope(handoff, root)
+    if scope is None:
+        return shared_images, labels_dir, classes_file
+
+    data_root = root.parents[1]
+    operator_root = (data_root / ".operator_handoff").resolve()
+    if not handoff.is_relative_to(operator_root):
+        raise PendingAnnotationError(
+            f"Schema-v3 handoff is outside the operator job directory: {handoff}"
+        )
+    pending_manifest = root / "review_pending" / "manifest.csv"
+    pending_rows = _read_csv(pending_manifest)
+    desired_sources: dict[str, Path] = {}
+    for row in pending_rows:
+        sample_id = str(row.get("sample_id") or row.get("image_sha256") or "")
+        if sample_id not in scope:
+            continue
+        source = _managed_path(
+            row.get("output_image"), shared_images, field_name="output_image"
+        )
+        if source is not None and source.is_file():
+            desired_sources[source.name] = source
+
+    workspace = handoff.parent / "annotation_images"
+    workspace.mkdir(parents=True, exist_ok=True)
+    with _target_lock(root):
+        for candidate in workspace.iterdir():
+            if (
+                candidate.is_file()
+                and candidate.suffix.lower() in YOLO_IMAGE_SUFFIXES
+                and candidate.name not in desired_sources
+            ):
+                candidate.unlink()
+        for filename, source in desired_sources.items():
+            destination = workspace / filename
+            if not destination.is_file() or _sha256_file(
+                destination
+            ) != _sha256_file(source):
+                _copy_atomic(source, destination)
+    return workspace, labels_dir, classes_file
+
+
+def reconcile_pending_label_sidecars(
+    dataset_root: str | Path,
+    class_names: list[str],
+    handoff_path: str | Path,
+) -> int:
+    """Import LabelImg labels accidentally saved beside job input images.
+
+    Some LabelImg builds ignore their configured output directory and create a
+    YOLO ``.txt`` beside the input image.  Only sidecars owned by the current
+    handoff are accepted.  Every candidate is validated before any destination
+    is changed, then copied atomically into ``review_pending/labels`` with an
+    explicit verification receipt.  Source sidecars remain as audit evidence.
+
+    Returns:
+        Number of job-owned sidecars reconciled into the managed label folder.
+    """
+    if not class_names or any(not str(name).strip() for name in class_names):
+        raise PendingAnnotationError("The annotation class list is empty or invalid.")
+    root = Path(dataset_root).expanduser().resolve()
+    handoff = Path(handoff_path).expanduser().resolve()
+    workspace, labels_dir, _classes_file = configure_pending_job_workspace(
+        root, class_names, handoff
+    )
+    workspace = workspace.resolve()
+    labels_dir = labels_dir.resolve()
+    pending_manifest = root / "review_pending" / "manifest.csv"
+    rows = _read_csv(pending_manifest)
+    scope = _handoff_pending_scope(handoff, root) if handoff.is_file() else None
+    shared_images = (root / "review_pending" / "images").resolve()
+
+    with _target_lock(root):
+        reconciliations: list[tuple[Path, str]] = []
+        for row in rows:
+            sample_id = str(row.get("sample_id") or row.get("image_sha256") or "")
+            if scope is not None and sample_id not in scope:
+                continue
+            image_path = _managed_path(
+                row.get("output_image"), shared_images, field_name="output_image"
+            )
+            if image_path is None:
+                continue
+            sidecar = workspace / f"{image_path.stem}.txt"
+            if not sidecar.is_file():
+                continue
+            resolved_sidecar = sidecar.resolve()
+            if resolved_sidecar.parent != workspace:
+                raise PendingAnnotationError(
+                    f"Unsafe LabelImg sidecar path: {resolved_sidecar}"
+                )
+            destination = _pending_label_path(row, image_path, labels_dir)
+            if destination is None:
+                raise PendingAnnotationError(
+                    f"Pending label destination is invalid for {image_path.name}."
+                )
+            label_text = resolved_sidecar.read_text(encoding="utf-8")
+            errors = validate_yolo_label_text(label_text, len(class_names))
+            if errors:
+                raise PendingAnnotationError(
+                    f"Invalid annotation {resolved_sidecar.name}: "
+                    + "; ".join(errors[:5])
+                )
+            review_label = str(row.get("review_label") or "").strip().lower()
+            reason = str(row.get("reason") or "").strip().lower()
+            if not label_text.strip() and (
+                review_label == "false_negative"
+                or reason == "missed_detection_requires_box_annotation"
+            ):
+                raise PendingAnnotationError(
+                    f"漏檢影像 {image_path.name} 尚未框出目標。"
+                    "請在標註工具至少畫一個正確框並儲存。"
+                )
+            reconciliations.append((destination, label_text))
+
+        for destination, label_text in reconciliations:
+            _write_text_atomic(destination, label_text)
+            record_label_verification(destination, labels_dir)
+        return len(reconciliations)
+
+
+def inspect_pending_annotation_progress(
+    dataset_root: str | Path,
+    class_names: list[str],
+    handoff_path: str | Path,
+) -> PendingAnnotationProgress:
+    """Return progress using the same safety rules as pending promotion."""
+    if not class_names or any(not str(name).strip() for name in class_names):
+        raise PendingAnnotationError("The annotation class list is empty or invalid.")
+    root = Path(dataset_root).expanduser().resolve()
+    handoff = Path(handoff_path).expanduser().resolve()
+    pending_manifest = root / "review_pending" / "manifest.csv"
+    rows = _read_csv(pending_manifest)
+    scope = _handoff_pending_scope(handoff, root) if handoff.is_file() else None
+    images_dir = root / "review_pending" / "images"
+    labels_dir = root / "review_pending" / "labels"
+    completed_count = 0
+    pending_items: list[PendingProgressItem] = []
+    total_count = 0
+    for row in rows:
+        sample_id = str(row.get("sample_id") or row.get("image_sha256") or "")
+        if scope is not None and sample_id not in scope:
+            continue
+        total_count += 1
+        image_path = _managed_path(
+            row.get("output_image"), images_dir, field_name="output_image"
+        )
+        image_name = (
+            image_path.name if image_path is not None else f"review_{sample_id}.jpg"
+        )
+        if image_path is None or not image_path.is_file():
+            pending_items.append(
+                PendingProgressItem(image_name, "missing_image", "找不到待標註圖片")
+            )
+            continue
+        label_path = _pending_label_path(row, image_path, labels_dir)
+        inspection = _inspect_pending_label(row, label_path, len(class_names))
+        if inspection.status == "complete":
+            completed_count += 1
+            continue
+        pending_items.append(
+            PendingProgressItem(image_name, inspection.status, inspection.detail)
+        )
+    return PendingAnnotationProgress(
+        total_count=total_count,
+        completed_count=completed_count,
+        pending_items=tuple(sorted(pending_items, key=lambda item: item.image_name)),
+    )
+
+
 def promote_completed_pending(
     dataset_root: str | Path,
     class_names: list[str],
@@ -131,6 +350,7 @@ def promote_completed_pending(
     """
     root = Path(dataset_root).expanduser().resolve()
     handoff = Path(handoff_path).expanduser().resolve()
+    reconcile_pending_label_sidecars(root, class_names, handoff)
     images_dir, labels_dir, _classes_file = configure_pending_workspace(
         root, class_names
     )
@@ -165,38 +385,28 @@ def promote_completed_pending(
             if image_path is None or not image_path.is_file():
                 remaining.append(row)
                 continue
-            label_value = str(row.get("output_label") or "")
-            label_path = (
-                _managed_path(label_value, labels_dir, field_name="output_label")
-                if label_value
-                else labels_dir / f"{image_path.stem}.txt"
-            )
-            if label_path is None or not label_path.is_file():
+            label_path = _pending_label_path(row, image_path, labels_dir)
+            inspection = _inspect_pending_label(row, label_path, len(class_names))
+            if inspection.status in {"missing_label", "unchanged_draft"}:
                 remaining.append(row)
                 continue
-
-            if not _label_changed_since_handoff(row, label_path):
-                remaining.append(row)
-                continue
-
-            label_text = label_path.read_text(encoding="utf-8")
-            errors = validate_yolo_label_text(label_text, len(class_names))
-            if errors:
-                preview = "; ".join(errors[:5])
+            if inspection.status == "invalid_label":
+                label_name = label_path.name if label_path is not None else "unknown.txt"
                 raise PendingAnnotationError(
-                    f"Invalid annotation {label_path.name}: {preview}"
+                    f"Invalid annotation {label_name}: {inspection.detail}"
                 )
-            review_label = str(row.get("review_label") or "").strip().lower()
-            reason = str(row.get("reason") or "").strip().lower()
-            if not label_text.strip() and (
-                review_label == "false_negative"
-                or reason == "missed_detection_requires_box_annotation"
-            ):
+            if inspection.status == "missing_required_box":
                 raise PendingAnnotationError(
                     f"漏檢影像 {image_path.name} 尚未框出目標。"
                     "請在標註工具至少畫一個正確框並儲存；"
                     "若影像中其實沒有目標，請回到檢測複核畫面改選「影像中沒有目標」。"
                 )
+            if inspection.status != "complete":
+                raise PendingAnnotationError(
+                    f"Unsupported annotation state for {image_path.name}: "
+                    f"{inspection.status}"
+                )
+            label_text = inspection.label_text
 
             image_sha256 = str(row.get("image_sha256") or "") or _sha256_file(
                 image_path
@@ -330,6 +540,48 @@ def validate_yolo_label_text(label_text: str, num_classes: int) -> list[str]:
         if width <= 0.0 or height <= 0.0:
             errors.append(f"line {line_number}: width and height must be positive")
     return errors
+
+
+def _pending_label_path(
+    row: dict[str, str], image_path: Path, labels_dir: Path
+) -> Path | None:
+    label_value = str(row.get("output_label") or "")
+    if label_value:
+        return _managed_path(label_value, labels_dir, field_name="output_label")
+    return labels_dir / f"{image_path.stem}.txt"
+
+
+def _inspect_pending_label(
+    row: dict[str, str], label_path: Path | None, num_classes: int
+) -> _PendingLabelInspection:
+    """Classify one label with the exact criteria used by promotion."""
+    if label_path is None or not label_path.is_file():
+        return _PendingLabelInspection(
+            "missing_label", detail="尚未建立或儲存標籤檔"
+        )
+    if not _label_changed_since_handoff(row, label_path):
+        return _PendingLabelInspection(
+            "unchanged_draft", detail="預填框尚未修改或按 Ctrl+S 確認"
+        )
+    try:
+        label_text = label_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return _PendingLabelInspection("invalid_label", detail=str(exc))
+    errors = validate_yolo_label_text(label_text, num_classes)
+    if errors:
+        return _PendingLabelInspection(
+            "invalid_label", label_text, "; ".join(errors[:5])
+        )
+    review_label = str(row.get("review_label") or "").strip().lower()
+    reason = str(row.get("reason") or "").strip().lower()
+    if not label_text.strip() and (
+        review_label == "false_negative"
+        or reason == "missed_detection_requires_box_annotation"
+    ):
+        return _PendingLabelInspection(
+            "missing_required_box", label_text, "漏檢目標尚未畫框"
+        )
+    return _PendingLabelInspection("complete", label_text)
 
 
 def _label_changed_since_handoff(row: dict[str, str], label_path: Path) -> bool:
@@ -503,7 +755,7 @@ def _update_handoff_counts(
                 status_path,
                 state="waiting_annotation" if remaining_count else "queued",
                 message=(
-                    f"尚有 {remaining_count} 張需要補標"
+                    f"尚有 {remaining_count} 張需要完成修正或儲存確認"
                     if remaining_count
                     else "補標完成，準備建立訓練資料快照"
                 ),

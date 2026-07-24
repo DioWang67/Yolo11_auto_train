@@ -1,6 +1,8 @@
 import json
+from types import SimpleNamespace
 
 from picture_tool.report.qc_summary import generate_qc_summary
+from picture_tool.tasks.quality import run_qc_summary
 
 
 def test_qc_summary_aggregates(tmp_path):
@@ -35,3 +37,12 @@ def test_qc_summary_aggregates(tmp_path):
     assert data["color_verification"]["count"] == 2
     assert data["position_validation"]["status_counts"] == {"PASS": 1}
     assert data["detection"]["predictions"] == 1
+
+
+def test_qc_summary_task_uses_station_scoped_output(tmp_path):
+    output_path = tmp_path / "runs" / "Cable1" / "A" / "quality" / "qc.json"
+    config = {"qc_summary": {"output_path": str(output_path)}}
+
+    run_qc_summary(config, SimpleNamespace())
+
+    assert output_path.is_file()

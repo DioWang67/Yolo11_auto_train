@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -25,15 +26,51 @@ def test_gui_workflow_presets_use_real_task_keys():
         "artifact_bundle",
     ]
     assert workflow_tasks("YOLO: train and deploy") == [
+        "yolo_augmentation",
+        "dataset_lint",
         "dataset_splitter",
         "yolo_train",
+        "position_validation",
         "yolo_evaluation",
+        "generate_report",
+        "batch_inference",
+        "qc_summary",
         "deploy",
     ]
     assert workflow_tasks("Anomalib: train and package") == [
         "anomalib_train",
         "anomalib_package",
     ]
+
+
+def test_disk_operator_preset_matches_canonical_train_and_deploy_workflow():
+    preset_path = Path(__file__).resolve().parents[1] / "configs" / "gui_presets.yaml"
+    payload = yaml.safe_load(preset_path.read_text(encoding="utf-8"))
+
+    assert payload["presets"]["YOLO: train and deploy"] == workflow_tasks(
+        "YOLO: train and deploy"
+    )
+
+
+def test_external_operator_workflow_uses_canonical_tasks(qtbot, tmp_path, monkeypatch):
+    from picture_tool.gui.task_control_panel import TaskControlPanel
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "gui_presets.yaml").write_text(
+        yaml.safe_dump(
+            {"presets": {"YOLO: train and deploy": ["dataset_splitter", "yolo_train"]}}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    panel = TaskControlPanel()
+    qtbot.addWidget(panel)
+
+    assert panel.apply_workflow("YOLO: train and deploy") is True
+    assert set(panel.get_selected_tasks()) == set(
+        workflow_tasks("YOLO: train and deploy")
+    )
 
 
 def test_ordered_task_keys_keeps_stable_gui_order():

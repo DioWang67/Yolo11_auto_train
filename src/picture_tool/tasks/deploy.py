@@ -358,7 +358,7 @@ def run_deploy(config: dict, args: Any) -> None:
     try:
         det_cfg_data = yaml.safe_load(det_cfg_path.read_text(encoding="utf-8")) or {}
         det_cfg_data = rewrite_detection_config(det_cfg_data, product, area)
-    except Exception as exc:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError, ValueError, TypeError, KeyError) as exc:
         logger.error("Failed to read detection config: %s", exc)
         raise
 
@@ -376,22 +376,34 @@ def run_deploy(config: dict, args: Any) -> None:
             "Deployment requires the PT checkpoint paired with the runtime "
             f"artifact: {training_weight_source}"
         )
+    dest_dir = inference_models_dir / product / area / "yolo"
+    weights_dest = dest_dir / "weights"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    weights_dest.mkdir(exist_ok=True)
+
     color_cfg_name = Path(det_cfg_data.get("color_model_path", "")).name
     if det_cfg_data.get("enable_color_check") and not color_cfg_name:
         raise FileNotFoundError(
             "enable_color_check is true but color_model_path is not configured."
         )
     color_source = find_color_model_source(run_dir, color_cfg_name)
+    color_source_kind = "training_run"
+    if (
+        color_source is None
+        and color_cfg_name
+        and dcfg.get("preserve_station_settings", True)
+    ):
+        station_color = (dest_dir / color_cfg_name).resolve()
+        if station_color.parent != dest_dir.resolve():
+            raise ValueError("Resolved station color model path is unsafe.")
+        if station_color.is_file():
+            color_source = station_color
+            color_source_kind = "existing_station"
     if det_cfg_data.get("enable_color_check") and color_source is None:
         raise FileNotFoundError(
             "enable_color_check is true but no color model/stat file was found "
             f"for {color_cfg_name}."
         )
-
-    dest_dir = inference_models_dir / product / area / "yolo"
-    weights_dest = dest_dir / "weights"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    weights_dest.mkdir(exist_ok=True)
 
     lock_dir = _acquire_deploy_lock(dest_dir, float(dcfg.get("lock_timeout", 30.0)))
     try:
@@ -462,11 +474,21 @@ def run_deploy(config: dict, args: Any) -> None:
             shutil.copytree(src_dir, dest_export_dir)
             logger.info("Copied exported runtime directory %s.", src_dir.name)
 
+        color_model_sha256: str | None = None
         if color_source and color_cfg_name:
-            _atomic_copy_verified(color_source, dest_dir / color_cfg_name)
-            logger.info(
-                "Copied colour model from %s to %s.", color_source, color_cfg_name
-            )
+            color_destination = (dest_dir / color_cfg_name).resolve()
+            if color_source.resolve() == color_destination:
+                color_model_sha256 = _sha256_file(color_destination)
+                logger.info("Preserved station colour model %s.", color_cfg_name)
+            else:
+                color_model_sha256 = _atomic_copy_verified(
+                    color_source, color_destination
+                )
+                logger.info(
+                    "Copied colour model from %s to %s.",
+                    color_source,
+                    color_cfg_name,
+                )
 
         deploy_config = dict(det_cfg_data)
         deploy_config["weights"] = (
@@ -513,6 +535,9 @@ def run_deploy(config: dict, args: Any) -> None:
             "evaluation_metrics": evaluation_gate.get("metrics", {}),
             "evaluation_gate_passed": evaluation_gate.get("passed"),
             "config_snapshot": config_snapshot_relative,
+            "color_model_file": color_cfg_name or None,
+            "color_model_sha256": color_model_sha256,
+            "color_model_source": color_source_kind if color_model_sha256 else None,
         }
         # Each deployed weight keeps immutable metadata and the matching runtime
         # config. This makes later rollback deterministic instead of guessing
