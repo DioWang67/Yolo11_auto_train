@@ -25,6 +25,10 @@ from picture_tool.tasks.quality_schemas import ColorInspectionConfig, ColorVerif
 from pydantic import ValidationError
 
 
+class OperatorAugmentationMissingError(RuntimeError):
+    """An operator job requested processed inputs that were never produced."""
+
+
 def _raw_input_fallback(path: Path) -> Path | None:
     """Return the matching raw input directory for a processed input path."""
     if path.name not in {"images", "labels"}:
@@ -60,6 +64,16 @@ def resolve_split_input_dirs(config: dict) -> tuple[Path, Path, bool]:
         and raw_image_dir.exists()
         and raw_label_dir.exists()
     ):
+        handoff = config.get("operator_handoff", {}) or {}
+        requires_processed = bool(handoff.get("enabled")) and str(
+            handoff.get("split_source_stage") or ""
+        ).strip().lower() == "processed"
+        if requires_processed:
+            raise OperatorAugmentationMissingError(
+                "Operator retraining requires processed augmentation outputs, "
+                f"but they are missing: {image_dir} / {label_dir}. "
+                "The raw-data fallback is forbidden for an operator job."
+            )
         return raw_image_dir, raw_label_dir, True
 
     return image_dir, label_dir, False
@@ -182,7 +196,14 @@ def skip_batch_infer(config, args):
 
 def run_qc_summary(config, args):
     """Aggregate QC outputs into one concise summary report."""
-    generate_qc_summary(config, logger=logging.getLogger(__name__))
+    summary_cfg = config.get("qc_summary", {}) or {}
+    output_value = str(summary_cfg.get("output_path") or "").strip()
+    output_path = Path(output_value) if output_value else None
+    generate_qc_summary(
+        config,
+        output_path=output_path,
+        logger=logging.getLogger(__name__),
+    )
 
 
 def _section_enabled(section) -> bool:

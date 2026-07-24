@@ -217,6 +217,72 @@ class TestTasksFunctionality:
         ).exists()
         assert (deployed_dir / deployment_manifest["config_snapshot"]).exists()
 
+    def test_deploy_preserves_existing_station_color_stats(self, tmp_path):
+        """YOLO-only retraining must retain its station-owned color artifact."""
+        import yaml
+
+        from picture_tool.tasks.deploy import run_deploy
+
+        run_dir = tmp_path / "runs" / "train"
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        (weights_dir / "best.pt").write_bytes(b"pt")
+        (weights_dir / "best.onnx").write_bytes(b"onnx")
+        _write_runtime_export_contract(run_dir)
+        (run_dir / "detection_config.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "weights": "best.onnx",
+                    "enable_color_check": True,
+                    "color_model_path": "color_stats.json",
+                }
+            ),
+            encoding="utf-8",
+        )
+        inference_models_dir = tmp_path / "models"
+        station = inference_models_dir / "Cable1" / "A" / "yolo"
+        station.mkdir(parents=True)
+        color_bytes = b'{"Orange": {"mean": [1, 2, 3]}}'
+        (station / "color_stats.json").write_bytes(color_bytes)
+        (station / "config.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "weights": "old.onnx",
+                    "enable_color_check": True,
+                    "color_model_path": (
+                        "models/Cable1/A/yolo/color_stats.json"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = {
+            "yolo_training": {
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+                "deploy": {
+                    "enabled": True,
+                    "product": "Cable1",
+                    "area": "A",
+                    "inference_models_dir": str(inference_models_dir),
+                    "version": "1.0.0",
+                    "preserve_station_settings": True,
+                },
+            }
+        }
+
+        run_deploy(config, SimpleNamespace())
+
+        assert (station / "color_stats.json").read_bytes() == color_bytes
+        manifest = yaml.safe_load(
+            (station / "deployment_manifest.yaml").read_text(encoding="utf-8")
+        )
+        assert manifest["color_model_file"] == "color_stats.json"
+        assert manifest["color_model_source"] == "existing_station"
+        assert manifest["color_model_sha256"] == hashlib.sha256(
+            color_bytes
+        ).hexdigest()
+
     def test_artifact_bundle_matches_inference_models_layout(self, tmp_path):
         """Bundle should unzip directly under yolo11_inference/models."""
         import yaml
