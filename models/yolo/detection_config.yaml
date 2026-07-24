@@ -1,4 +1,4 @@
-weights: D:\Git\robotlearning\Yolo11_auto_train\runs\detect\train12\weights\best.pt
+weights: runs/detect/train12/weights/best.pt
 device: cpu
 conf_thres: 0.4
 iou_thres: 0.45

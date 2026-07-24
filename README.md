@@ -187,6 +187,13 @@ picture-tool-color-verify \
 picture-tool-pipeline --config configs/Cable1.yaml --tasks deploy
 ```
 
+外部／遠端訓練的 ONNX 不可單獨複製進產線。請連同來源 PT 與 export contract 執行成對驗證部署：
+
+```bash
+picture-tool-runtime-pair --weights best.onnx --training-weights best.pt \
+  --contract runtime_export_manifest.json --product Cable1 --area A --deploy
+```
+
 完整的訓練→推論整合流程請參考 **[docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)**。
 
 ## 測試與建置

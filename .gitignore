@@ -19,6 +19,7 @@ env/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.coverage
 
 # Project artefacts
 logs/
@@ -34,7 +35,9 @@ augmentation_fixed.log
 *.tmp
 *.bak
 *.pt
+*.onnx
 *.caches
+data_migration_backups/
 
 # Editors / OS
 .vscode/
