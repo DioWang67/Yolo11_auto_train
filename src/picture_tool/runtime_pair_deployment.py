@@ -550,7 +550,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--inference-models-dir",
         type=Path,
-        default=_default_inference_models_dir(),
+        help="deployment directory; defaults to the discovered inference workspace",
     )
     parser.add_argument("--imgsz", type=int, default=_DEFAULT_INPUT_SIZE)
     parser.add_argument(
@@ -584,9 +584,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.deploy:
             print("Validation only; production files were not changed.")
             return 0
+        inference_models_dir = (
+            args.inference_models_dir
+            if args.inference_models_dir is not None
+            else _default_inference_models_dir()
+        )
         deployment = deploy_runtime_pair(
             verification,
-            inference_models_dir=args.inference_models_dir,
+            inference_models_dir=inference_models_dir,
             product=args.product,
             area=args.area,
             export_contract=contract,
