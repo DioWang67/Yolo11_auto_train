@@ -114,13 +114,17 @@ def select_runtime_weight(run_dir: Path, configured_weight: str | None) -> Path:
         configured_weight: Weight name referenced by ``detection_config.yaml``.
 
     Returns:
-        Existing weight path, preferring the configured file and then ONNX.
+        Existing weight path, preferring the contracted runtime export, then
+        the configured file and ONNX.
 
     Raises:
         FileNotFoundError: If no supported runtime weight exists.
     """
     weights_dir = run_dir / "weights"
     candidate_names: list[str] = []
+    contracted_runtime = _contracted_runtime_name(run_dir)
+    if contracted_runtime:
+        candidate_names.append(contracted_runtime)
     if configured_weight:
         candidate_names.append(Path(configured_weight).name)
     candidate_names.extend(["best.onnx", "best.pt", "last.pt"])
@@ -138,6 +142,29 @@ def select_runtime_weight(run_dir: Path, configured_weight: str | None) -> Path:
         f"No supported runtime weight found in {weights_dir} "
         "(expected configured weight, best.onnx, best.pt, or last.pt)."
     )
+
+
+def _contracted_runtime_name(run_dir: Path) -> str | None:
+    """Return a safe runtime filename from the export-lineage contract."""
+    contract_path = run_dir / "runtime_export_manifest.json"
+    if not contract_path.is_file():
+        return None
+    try:
+        import json
+
+        payload = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        return None
+    runtime_value = str(payload.get("runtime_file") or "").strip()
+    if not runtime_value:
+        return None
+    runtime_path = (run_dir / runtime_value).resolve()
+    weights_dir = (run_dir / "weights").resolve()
+    if runtime_path.parent != weights_dir or not runtime_path.is_file():
+        return None
+    return runtime_path.name
 
 
 def find_color_model_source(run_dir: Path, color_model_name: str) -> Path | None:

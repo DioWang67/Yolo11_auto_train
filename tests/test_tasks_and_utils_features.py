@@ -128,10 +128,13 @@ class TestTasksFunctionality:
         if result:
             assert "skip" in result.lower()
 
-    def test_deploy_uses_onnx_when_detection_config_selects_onnx(self, tmp_path):
+    def test_deploy_uses_onnx_when_detection_config_selects_onnx(
+        self, tmp_path, monkeypatch
+    ):
         """Deploy should point config.yaml at versioned ONNX when selected."""
         import yaml
 
+        import picture_tool.tasks.deploy as deploy_module
         from picture_tool.tasks.deploy import run_deploy
 
         run_dir = tmp_path / "runs" / "train"
@@ -177,10 +180,25 @@ class TestTasksFunctionality:
                     "area": "A",
                     "inference_models_dir": str(inference_models_dir),
                     "version": "1.0.0",
+                    "runtime_pair_verification": {"enabled": True},
                 },
             }
         }
 
+        comparison = SimpleNamespace(
+            runtime_shape=(1, 9, 8400),
+            training_shape=(1, 9, 8400),
+            max_abs_error=0.0001,
+            mean_abs_error=0.00001,
+            p99_abs_error=0.00005,
+        )
+        verification_calls = []
+
+        def verify(runtime, training, **kwargs):
+            verification_calls.append((runtime, training, kwargs))
+            return SimpleNamespace(input_size=640, comparison=comparison)
+
+        monkeypatch.setattr(deploy_module, "verify_runtime_pair", verify)
         run_deploy(config, SimpleNamespace())
 
         deployed_dir = inference_models_dir / "PCBA1" / "A" / "yolo"
@@ -201,6 +219,12 @@ class TestTasksFunctionality:
         )
         assert len(deployment_manifest["weight_sha256"]) == 64
         assert deployment_manifest["schema_version"] == 2
+        assert deployment_manifest["runtime_pair_verified"] is True
+        assert (
+            deployment_manifest["runtime_pair_verification"]["max_abs_error"]
+            == pytest.approx(0.0001)
+        )
+        assert len(verification_calls) == 1
         paired_training = (
             deployed_dir / "weights" / deployment_manifest["training_weight_file"]
         )
@@ -216,6 +240,33 @@ class TestTasksFunctionality:
             f"{versioned_weight.name}.manifest.yaml"
         ).exists()
         assert (deployed_dir / deployment_manifest["config_snapshot"]).exists()
+
+    def test_runtime_contract_overrides_legacy_pt_detection_config(self, tmp_path):
+        """A valid export contract must prevent silent PT deployment fallback."""
+        from picture_tool.tasks.bundle import select_runtime_weight
+
+        run_dir = tmp_path / "run"
+        weights = run_dir / "weights"
+        weights.mkdir(parents=True)
+        (weights / "best.pt").write_bytes(b"pt")
+        (weights / "best.onnx").write_bytes(b"onnx")
+        _write_runtime_export_contract(run_dir)
+
+        selected = select_runtime_weight(run_dir, "best.pt")
+
+        assert selected.name == "best.onnx"
+
+    def test_auto_version_advances_across_runtime_format_change(self, tmp_path):
+        """Changing PT to ONNX must keep one monotonic station version."""
+        from picture_tool.tasks.deploy import _resolve_version
+
+        weights = tmp_path / "weights"
+        weights.mkdir()
+        (weights / "Cable1_A_v1.0.4_20260722.pt").write_bytes(b"pt")
+
+        version = _resolve_version("auto", weights, "Cable1", "A", ".onnx")
+
+        assert version == (1, 0, 5)
 
     def test_deploy_preserves_existing_station_color_stats(self, tmp_path):
         """YOLO-only retraining must retain its station-owned color artifact."""

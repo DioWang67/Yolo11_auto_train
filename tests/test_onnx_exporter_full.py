@@ -36,6 +36,36 @@ def test_export_contract_records_exact_runtime_training_lineage(tmp_path) -> Non
     assert len(payload["training_weight_sha256"]) == 64
 
 
+def test_ensure_reuses_current_export_contract(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "run"
+    weights = run_dir / "weights"
+    weights.mkdir(parents=True)
+    training_weight = weights / "best.pt"
+    runtime = weights / "best.onnx"
+    training_weight.write_bytes(b"training")
+    runtime.write_bytes(b"runtime")
+    _write_export_contract(
+        run_dir,
+        runtime_path=runtime,
+        training_weight_path=training_weight,
+        runtime_format="onnx",
+    )
+    config = {
+        "yolo_training": {
+            "export_onnx": {"enabled": True, "weights_name": "best.pt"}
+        }
+    }
+    monkeypatch.setattr(
+        OnnxExporter,
+        "export",
+        staticmethod(lambda *_args, **_kwargs: pytest.fail("unexpected re-export")),
+    )
+
+    selected = OnnxExporter.ensure(config, run_dir, logging.getLogger("test"))
+
+    assert selected == runtime.resolve()
+
+
 class TestOnnxExporterExport:
     """Test OnnxExporter.export method."""
 
