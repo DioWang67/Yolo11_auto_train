@@ -52,6 +52,7 @@ jobs:
       - name: Run tests with coverage
         env:
           PYTHONPATH: src
+          QT_QPA_PLATFORM: offscreen
         run: |
           mkdir -p reports
           python -m pytest --ignore=src/picture_tool/libs/labelImg --cov=picture_tool --cov-report=xml --cov-report=term --junitxml=reports/junit.xml --timeout=60
