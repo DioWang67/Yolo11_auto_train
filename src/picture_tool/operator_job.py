@@ -303,7 +303,11 @@ def _process_identity(pid: int) -> str:
             import ctypes
 
             process_query_limited_information = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(
+            windll = getattr(ctypes, "windll", None)
+            if windll is None:
+                return ""
+            kernel32 = windll.kernel32
+            handle = kernel32.OpenProcess(
                 process_query_limited_information,
                 False,
                 pid,
@@ -315,7 +319,7 @@ def _process_identity(pid: int) -> str:
                 exit_time = ctypes.c_ulonglong()
                 kernel = ctypes.c_ulonglong()
                 user = ctypes.c_ulonglong()
-                if not ctypes.windll.kernel32.GetProcessTimes(
+                if not kernel32.GetProcessTimes(
                     handle,
                     ctypes.byref(creation),
                     ctypes.byref(exit_time),
@@ -325,7 +329,7 @@ def _process_identity(pid: int) -> str:
                     return ""
                 return f"windows-filetime:{creation.value}"
             finally:
-                ctypes.windll.kernel32.CloseHandle(handle)
+                kernel32.CloseHandle(handle)
         except (AttributeError, OSError, ValueError):
             return ""
     try:

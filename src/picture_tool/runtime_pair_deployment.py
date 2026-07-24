@@ -357,7 +357,10 @@ def _compare_yolo_outputs(
     input_tensor = rng.random(
         (1, 3, input_size, input_size), dtype=np.float32
     )
-    model = YOLO(str(training_weight_path)).model.float().eval()
+    training_model: Any = YOLO(str(training_weight_path)).model
+    if training_model is None or not hasattr(training_model, "float"):
+        raise RuntimePairError("PT checkpoint did not expose a runnable model.")
+    model = training_model.float().eval()
     with torch.inference_mode():
         training_output = model(torch.from_numpy(input_tensor))
     if isinstance(training_output, (tuple, list)):

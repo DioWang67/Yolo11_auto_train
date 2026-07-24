@@ -31,7 +31,10 @@ def _apply_background_resource_policy() -> None:
         import ctypes
 
         below_normal_priority_class = 0x00004000
-        kernel32 = ctypes.windll.kernel32
+        windll = getattr(ctypes, "windll", None)
+        if windll is None:
+            raise OSError("ctypes.windll is unavailable")
+        kernel32 = windll.kernel32
         process = kernel32.GetCurrentProcess()
         if not kernel32.SetPriorityClass(process, below_normal_priority_class):
             raise OSError("SetPriorityClass returned false")
