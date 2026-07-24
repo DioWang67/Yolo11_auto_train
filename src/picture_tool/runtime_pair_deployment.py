@@ -463,7 +463,13 @@ def _next_version(weights_dir: Path, product: str, area: str) -> tuple[int, int,
     for candidate in weights_dir.glob(f"{prefix}*.onnx"):
         match = _VERSION_RE.search(candidate.name)
         if match:
-            versions.append(tuple(int(match.group(index)) for index in range(1, 4)))
+            versions.append(
+                (
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    int(match.group(3)),
+                )
+            )
     if not versions:
         return (1, 0, 0)
     major, minor, patch = max(versions)

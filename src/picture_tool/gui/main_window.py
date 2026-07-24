@@ -269,7 +269,9 @@ class MainWindow(QMainWindow):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll_area.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOff  # type: ignore[attr-defined]
+        )
         scroll_area.setObjectName("SideBarScroll")
 
         scroll_content = QWidget()
@@ -364,9 +366,13 @@ class MainWindow(QMainWindow):
             self.config_editor.tabs,
             self.color_panel.tabs,
         ):
-            tab_widget.setElideMode(QtCore.Qt.ElideNone)
-            tab_widget.tabBar().setExpanding(False)
-            tab_widget.tabBar().setUsesScrollButtons(True)
+            tab_widget.setElideMode(
+                QtCore.Qt.ElideNone  # type: ignore[attr-defined]
+            )
+            tab_bar = tab_widget.tabBar()
+            if tab_bar is not None:
+                tab_bar.setExpanding(False)
+                tab_bar.setUsesScrollButtons(True)
 
         self._rebuild_status_items()
 
@@ -397,7 +403,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setMinimumHeight(45)
         self.start_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.start_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.start_btn.clicked.connect(self.start_pipeline)
+        self.start_btn.clicked.connect(self._start_pipeline_from_ui)
 
         self.stop_btn = QPushButton("⏹ STOP")
         self.stop_btn.setObjectName("DangerBtn")
@@ -481,6 +487,14 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.config_text.setPlainText(f"Error displaying config: {e}")
 
+    def _start_pipeline_from_ui(self) -> None:
+        """Adapt the boolean command result to Qt's void signal contract."""
+        self.start_pipeline()
+
+    def _close_window(self) -> None:
+        """Adapt QMainWindow.close() to Qt timer's void callback contract."""
+        self.close()
+
     def start_pipeline(self) -> bool:
         """Start the pipeline with selected tasks"""
         # Collect selected tasks
@@ -522,7 +536,7 @@ class MainWindow(QMainWindow):
                     "未填寫產品名稱",
                     "偵測到設定檔包含路徑佔位符 (project)，請先於左側「Product」欄位輸入產品名稱 (如 Cable1) 以進行自動路徑對齊。",
                 )
-                return
+                return False
 
         # ── Preflight checks ──────────────────────────────────────────
         try:
@@ -823,7 +837,9 @@ class MainWindow(QMainWindow):
         self.status_list.setVisible(False)
         self.log_controls_container.setVisible(False)
         self.log_viewer.tabs.setVisible(pending)
-        self.log_viewer.tabs.tabBar().setVisible(False)
+        tab_bar = self.log_viewer.tabs.tabBar()
+        if tab_bar is not None:
+            tab_bar.setVisible(False)
         if pending:
             annotation_index = self.log_viewer.tabs.indexOf(self.annotation_panel)
             for index in range(self.log_viewer.tabs.count()):
@@ -1085,7 +1101,7 @@ class MainWindow(QMainWindow):
                     )
             if self._close_when_pipeline_stops:
                 self._close_when_pipeline_stops = False
-                QtCore.QTimer.singleShot(0, self.close)
+                QtCore.QTimer.singleShot(0, self._close_window)
 
     def on_pipeline_error(self, message: str):
         """Handle pipeline error."""
@@ -1128,7 +1144,7 @@ class MainWindow(QMainWindow):
                 )
             if self._close_when_pipeline_stops:
                 self._close_when_pipeline_stops = False
-                QtCore.QTimer.singleShot(0, self.close)
+                QtCore.QTimer.singleShot(0, self._close_window)
 
     def on_task_started(self, task_name: str):
         """Handle task start."""

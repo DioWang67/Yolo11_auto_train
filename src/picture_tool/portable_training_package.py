@@ -269,8 +269,8 @@ def _validate_archive(
             raise PortableTrainingImportError(f"Invalid SHA-256 contract: {relative}")
         if type(size) is not int or size < 0:
             raise PortableTrainingImportError(f"Invalid file size contract: {relative}")
-        member = members.get(relative)
-        if member is None or member.file_size != size:
+        inventory_member = members.get(relative)
+        if inventory_member is None or inventory_member.file_size != size:
             raise PortableTrainingImportError(f"File size mismatch: {relative}")
         inventory[relative] = {"sha256": digest, "size": size}
     allowed_untracked = {PACKAGE_METADATA_NAME}

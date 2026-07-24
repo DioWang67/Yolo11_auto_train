@@ -406,6 +406,10 @@ def promote_completed_pending(
                     f"Unsupported annotation state for {image_path.name}: "
                     f"{inspection.status}"
                 )
+            if label_path is None:
+                raise PendingAnnotationError(
+                    f"Completed annotation has no label path: {image_path.name}"
+                )
             label_text = inspection.label_text
 
             image_sha256 = str(row.get("image_sha256") or "") or _sha256_file(

@@ -9,7 +9,7 @@ from .pipeline_manager import PipelineManager
 from .task_thread import WorkerThread
 
 __all__ = [
-    "PictureToolGUI",
+    "MainWindow",
     "PipelineManager",
     "WorkerThread",
     "main",
@@ -17,7 +17,11 @@ __all__ = [
 
 
 def __getattr__(name):
-    if name in {"PictureToolGUI", "main"}:
+    if name == "MainWindow":
+        from .main_window import MainWindow
+
+        return MainWindow
+    if name == "main":
         from . import app  # local import to avoid eager execution
 
         return getattr(app, name)

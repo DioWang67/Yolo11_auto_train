@@ -247,7 +247,6 @@ class TestClusterMultiInstance:
         ]
         counts = [2, 2]
         result = _cluster_multi_instance(boxes, counts, self._logger(), "X")
-        keys = list(result.keys())
         # X#0 should be the left cluster (cx ≈ 15)
         assert result["X#0"]["cx"] < result["X#1"]["cx"]
 

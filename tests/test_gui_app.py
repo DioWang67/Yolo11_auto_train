@@ -12,8 +12,8 @@ if (
         allow_module_level=True,
     )
 
-from picture_tool.gui import pipeline_controller
-from picture_tool.gui.app import PictureToolGUI
+from picture_tool.gui.main_window import MainWindow
+from picture_tool.gui.pipeline_manager import PipelineManager
 
 
 @pytest.fixture()
@@ -22,12 +22,12 @@ def gui(qtbot, tmp_path, monkeypatch):
     config_path.write_text("pipeline: {}\n", encoding="utf-8")
 
     monkeypatch.setattr(
-        pipeline_controller.PipelineControllerMixin,
-        "_default_config_path",
+        PipelineManager,
+        "default_config_path",
         lambda self: config_path,
     )
 
-    widget = PictureToolGUI()
+    widget = MainWindow()
     qtbot.addWidget(widget)
     yield widget
     widget.close()

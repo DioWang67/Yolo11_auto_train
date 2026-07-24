@@ -273,12 +273,15 @@ class PipelineManager(QObject):
             self.status_message.emit("Pipeline is not running.", "info")
             return
 
-        if not self.worker_thread.wait(timeout_ms):
+        worker_thread = self.worker_thread
+        if worker_thread is None:
+            return
+        if not worker_thread.wait(timeout_ms):
             self._logger.warning(
                 "Worker thread did not finish within %d ms — terminating", timeout_ms
             )
-            self.worker_thread.terminate()
-            self.worker_thread.wait(2000)
+            worker_thread.terminate()
+            worker_thread.wait(2000)
             self.error_occurred.emit("Pipeline forcefully terminated (timeout)")
 
     def request_pipeline_stop(self) -> bool:

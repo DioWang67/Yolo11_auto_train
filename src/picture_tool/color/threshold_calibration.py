@@ -190,13 +190,13 @@ def apply_recommendations(
 
         timestamp = datetime.now(timezone.utc)
         backup_paths: dict[Path, Path] = {}
-        for config_path, original in originals.items():
+        for config_path, original_bytes in originals.items():
             backup_dir = config_path.parent / "color_threshold_backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
             backup_path = backup_dir / (
                 f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}_config.yaml"
             )
-            _write_bytes_atomic(backup_path, original)
+            _write_bytes_atomic(backup_path, original_bytes)
             backup_paths[config_path] = backup_path
 
         receipt = {
@@ -218,7 +218,7 @@ def apply_recommendations(
             config_path.parent / "color_threshold_history.json"
             for config_path in locks
         ]
-        history_originals = {
+        history_originals: dict[Path, bytes | None] = {
             path: path.read_bytes() if path.is_file() else None
             for path in history_paths
         }
@@ -235,11 +235,11 @@ def apply_recommendations(
             for config_path in reversed(replaced):
                 _write_bytes_atomic(config_path, originals[config_path])
             for history_path in reversed(written_histories):
-                original = history_originals[history_path]
-                if original is None:
+                history_bytes = history_originals[history_path]
+                if history_bytes is None:
                     history_path.unlink(missing_ok=True)
                 else:
-                    _write_bytes_atomic(history_path, original)
+                    _write_bytes_atomic(history_path, history_bytes)
             raise
     return receipt
 
@@ -495,7 +495,10 @@ def _effective_config_threshold(
         for raw_key, raw_value in overrides.items():
             if str(raw_key).lower() == key:
                 return float(raw_value)
-    return float(config.get("color_score_threshold"))
+    raw_threshold = config.get("color_score_threshold")
+    if raw_threshold is None:
+        raise ValueError("color_score_threshold is required")
+    return float(raw_threshold)
 
 
 def _set_config_threshold(
@@ -573,7 +576,7 @@ def _write_yaml_atomic(path: Path, payload: dict[str, Any]) -> None:
     _write_bytes_atomic(path, data)
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+def _write_json_atomic(path: Path, payload: Any) -> None:
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode()
     _write_bytes_atomic(path, data)
 

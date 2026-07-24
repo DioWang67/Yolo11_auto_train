@@ -1,9 +1,6 @@
 """Tests for picture_tool.config_loader module."""
 
 import logging
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import yaml
 

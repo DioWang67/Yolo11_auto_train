@@ -402,8 +402,10 @@ def validate_detections_against_area(
         if len(expected_entries) == 1 and not any("#" in k for k, _ in expected_entries):
             # Single-instance path: keep backward-compatible behavior
             key, ebox = expected_entries[0]
-            det = _select_best_detection(candidates, base_class) if candidates else None
-            if det is None:
+            selected_det = (
+                _select_best_detection(candidates, base_class) if candidates else None
+            )
+            if selected_det is None:
                 missing.append(key)
                 results.append({
                     "class": key, "status": "MISSING",
@@ -412,12 +414,12 @@ def validate_detections_against_area(
                 continue
             entry = {
                 "class": key,
-                "class_id": det.get("class_id"),
-                "confidence": det.get("confidence"),
-                "bbox": det.get("bbox"),
-                "cx": det.get("cx"), "cy": det.get("cy"),
+                "class_id": selected_det.get("class_id"),
+                "confidence": selected_det.get("confidence"),
+                "bbox": selected_det.get("bbox"),
+                "cx": selected_det.get("cx"), "cy": selected_det.get("cy"),
             }
-            cx, cy = det.get("cx"), det.get("cy")
+            cx, cy = selected_det.get("cx"), selected_det.get("cy")
             if cx is None or cy is None:
                 entry["status"] = "UNKNOWN"
                 unknown.append(key)

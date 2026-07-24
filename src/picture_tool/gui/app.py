@@ -7,6 +7,7 @@ import os
 import sys
 import zipfile
 from pathlib import Path
+from typing import Any
 from PyQt5 import QtGui
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
@@ -14,7 +15,7 @@ from PyQt5.QtWidgets import QApplication
 
 # Test/integration injection point. Production keeps this ``None`` so the real
 # window remains lazily imported after background resource limits are applied.
-MainWindow = None
+MainWindow: type[Any] | None = None
 
 
 def _apply_background_resource_policy() -> None:
@@ -54,7 +55,9 @@ def main() -> None:
     # Import after applying thread limits so numerical libraries inherit them.
     window_class = MainWindow
     if window_class is None:
-        from picture_tool.gui.main_window import MainWindow as window_class
+        from picture_tool.gui.main_window import MainWindow as RealMainWindow
+
+        window_class = RealMainWindow
     if sum(bool(value) for value in (args.handoff, args.resume_latest, args.import_package)) > 1:
         parser.error(
             "--handoff, --resume-latest, and --import-package are mutually exclusive"

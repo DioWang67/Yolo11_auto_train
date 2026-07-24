@@ -13,6 +13,7 @@ import yaml
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from picture_tool import main_pipeline as pipeline
+from picture_tool.config_loader import load_config
 from picture_tool.exceptions import ConfigurationError, PipelineError
 
 
@@ -149,10 +150,10 @@ class WorkerThread(QThread):
             return self.config
         if self.config_path:
             try:
-                return pipeline.load_config(self.config_path)
+                return load_config(self.config_path)
             except (ConfigurationError, OSError, yaml.YAMLError):
                 pass
-        return pipeline.load_config()
+        return load_config()
 
     def _build_args(self) -> SimpleNamespace:
         return SimpleNamespace(

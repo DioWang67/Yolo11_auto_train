@@ -905,7 +905,9 @@ def _optional_folder_path(root: Path, value: object) -> Path | None:
 def _optional_int(value: object) -> int | None:
     if value in (None, ""):
         return None
-    return int(value)
+    if isinstance(value, (str, bytes, bytearray, int, float)):
+        return int(value)
+    raise ValueError(f"Expected an integer-compatible value, got {type(value).__name__}")
 
 
 def _normalize_model_name(value: str) -> str:
@@ -1071,7 +1073,7 @@ def _anomalib_symlink_patch(enabled: bool) -> Iterator[None]:
 
     original = engine_module.create_versioned_dir
 
-    def _create_latest_dir(root_dir: Path) -> Path:
+    def _create_latest_dir(root_dir: str | Path) -> Path:
         latest_dir = Path(root_dir) / "latest"
         latest_dir.mkdir(parents=True, exist_ok=True)
         return latest_dir
