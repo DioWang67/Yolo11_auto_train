@@ -21,6 +21,7 @@ import yaml
 
 from picture_tool.pipeline.core import Task
 from picture_tool.pipeline.utils import detect_existing_weights
+from picture_tool.runtime_pair_deployment import PairVerification, verify_runtime_pair
 from picture_tool.tasks.bundle import (
     find_color_model_source,
     rewrite_detection_config,
@@ -28,6 +29,7 @@ from picture_tool.tasks.bundle import (
     validate_deployment_target,
 )
 from picture_tool.tasks.deployment_target import resolve_yolo_deployment_target
+from picture_tool.utils.onnx_exporter import OnnxExporter
 
 
 _VERSION_RE = re.compile(r"_v(\d+)\.(\d+)\.(\d+)_")
@@ -102,7 +104,20 @@ def _resolve_version(
 
     existing: list[Tuple[int, int, int]] = []
     if weights_dest.exists():
-        for path in weights_dest.glob(f"{prefix}*{extension}"):
+        # Version identity belongs to the station model, not to a particular
+        # runtime extension. Switching a station from PT to ONNX must advance
+        # from v1.0.4 to v1.0.5 instead of restarting at v1.0.0.
+        for path in weights_dest.glob(f"{prefix}*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {
+                ".pt",
+                ".onnx",
+                ".engine",
+                ".torchscript",
+                extension.lower(),
+            }:
+                continue
             version = _parse_version(path.name)
             if version:
                 existing.append(version)
@@ -298,6 +313,36 @@ def _load_evaluation_gate(run_dir: Path, *, required: bool) -> dict[str, Any]:
     return payload
 
 
+def _verify_deployment_runtime_pair(
+    config: dict[str, Any],
+    runtime_path: Path,
+    training_weight_path: Path,
+) -> PairVerification | None:
+    """Run the deployment-only ONNX/PT equivalence gate when configured."""
+    if runtime_path.suffix.lower() != ".onnx":
+        return None
+    ycfg = config.get("yolo_training", {}) or {}
+    deploy_cfg = ycfg.get("deploy", {}) or {}
+    verification_cfg = deploy_cfg.get("runtime_pair_verification", {}) or {}
+    if not isinstance(verification_cfg, dict) or not verification_cfg.get(
+        "enabled", False
+    ):
+        return None
+
+    configured_size = verification_cfg.get("input_size", ycfg.get("imgsz", 640))
+    if isinstance(configured_size, (list, tuple)):
+        input_size = max(int(value) for value in configured_size)
+    else:
+        input_size = int(configured_size or 640)
+    return verify_runtime_pair(
+        runtime_path,
+        training_weight_path,
+        input_size=input_size,
+        rtol=float(verification_cfg.get("rtol", 1e-3)),
+        atol=float(verification_cfg.get("atol", 1e-3)),
+    )
+
+
 def run_deploy(config: dict, args: Any) -> None:
     """Copy training artifacts to the inference models directory.
 
@@ -341,6 +386,12 @@ def run_deploy(config: dict, args: Any) -> None:
             "or configure yolo_evaluation.weights / yolo_training.position_validation.weights."
         )
 
+    exported_runtime = OnnxExporter.ensure(config, run_dir, logger)
+    if OnnxExporter.is_enabled(config) and exported_runtime is None:
+        raise RuntimeError(
+            "Deployment requires a validated runtime export, but export failed."
+        )
+
     gate_required = bool(
         ((config.get("yolo_evaluation", {}) or {}).get("gate", {}) or {}).get(
             "enabled", False
@@ -375,6 +426,17 @@ def run_deploy(config: dict, args: Any) -> None:
         raise FileNotFoundError(
             "Deployment requires the PT checkpoint paired with the runtime "
             f"artifact: {training_weight_source}"
+        )
+    pair_verification = _verify_deployment_runtime_pair(
+        config,
+        selected_weights_path,
+        training_weight_source,
+    )
+    if pair_verification is not None:
+        logger.info(
+            "ONNX/PT pair verified (max_abs_error=%.6g, mean_abs_error=%.6g).",
+            pair_verification.comparison.max_abs_error,
+            pair_verification.comparison.mean_abs_error,
         )
     dest_dir = inference_models_dir / product / area / "yolo"
     weights_dest = dest_dir / "weights"
@@ -526,6 +588,23 @@ def run_deploy(config: dict, args: Any) -> None:
                 selected_weights_name
                 if selected_extension.lower() == ".pt"
                 else training_weight_source.name
+            ),
+            "runtime_pair_verified": pair_verification is not None,
+            "runtime_pair_verification": (
+                {
+                    "input_size": pair_verification.input_size,
+                    "runtime_shape": list(
+                        pair_verification.comparison.runtime_shape
+                    ),
+                    "training_shape": list(
+                        pair_verification.comparison.training_shape
+                    ),
+                    "max_abs_error": pair_verification.comparison.max_abs_error,
+                    "mean_abs_error": pair_verification.comparison.mean_abs_error,
+                    "p99_abs_error": pair_verification.comparison.p99_abs_error,
+                }
+                if pair_verification is not None
+                else None
             ),
             "deployed_to": str(config_path),
             "product": product,

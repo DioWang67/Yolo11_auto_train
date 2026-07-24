@@ -765,9 +765,21 @@ def apply_handoff_to_config(
             "area": target.area,
             "version": "auto",
             "preserve_station_settings": True,
+            "runtime_pair_verification": {
+                "enabled": True,
+                "rtol": 0.001,
+                "atol": 0.001,
+            },
             "force": False,
         }
     )
+    # Operator retraining always publishes the portable CPU runtime.  These
+    # assignments intentionally override legacy presets that still point the
+    # generated inference config at best.pt.
+    export_onnx_cfg = training_cfg.setdefault("export_onnx", {})
+    export_onnx_cfg.update({"enabled": True, "weights_name": "best.pt"})
+    export_detection_cfg = training_cfg.setdefault("export_detection_config", {})
+    export_detection_cfg.update({"enabled": True, "weights_name": "best.onnx"})
     readiness_cfg = updated.setdefault("dataset_readiness", {})
     configured_split_minimums = readiness_cfg.get("min_images_per_split", {})
     if not isinstance(configured_split_minimums, dict):

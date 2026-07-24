@@ -286,7 +286,7 @@ yolo_training:
   export_detection_config:
     enabled: true
     output_path: null
-    weights_name: best.pt
+    weights_name: best.onnx
     device: null
     conf_thres: 0.4
     iou_thres: 0.45
@@ -369,6 +369,10 @@ yolo_training:
     area: ~                               # null = use yolo_training.position_validation.area
     version: auto                         # "auto" = patch-increment from existing files, or e.g. "1.2.0"
     preserve_station_settings: true       # keep camera calibration/output settings
+    runtime_pair_verification:
+      enabled: true                       # compare ONNX/PT outputs before publishing
+      rtol: 0.001
+      atol: 0.001
     force: false                          # never overwrite an existing semantic version by default
 yolo_evaluation:
   weights: null

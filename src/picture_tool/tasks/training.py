@@ -40,12 +40,14 @@ def run_yolo_train(config, args):
 
     # 2. ONNX Export
     try:
-        exported_runtime = OnnxExporter.export(config, run_dir, logger)
+        exported_runtime = OnnxExporter.ensure(config, run_dir, logger)
         yolo_cfg = config.get("yolo_training", {}) or {}
         runtime_cfg = yolo_cfg.get("export_runtime", {}) or {}
         onnx_cfg = yolo_cfg.get("export_onnx", {}) or {}
         export_required = bool(
-            runtime_cfg.get("enabled", False) or onnx_cfg.get("enabled", False)
+            runtime_cfg.get("enabled", False)
+            or onnx_cfg.get("enabled", False)
+            or OnnxExporter.is_enabled(config)
         )
         if export_required and exported_runtime is None:
             raise RuntimeError(

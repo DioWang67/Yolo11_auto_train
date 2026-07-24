@@ -91,7 +91,15 @@ def test_handoff_prepares_split_train_and_safe_deploy(tmp_path, monkeypatch):
     assert deploy["product"] == "Cable1"
     assert deploy["area"] == "A"
     assert deploy["preserve_station_settings"] is True
+    assert deploy["runtime_pair_verification"]["enabled"] is True
     assert deploy["force"] is False
+    assert prepared["yolo_training"]["export_onnx"] == {
+        "enabled": True,
+        "weights_name": "best.pt",
+    }
+    assert prepared["yolo_training"]["export_detection_config"][
+        "weights_name"
+    ] == "best.onnx"
     assert Path(prepared["yolo_training"]["model"]).name == "best.pt"
     assert prepared["dataset_readiness"]["require_review_manifest"] is True
     assert prepared["dataset_readiness"]["min_instances_per_class"] == 5
