@@ -9,6 +9,7 @@ from picture_tool.gui.operator_handoff import (
     apply_handoff_to_config,
     load_operator_handoff,
     materialize_job_dataset_snapshot,
+    resolve_latest_operator_handoff,
 )
 from picture_tool.path_resolver import resolve_project_paths
 
@@ -100,15 +101,28 @@ def test_handoff_prepares_split_train_and_safe_deploy(tmp_path, monkeypatch):
         "test": 10,
     }
     assert prepared["dataset_readiness"]["min_test_instances_per_class"] == 5
+    assert prepared["qc_summary"]["output_path"].endswith(
+        "runs/project/quality/qc_summary.json"
+    )
     assert prepared["yolo_evaluation"]["split"] == "test"
     assert prepared["yolo_evaluation"]["conf"] == 0.4
+    augmentation = prepared["yolo_augmentation"]
+    assert prepared["operator_handoff"]["source_stage"] == "raw"
+    assert prepared["operator_handoff"]["split_source_stage"] == "processed"
+    assert augmentation["augmentation"]["num_images"] == 20
+    assert augmentation["augmentation"]["include_originals"] is True
+    assert augmentation["processing"]["debug_mode"] is False
+    assert "hue" not in augmentation["augmentation"]["operations"]
     resolved = resolve_project_paths(prepared, "Cable1,A")
     dataset_root = training_root / "data" / "Cable1" / "A"
     assert Path(resolved["train_test_split"]["input"]["image_dir"]) == (
-        dataset_root / "raw" / "images"
+        dataset_root / "processed" / "images"
     )
     assert Path(resolved["train_test_split"]["input"]["label_dir"]) == (
-        dataset_root / "raw" / "labels"
+        dataset_root / "processed" / "labels"
+    )
+    assert Path(resolved["qc_summary"]["output_path"]) == (
+        Path("runs") / "Cable1" / "A" / "quality" / "qc_summary.json"
     )
 
 
@@ -280,6 +294,38 @@ def test_schema3_handoff_rejects_corrupted_class_contract_hash(tmp_path: Path) -
         load_operator_handoff(handoff_path, training_root=training_root)
 
 
+def test_latest_operator_handoff_resolves_immutable_resumable_job(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    operator_root = training_root / "data" / ".operator_handoff"
+    latest_path = operator_root / "latest.json"
+    latest_path.write_text(handoff_path.read_text(encoding="utf-8"), encoding="utf-8")
+    (handoff_path.parent / "status.json").write_text(
+        json.dumps({"state": "queued"}), encoding="utf-8"
+    )
+
+    resolved = resolve_latest_operator_handoff(training_root)
+
+    assert resolved == handoff_path.resolve()
+
+
+def test_latest_operator_handoff_rejects_terminal_job(tmp_path: Path) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    operator_root = training_root / "data" / ".operator_handoff"
+    (operator_root / "latest.json").write_text(
+        handoff_path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (handoff_path.parent / "status.json").write_text(
+        json.dumps({"state": "deployed"}), encoding="utf-8"
+    )
+
+    with pytest.raises(OperatorHandoffError, match="already terminal"):
+        resolve_latest_operator_handoff(training_root)
+
+
 def test_schema3_handoff_counts_only_its_own_pending_samples(tmp_path: Path) -> None:
     training_root = tmp_path / "train"
     handoff_path = _write_schema3_handoff(
@@ -365,11 +411,143 @@ def test_schema3_snapshot_is_immutable_and_used_by_training_config(
     assert prepared["yolo_training"]["freeze"] == 10
     assert prepared["yolo_training"]["mosaic"] == 0.0
     assert prepared["yolo_training"]["fliplr"] == 0.0
+    assert prepared["yolo_training"]["hsv_h"] == 0.0
+    assert prepared["yolo_training"]["scale"] == 0.0
+    assert Path(prepared["yolo_augmentation"]["input"]["image_dir"]).is_relative_to(
+        handoff_path.parent / "dataset"
+    )
+    assert Path(
+        prepared["yolo_augmentation"]["output"]["image_dir"]
+    ).is_relative_to(handoff_path.parent / "dataset")
     assert prepared["train_test_split"]["minimum_source_groups"] == {
         "val": 5,
         "test": 10,
     }
     assert handoff_path.read_bytes() == original_handoff
+
+
+def test_snapshot_preflight_blocks_conflicting_human_labels_and_writes_report(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    dataset = training_root / "data" / "Cable1" / "A"
+    duplicate_image = dataset / "raw" / "images" / "duplicate.jpg"
+    duplicate_label = dataset / "raw" / "labels" / "duplicate.txt"
+    duplicate_image.write_bytes(b"original-image")
+    duplicate_label.write_text("0 0.4 0.5 0.2 0.2\n", encoding="utf-8")
+    manifest = dataset / "metadata" / "review_dataset_manifest.csv"
+    with manifest.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"ready2,{duplicate_image},{duplicate_label},verified_annotation\n"
+        )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    with pytest.raises(OperatorHandoffError, match="No canonical sample was selected"):
+        materialize_job_dataset_snapshot(handoff)
+
+    report_path = handoff_path.parent / "dataset_conflict_report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["safe"] is False
+    assert report["conflicts"][0]["reason"] == "conflicting_human_labels"
+    assert not (handoff_path.parent / "dataset").exists()
+
+
+def test_snapshot_canonicalizes_human_over_ai_without_mutating_source(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    dataset = training_root / "data" / "Cable1" / "A"
+    duplicate_image = dataset / "raw" / "images" / "duplicate.jpg"
+    duplicate_label = dataset / "raw" / "labels" / "duplicate.txt"
+    duplicate_image.write_bytes(b"original-image")
+    duplicate_label.write_text("0 0.4 0.5 0.2 0.2\n", encoding="utf-8")
+    manifest = dataset / "metadata" / "review_dataset_manifest.csv"
+    with manifest.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"ready2,{duplicate_image},{duplicate_label},verified_snapshot\n"
+        )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    snapshot_handoff = materialize_job_dataset_snapshot(handoff)
+
+    snapshot = snapshot_handoff.selected_target.dataset_root
+    assert len(list((snapshot / "raw" / "images").iterdir())) == 1
+    assert len(list((snapshot / "raw" / "labels").iterdir())) == 1
+    assert duplicate_image.is_file()
+    assert duplicate_label.is_file()
+    audit_path = handoff_path.parent / "dataset_deduplication_audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    selection = audit["canonical_selections"][0]
+    assert selection["kept_sample"] == "ready1"
+    assert selection["excluded_sample"] == "ready2"
+    snapshot_manifest = json.loads(
+        (handoff_path.parent / "dataset_snapshot.json").read_text(encoding="utf-8")
+    )
+    assert snapshot_manifest["canonical_selection_count"] == 1
+
+
+def test_schema4_training_options_are_applied_to_augmentation_and_yolo(tmp_path):
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 4
+    payload["training_options"] = {
+        "epochs": 80,
+        "augmentations_per_image": 7,
+        "batch": 4,
+        "imgsz": 960,
+    }
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+    prepared = apply_handoff_to_config(
+        {"yolo_training": {"class_names": ["Black"]}}, handoff
+    )
+
+    assert handoff.training_options.epochs == 80
+    assert prepared["yolo_training"]["epochs"] == 80
+    assert prepared["yolo_training"]["batch"] == 4
+    assert prepared["yolo_training"]["imgsz"] == 960
+    assert prepared["yolo_evaluation"]["imgsz"] == 960
+    assert prepared["yolo_augmentation"]["augmentation"]["num_images"] == 7
+    assert prepared["yolo_augmentation"]["augmentation"]["target_size"] == 960
+
+
+def test_schema4_rejects_missing_or_unsafe_training_options(tmp_path):
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 4
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OperatorHandoffError, match="missing training_options"):
+        load_operator_handoff(handoff_path, training_root=training_root)
+
+    payload["training_options"] = {
+        "epochs": 80,
+        "augmentations_per_image": 99,
+        "batch": 4,
+        "imgsz": 960,
+    }
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(OperatorHandoffError, match="augmentations_per_image"):
+        load_operator_handoff(handoff_path, training_root=training_root)
+
+    payload["training_options"] = {
+        "epochs": 80,
+        "augmentations_per_image": 7,
+        "batch": 4,
+    }
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(OperatorHandoffError, match="missing training option"):
+        load_operator_handoff(handoff_path, training_root=training_root)
+
+    payload["training_options"]["imgsz"] = "960"
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(OperatorHandoffError, match="must be integers"):
+        load_operator_handoff(handoff_path, training_root=training_root)
 
 
 def test_handoff_rejects_confirmation_only_feedback(tmp_path: Path) -> None:

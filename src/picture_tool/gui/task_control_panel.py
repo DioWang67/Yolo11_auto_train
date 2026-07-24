@@ -128,12 +128,23 @@ class TaskControlPanel(QWidget):
         )
 
     def apply_workflow(self, name: str) -> bool:
-        """Select and apply a named workflow for an external OP handoff."""
-        index = self.preset_combo.findText(name)
-        if index < 0:
+        """Select a canonical workflow for an external operator handoff.
+
+        Disk presets remain operator-customizable for manual runs.  An immutable
+        handoff must use the audited in-code workflow, otherwise a stale preset
+        can silently omit augmentation or an evaluation gate.
+        """
+        canonical = WORKFLOW_PRESET_MAP.get(name)
+        if canonical is None:
             return False
-        self.preset_combo.setCurrentIndex(index)
-        self._apply_selected_preset()
+        index = self.preset_combo.findText(name)
+        if index >= 0:
+            self.preset_combo.setCurrentIndex(index)
+        self._set_selected_tasks(canonical.tasks)
+        self.workflow_description_label.setText(canonical.description)
+        self._show_task_feedback(
+            f"Applied canonical operator workflow {name}.",
+        )
         return True
 
     def show_dependency_chain(self, ordered: List[str], auto_added: set[str]) -> None:

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, List
 
 import yaml
+from picture_tool.operator_acceptance import (
+    OperatorAcceptanceError,
+    load_operator_acceptance_summary,
+)
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtWidgets import (
     QHBoxLayout,
@@ -70,6 +75,28 @@ except ImportError:
 
 
 # ------------------------------------------------------------------
+_YOLO_EPOCH_LIFECYCLE_PATTERN = re.compile(
+    r"\[YOLO Lifecycle\]\s+(Starting|Finished) Epoch\s+(\d+)/(\d+)",
+    re.IGNORECASE,
+)
+
+
+def _operator_epoch_status(message: str) -> tuple[str, int] | None:
+    """Translate a YOLO lifecycle log into operator-facing progress."""
+    match = _YOLO_EPOCH_LIFECYCLE_PATTERN.search(message)
+    if match is None:
+        return None
+    phase, epoch_text, total_text = match.groups()
+    epoch = int(epoch_text)
+    total = int(total_text)
+    if total <= 0 or epoch <= 0 or epoch > total:
+        return None
+    completed_epochs = epoch if phase.lower() == "finished" else epoch - 1
+    # Training occupies 40-77% of the full prepare/train/evaluate/deploy flow.
+    overall_progress = 40 + round(37 * completed_epochs / total)
+    return f"模型訓練中：Epoch {epoch}/{total}", overall_progress
+
+
 def _operator_error_message(message: str) -> str:
     """Translate expected safety-gate failures into line-leader guidance."""
     normalized = message.lower()
@@ -83,7 +110,7 @@ def _operator_error_message(message: str) -> str:
         if "deployed_training_pair_missing" in normalized:
             issues.append(
                 "目前產線 ONNX 找不到同版本的 PT 訓練權重，無法保證從現行模型繼續學習。"
-                "請通知工程人員重新部署成對模型檔。"
+                "請通知工程人員執行 ONNX/PT 成對驗證與部署工具；通過後即可補訓。"
             )
         if not issues:
             issues.append("補訓前安全檢查未通過，請通知工程人員查看工作紀錄。")
@@ -118,7 +145,8 @@ def _operator_error_message(message: str) -> str:
     if "deployed_training_pair_missing" in normalized:
         return (
             "產線模型缺少同版本 PT 訓練權重，因此補訓尚未開始。\n"
-            "資料已保存且產線模型不會變更；請通知工程人員重新部署成對模型檔。"
+            "資料已保存且產線模型不會變更；請通知工程人員執行 ONNX/PT "
+            "成對驗證與部署工具。"
         )
     if (
         "incumbent baseline" in normalized
@@ -157,6 +185,14 @@ class MainWindow(QMainWindow):
         self._operator_training_lock = None
         self._operator_cancel_requested = False
         self._operator_mode_enabled = False
+        self._background_mode = False
+        self._close_when_pipeline_stops = False
+        self._operator_heartbeat_failures = 0
+        self._operator_heartbeat_timer = QtCore.QTimer(self)
+        self._operator_heartbeat_timer.setInterval(5000)
+        self._operator_heartbeat_timer.timeout.connect(
+            self._refresh_operator_job_lease
+        )
 
         # Initialize ConfigEditor before _build_ui
         self.config_editor = ConfigEditor()
@@ -196,6 +232,18 @@ class MainWindow(QMainWindow):
                 self.config_panel.load_default_config()
         except (ConfigurationError, OSError, yaml.YAMLError):
             pass
+
+    def set_background_mode(self, enabled: bool) -> None:
+        """Run operator handoffs without showing the orchestration window."""
+        self._background_mode = bool(enabled)
+
+    def _request_background_exit(self) -> None:
+        """End a hidden worker process after its operator job becomes terminal."""
+        if not self._background_mode:
+            return
+        application = QtCore.QCoreApplication.instance()
+        if application is not None:
+            QtCore.QTimer.singleShot(0, application.quit)
 
     def _build_ui(self) -> None:
         """建立左右分欄佈局"""
@@ -492,6 +540,13 @@ class MainWindow(QMainWindow):
             )
             issues = PreflightChecker().run(selected_tasks, preflight_config)
             if issues:
+                if self._background_mode:
+                    for issue in issues:
+                        self.log_message(
+                            f"[PREFLIGHT {issue.severity.value.upper()}] "
+                            f"{issue.task}: {issue.message}"
+                        )
+                    return False
                 dlg = PreflightDialog(issues, parent=self)
                 if not dlg.exec_():
                     return False  # User cancelled or errors block execution
@@ -555,6 +610,12 @@ class MainWindow(QMainWindow):
                 target.area,
                 feedback_count=feedback_count,
                 pending_count=target.pending_count,
+                training_summary=(
+                    f"{handoff.training_options.epochs} Epochs／"
+                    f"增強 {handoff.training_options.augmentations_per_image}／"
+                    f"Batch {handoff.training_options.batch}／"
+                    f"{handoff.training_options.imgsz}px"
+                ),
             )
             self._set_operator_mode(pending=target.pending_count > 0)
             if target.pending_count > 0:
@@ -581,6 +642,7 @@ class MainWindow(QMainWindow):
                 self.status_label.setStyleSheet(
                     "color: #F0AD4E; font-size: 10pt; font-weight: bold;"
                 )
+                self._start_operator_job_heartbeat()
                 return
             self._operator_training_lock = acquire_target_training_lock(
                 handoff.data_root,
@@ -593,6 +655,7 @@ class MainWindow(QMainWindow):
                 message="正在建立固定的訓練資料快照",
                 pending_count=0,
                 progress=10,
+                error="",
             )
             handoff = materialize_job_dataset_snapshot(handoff)
             target = handoff.selected_target
@@ -607,6 +670,19 @@ class MainWindow(QMainWindow):
             self._operator_handoff_target = target
             self._operator_handoff = handoff
             self._operator_cancel_requested = False
+            self._start_operator_job_heartbeat()
+            if self._operator_cancel_requested:
+                self._publish_operator_status(
+                    state="cancelled",
+                    message="模型更新已在啟動前安全停止",
+                )
+                self._release_operator_training_lock()
+                self._stop_operator_job_heartbeat()
+                self._operator_handoff_target = None
+                self._operator_handoff = None
+                self._operator_cancel_requested = False
+                self._request_background_exit()
+                return
             self.config_panel.setEnabled(False)
             self.task_control.setEnabled(False)
             self.status_label.setText(f"待開始：{target.product}/{target.area}")
@@ -625,9 +701,14 @@ class MainWindow(QMainWindow):
                     error=operator_message,
                 )
             self._release_operator_training_lock()
+            self._stop_operator_job_heartbeat()
             self._operator_handoff_target = None
             self._operator_handoff = None
-            QMessageBox.critical(self, "無法接收訓練資料", operator_message)
+            if self._background_mode:
+                self.log_message(f"[ERROR] {operator_message}")
+                self._request_background_exit()
+            else:
+                QMessageBox.critical(self, "無法接收訓練資料", operator_message)
 
     def _publish_operator_status(self, *, state: str, message: str, **values) -> None:
         """Publish the current operator job state without masking pipeline errors."""
@@ -652,6 +733,71 @@ class MainWindow(QMainWindow):
             )
         except RuntimeError as exc:
             self.log_message(f"[WARNING] Unable to update operator status: {exc}")
+
+    def _start_operator_job_heartbeat(self) -> None:
+        """Publish an immediate lease and keep it fresh while this window owns a job."""
+        if not self._operator_heartbeat_timer.isActive():
+            self._operator_heartbeat_timer.start()
+        self._refresh_operator_job_lease()
+
+    def _stop_operator_job_heartbeat(self) -> None:
+        self._operator_heartbeat_timer.stop()
+        self._operator_heartbeat_failures = 0
+
+    def _refresh_operator_job_lease(self) -> None:
+        """Refresh persisted liveness and consume a cooperative cancel request."""
+        handoff = self._operator_handoff
+        if handoff is None:
+            self._stop_operator_job_heartbeat()
+            return
+        try:
+            from picture_tool.operator_job import refresh_operator_job_lease
+
+            request = refresh_operator_job_lease(
+                handoff.status_path,
+                job_id=handoff.job_id or handoff.path.stem,
+                lock=self._operator_training_lock,
+            )
+            self._operator_heartbeat_failures = 0
+        except RuntimeError as exc:
+            self._operator_heartbeat_failures += 1
+            if self._operator_heartbeat_failures in {1, 3}:
+                self.log_message(
+                    "[WARNING] Unable to refresh operator heartbeat: "
+                    f"{exc}"
+                )
+            return
+        if request is not None and not self._operator_cancel_requested:
+            self._handle_operator_cancel_request(
+                request.request_id,
+                request.requested_at,
+            )
+
+    def _handle_operator_cancel_request(
+        self,
+        request_id: str,
+        requested_at: str,
+    ) -> None:
+        """Acknowledge one idempotent request before stopping at a safe point."""
+        self._operator_cancel_requested = True
+        self._publish_operator_status(
+            state="cancelling",
+            message="已收到安全停止要求，正在結束目前工作",
+            handled_control_request_id=request_id,
+            cancel_requested_at=requested_at,
+        )
+        if self._operator_handoff_target is None:
+            self._publish_operator_status(
+                state="cancelled",
+                message="模型更新已安全停止",
+                handled_control_request_id=request_id,
+            )
+            self._stop_operator_job_heartbeat()
+            self._operator_handoff = None
+            self._operator_cancel_requested = False
+            self._request_background_exit()
+            return
+        self._request_operator_pipeline_stop()
 
     def _release_operator_training_lock(self) -> None:
         """Release the product/station lifecycle lock when a job terminates."""
@@ -685,25 +831,46 @@ class MainWindow(QMainWindow):
             self.log_viewer.tabs.setCurrentIndex(annotation_index)
 
     def stop_pipeline(self) -> None:
-        """Stop the running pipeline"""
+        """Request a non-blocking, cooperative pipeline stop."""
         if self._operator_handoff_target is not None:
+            if self._operator_cancel_requested:
+                return
             self._operator_cancel_requested = True
             self._publish_operator_status(
-                state="cancelled",
-                message="模型更新已由使用者停止",
+                state="cancelling",
+                message="正在安全停止模型更新",
             )
-        self.manager.stop_pipeline()
-
-        # Update UI state
-        if hasattr(self, "start_btn"):
-            self.start_btn.setEnabled(True)
+            self._request_operator_pipeline_stop()
+            if hasattr(self, "start_btn"):
+                self.start_btn.setEnabled(False)
+        else:
+            self.manager.stop_pipeline()
+            if hasattr(self, "start_btn"):
+                self.start_btn.setEnabled(True)
         if hasattr(self, "stop_btn"):
             self.stop_btn.setEnabled(False)
+
+    def _request_operator_pipeline_stop(self) -> None:
+        request_stop = getattr(self.manager, "request_pipeline_stop", None)
+        if callable(request_stop):
+            request_stop()
+            return
+        self.manager.stop_pipeline()
 
     def log_message(self, message: str) -> None:
         """Log message wrapper - delegates to LogViewer and extracts metrics."""
         self._log_history.append(message)
         self.log_viewer.log_message(message)
+        if self._operator_handoff_target is not None:
+            epoch_status = _operator_epoch_status(message)
+            if epoch_status is not None:
+                status_message, progress = epoch_status
+                self._publish_operator_status(
+                    state="training",
+                    message=status_message,
+                    current_task="yolo_train",
+                    progress=progress,
+                )
         # Extract training metrics from ultralytics epoch lines
         if hasattr(self, "training_metrics") and not self._operator_mode_enabled:
             metrics = TrainingMetricsParser.parse_epoch_line(message)
@@ -794,8 +961,28 @@ class MainWindow(QMainWindow):
             and self.manager.worker_thread
             and self.manager.worker_thread.isRunning()
         ):
-            self.stop_pipeline()
-            self.manager.worker_thread.wait(1000)
+            if self._operator_handoff_target is not None:
+                self._close_when_pipeline_stops = True
+                self.stop_pipeline()
+                event.ignore()
+                return
+            self.manager.stop_pipeline()
+        if self._operator_handoff is not None:
+            try:
+                from picture_tool.operator_job import clear_operator_job_process
+
+                clear_operator_job_process(
+                    self._operator_handoff.status_path,
+                    job_id=(
+                        self._operator_handoff.job_id
+                        or self._operator_handoff.path.stem
+                    ),
+                )
+            except RuntimeError as exc:
+                self.log_message(
+                    f"[WARNING] Unable to clear operator process lease: {exc}"
+                )
+        self._stop_operator_job_heartbeat()
         super().closeEvent(event)
 
     def on_tasks_changed(self, tasks: list) -> None:
@@ -822,9 +1009,11 @@ class MainWindow(QMainWindow):
     def on_pipeline_finished(self):
         """Handle pipeline completion."""
         operator_target = self._operator_handoff_target
+        operator_handoff = self._operator_handoff
+        operator_was_cancelled = self._operator_cancel_requested
         self._operator_handoff_target = None
         if operator_target is not None:
-            if self._operator_cancel_requested:
+            if operator_was_cancelled:
                 self._publish_operator_status(
                     state="cancelled",
                     message="模型更新已停止",
@@ -837,42 +1026,85 @@ class MainWindow(QMainWindow):
                     pending_count=0,
                 )
             self._release_operator_training_lock()
+            self._stop_operator_job_heartbeat()
             self._operator_handoff = None
             self._operator_cancel_requested = False
-        self.log_message("[SUCCESS] Pipeline finished successfully.")
+        self.log_message(
+            "[INFO] Pipeline stopped at a safe point."
+            if operator_was_cancelled
+            else "[SUCCESS] Pipeline finished successfully."
+        )
         self._reset_ui_state()
         if hasattr(self, "progress_bar"):
-            self.progress_bar.setValue(100)
-            self.status_label.setText("Pipeline Completed")
+            if not operator_was_cancelled:
+                self.progress_bar.setValue(100)
+            self.status_label.setText(
+                "Pipeline Stopped"
+                if operator_was_cancelled
+                else "Pipeline Completed"
+            )
         if hasattr(self, "training_metrics"):
             self.training_metrics.reset()
         if operator_target is not None:
             self.config_panel.setEnabled(True)
             self.task_control.setEnabled(True)
             self.start_btn.setText("▶ RUN PIPELINE")
-            QMessageBox.information(
-                self,
-                "訓練與部署完成",
-                f"{operator_target.product}/{operator_target.area} 已部署完成。\n"
-                "推理系統將於下一次檢測時自動載入新模型。",
-            )
+            if operator_was_cancelled:
+                self.log_message("[INFO] Operator retraining stopped safely.")
+                if self._background_mode:
+                    self._request_background_exit()
+            else:
+                acceptance_message = (
+                    f"{operator_target.product}/{operator_target.area} 訓練與部署已完成。"
+                )
+                if operator_handoff is not None:
+                    try:
+                        acceptance = load_operator_acceptance_summary(
+                            operator_handoff.inference_models_dir,
+                            product=operator_target.product,
+                            area=operator_target.area,
+                        )
+                        acceptance_message = acceptance.to_operator_text()
+                    except OperatorAcceptanceError as exc:
+                        self.log_message(
+                            "[WARNING] Deployment finished but acceptance evidence "
+                            f"could not be loaded: {exc}"
+                        )
+                        acceptance_message += (
+                            "\n\n無法讀取完整離線驗收證據，請勿直接認定產線驗收完成。\n"
+                            f"{exc}"
+                        )
+                if self._background_mode:
+                    self.log_message(f"[SUCCESS] {acceptance_message}")
+                    self._request_background_exit()
+                else:
+                    QMessageBox.information(
+                        self,
+                        "訓練與部署驗收摘要",
+                        acceptance_message,
+                    )
+            if self._close_when_pipeline_stops:
+                self._close_when_pipeline_stops = False
+                QtCore.QTimer.singleShot(0, self.close)
 
     def on_pipeline_error(self, message: str):
         """Handle pipeline error."""
         operator_target = self._operator_handoff_target
+        operator_was_cancelled = self._operator_cancel_requested
         self._operator_handoff_target = None
         operator_message = _operator_error_message(message)
         if operator_target is not None:
             self._publish_operator_status(
-                state="cancelled" if self._operator_cancel_requested else "failed",
+                state="cancelled" if operator_was_cancelled else "failed",
                 message=(
                     "模型更新已停止"
-                    if self._operator_cancel_requested
+                    if operator_was_cancelled
                     else operator_message.splitlines()[0]
                 ),
-                error=operator_message,
+                error="" if operator_was_cancelled else operator_message,
             )
             self._release_operator_training_lock()
+            self._stop_operator_job_heartbeat()
             self._operator_handoff = None
             self._operator_cancel_requested = False
         self.log_message(f"[ERROR] Pipeline failed: {message}")
@@ -885,23 +1117,33 @@ class MainWindow(QMainWindow):
             self.config_panel.setEnabled(True)
             self.task_control.setEnabled(True)
             self.start_btn.setText("▶ RUN PIPELINE")
-            QMessageBox.critical(
-                self,
-                "訓練未完成",
-                f"{operator_target.product}/{operator_target.area} 未部署。\n\n"
-                f"{operator_message}",
-            )
+            if self._background_mode:
+                self._request_background_exit()
+            elif not operator_was_cancelled:
+                QMessageBox.critical(
+                    self,
+                    "訓練未完成",
+                    f"{operator_target.product}/{operator_target.area} 未部署。\n\n"
+                    f"{operator_message}",
+                )
+            if self._close_when_pipeline_stops:
+                self._close_when_pipeline_stops = False
+                QtCore.QTimer.singleShot(0, self.close)
 
     def on_task_started(self, task_name: str):
         """Handle task start."""
         self._set_task_status(task_name, "Running...", color="#4D96FF")
         operator_states = {
-            "dataset_lint": ("preparing_dataset", "正在檢查訓練資料", 15),
+            "yolo_augmentation": ("preparing_dataset", "正在進行資料增強", 15),
+            "dataset_lint": ("preparing_dataset", "正在檢查訓練資料", 25),
             "dataset_readiness": ("preparing_dataset", "正在檢查資料量", 20),
-            "dataset_splitter": ("preparing_dataset", "正在切分訓練資料", 25),
-            "yolo_augmentation": ("preparing_dataset", "正在進行資料增強", 30),
-            "yolo_train": ("training", "模型訓練中", 35),
-            "yolo_evaluation": ("evaluating", "正在驗證模型品質", 85),
+            "dataset_splitter": ("preparing_dataset", "正在切分訓練資料", 30),
+            "yolo_train": ("training", "模型訓練中", 40),
+            "position_validation": ("evaluating", "正在驗證物件位置", 78),
+            "yolo_evaluation": ("evaluating", "正在驗證模型品質", 84),
+            "generate_report": ("evaluating", "正在產生訓練報告", 87),
+            "batch_inference": ("evaluating", "正在測試推論結果", 90),
+            "qc_summary": ("evaluating", "正在彙整品質報告", 93),
             "deploy": ("deploying", "正在部署新模型", 95),
         }
         if task_name in operator_states:

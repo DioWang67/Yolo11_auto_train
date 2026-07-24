@@ -34,6 +34,7 @@ def test_operator_error_message_explains_model_pair_and_feedback_preflight():
 
     assert "原本就辨識正確" in message
     assert "同版本的 PT" in message
+    assert "成對驗證與部署工具" in message
     assert "產線模型不會變更" in message
 
 

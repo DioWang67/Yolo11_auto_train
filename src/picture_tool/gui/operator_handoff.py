@@ -18,6 +18,13 @@ from typing import Any
 import yaml
 
 from picture_tool.pending_annotations import validate_yolo_label_text
+from picture_tool.quality.operator_dataset_conflicts import (
+    OperatorDatasetConflictError,
+    analysis_payload,
+    analyze_operator_dataset,
+    filter_manifest_rows,
+    write_json_atomic as write_conflict_report_atomic,
+)
 
 
 class OperatorHandoffError(ValueError):
@@ -34,9 +41,22 @@ OPERATOR_MIN_MAP50 = 0.80
 OPERATOR_MIN_MAP50_95 = 0.50
 OPERATOR_MAX_METRIC_REGRESSION = 0.02
 DEFAULT_PRODUCTION_CONFIDENCE = 0.40
+DEFAULT_OPERATOR_AUGMENTATIONS_PER_IMAGE = 20
+MAX_OPERATOR_AUGMENTATIONS_PER_IMAGE = 50
 YOLO_IMAGE_SUFFIXES = frozenset(
     {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 )
+TERMINAL_OPERATOR_JOB_STATES = frozenset({"deployed", "failed", "cancelled"})
+
+
+@dataclass(frozen=True)
+class OperatorTrainingOptions:
+    """Validated job-scoped options supplied by the inference UI."""
+
+    epochs: int = 20
+    augmentations_per_image: int = 20
+    batch: int = 8
+    imgsz: int = 640
 
 
 @dataclass(frozen=True)
@@ -69,6 +89,7 @@ class OperatorHandoff:
     targets: tuple[OperatorTarget, ...]
     job_id: str = ""
     status_path: Path | None = None
+    training_options: OperatorTrainingOptions = OperatorTrainingOptions()
 
     @property
     def selected_target(self) -> OperatorTarget:
@@ -85,6 +106,128 @@ class OperatorHandoff:
                 "Operator handoff must contain exactly one trainable or pending product/area."
             )
         return active[0]
+
+
+def resolve_latest_operator_handoff(training_root: str | Path) -> Path:
+    """Resolve the mutable latest pointer to one immutable resumable job.
+
+    Args:
+        training_root: Root of this training repository.
+
+    Returns:
+        The job-scoped ``handoff.json`` path.
+
+    Raises:
+        OperatorHandoffError: If the pointer, job path, or status is unsafe.
+    """
+    root = Path(training_root).expanduser().resolve()
+    operator_root = (root / "data" / ".operator_handoff").resolve()
+    latest_path = operator_root / "latest.json"
+    if not latest_path.is_file():
+        raise OperatorHandoffError(
+            "No operator training job is available. Submit reviewed images first."
+        )
+    try:
+        latest_payload = json.loads(latest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OperatorHandoffError(
+            f"Unable to read the latest operator job: {exc}"
+        ) from exc
+    if not isinstance(latest_payload, dict):
+        raise OperatorHandoffError("The latest operator job pointer is invalid.")
+
+    job_id = str(latest_payload.get("job_id") or "").strip()
+    _validate_segment(job_id, "job_id")
+    job_root = (operator_root / "jobs" / job_id).resolve()
+    jobs_root = (operator_root / "jobs").resolve()
+    if not job_root.is_relative_to(jobs_root):
+        raise OperatorHandoffError("The latest operator job path is unsafe.")
+
+    handoff_path = job_root / "handoff.json"
+    status_path = job_root / "status.json"
+    if not handoff_path.is_file() or not status_path.is_file():
+        raise OperatorHandoffError(
+            f"The latest operator job is incomplete: {job_id}"
+        )
+    try:
+        immutable_payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+        status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OperatorHandoffError(
+            f"Unable to read operator job {job_id}: {exc}"
+        ) from exc
+    if not isinstance(immutable_payload, dict) or not isinstance(status_payload, dict):
+        raise OperatorHandoffError(f"Operator job {job_id} contains invalid JSON.")
+    if str(immutable_payload.get("job_id") or "").strip() != job_id:
+        raise OperatorHandoffError(
+            "The latest operator job does not match its immutable handoff."
+        )
+    state = str(status_payload.get("state") or "queued").strip().lower()
+    if state in TERMINAL_OPERATOR_JOB_STATES:
+        raise OperatorHandoffError(
+            f"The latest operator job is already terminal ({state}). "
+            "Submit or explicitly open another job."
+        )
+    return handoff_path
+
+
+def _load_training_options(
+    value: Any, *, required: bool
+) -> OperatorTrainingOptions:
+    """Validate the schema-v4 training options without trusting GUI input."""
+    if value is None:
+        if required:
+            raise OperatorHandoffError("Schema-v4 handoff is missing training_options.")
+        return OperatorTrainingOptions()
+    if not isinstance(value, dict):
+        raise OperatorHandoffError("training_options must be a mapping.")
+    allowed = {"epochs", "augmentations_per_image", "batch", "imgsz"}
+    unexpected = set(value) - allowed
+    if unexpected:
+        raise OperatorHandoffError(
+            "Unsupported training option(s): " + ", ".join(sorted(unexpected))
+        )
+    missing = allowed - set(value)
+    if required and missing:
+        raise OperatorHandoffError(
+            "Schema-v4 handoff is missing training option(s): "
+            + ", ".join(sorted(missing))
+        )
+    invalid_types = [key for key in value if type(value[key]) is not int]
+    if invalid_types:
+        raise OperatorHandoffError(
+            "Training option(s) must be integers: "
+            + ", ".join(sorted(invalid_types))
+        )
+    defaults = OperatorTrainingOptions()
+    options = OperatorTrainingOptions(
+        epochs=value.get("epochs", defaults.epochs),
+        augmentations_per_image=value.get(
+            "augmentations_per_image", defaults.augmentations_per_image
+        ),
+        batch=value.get("batch", defaults.batch),
+        imgsz=value.get("imgsz", defaults.imgsz),
+    )
+    ranges = {
+        "epochs": (options.epochs, 20, 300),
+        "augmentations_per_image": (
+            options.augmentations_per_image,
+            0,
+            MAX_OPERATOR_AUGMENTATIONS_PER_IMAGE,
+        ),
+        "batch": (options.batch, 1, 64),
+        "imgsz": (options.imgsz, 320, 1280),
+    }
+    for name, (setting, minimum, maximum) in ranges.items():
+        if not minimum <= setting <= maximum:
+            raise OperatorHandoffError(
+                f"training_options.{name} must be between {minimum} and {maximum}."
+            )
+    if options.imgsz % 32 != 0:
+        raise OperatorHandoffError(
+            "training_options.imgsz must be a multiple of 32."
+        )
+    return options
 
 
 def load_operator_handoff(
@@ -110,9 +253,13 @@ def load_operator_handoff(
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OperatorHandoffError(f"Unable to read handoff: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("schema_version") not in {1, 2, 3}:
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {1, 2, 3, 4}:
         raise OperatorHandoffError("Unsupported operator handoff schema.")
     schema_version = int(payload.get("schema_version", 0))
+    training_options = _load_training_options(
+        payload.get("training_options"),
+        required=schema_version >= 4,
+    )
 
     data_root = Path(str(payload.get("data_root") or "")).resolve()
     allowed_data_root = (root / "data").resolve()
@@ -292,6 +439,7 @@ def load_operator_handoff(
         targets=tuple(targets),
         job_id=job_id,
         status_path=status_path,
+        training_options=training_options,
     )
     handoff.selected_target
     return handoff
@@ -360,12 +508,63 @@ def materialize_job_dataset_snapshot(handoff: OperatorHandoff) -> OperatorHandof
             raise OperatorHandoffError("No training images are available for snapshot.")
         metadata_dir = staging_root / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_manifest, metadata_dir / source_manifest.name)
+        staging_manifest = metadata_dir / source_manifest.name
+        shutil.copy2(source_manifest, staging_manifest)
+
+        analysis = analyze_operator_dataset(
+            staging_root / "raw" / "images",
+            staging_root / "raw" / "labels",
+            staging_manifest,
+            product=target.product,
+            area=target.area,
+        )
+        if analysis.conflicts:
+            conflict_report = analysis_payload(
+                analysis,
+                scope=f"job:{handoff.job_id}",
+            )
+            report_path = write_conflict_report_atomic(
+                job_dir / "dataset_conflict_report.json",
+                conflict_report,
+            )
+            conflict_error = OperatorDatasetConflictError(analysis)
+            raise OperatorHandoffError(
+                f"{conflict_error} Conflict report: {report_path}"
+            )
+
+        deduplication_audit_path: Path | None = None
+        if analysis.selections:
+            for excluded in analysis.excluded_image_paths:
+                excluded.unlink(missing_ok=True)
+            for excluded in analysis.excluded_label_paths:
+                excluded.unlink(missing_ok=True)
+            excluded_ids = {
+                item.excluded_sample for item in analysis.selections
+            }
+            filter_manifest_rows(
+                source_manifest,
+                staging_manifest,
+                excluded_ids,
+                excluded_output_image_names={
+                    path.name for path in analysis.excluded_image_paths
+                },
+            )
+            deduplication_audit_path = write_conflict_report_atomic(
+                job_dir / "dataset_deduplication_audit.json",
+                analysis_payload(
+                    analysis,
+                    scope=f"job:{handoff.job_id}",
+                    repair_mode="new_snapshot_canonical_selection",
+                ),
+            )
+
+        image_count = _directory_file_count(staging_root / "raw" / "images")
+        label_count = _directory_file_count(staging_root / "raw" / "labels")
         staging.replace(snapshot_container)
         _write_json_atomic(
             snapshot_manifest,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "job_id": handoff.job_id,
                 "product": target.product,
                 "area": target.area,
@@ -375,14 +574,68 @@ def materialize_job_dataset_snapshot(handoff: OperatorHandoff) -> OperatorHandof
                 "image_count": image_count,
                 "label_count": label_count,
                 "legacy_image_count": legacy_image_count,
+                "canonical_selection_count": len(analysis.selections),
+                "deduplication_audit_path": str(deduplication_audit_path or ""),
             },
         )
-    except (OSError, shutil.Error) as exc:
+    except OperatorHandoffError:
+        raise
+    except (OSError, shutil.Error, ValueError) as exc:
         raise OperatorHandoffError(f"Unable to create dataset snapshot: {exc}") from exc
     finally:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
     return _handoff_with_snapshot(handoff, target, snapshot_root)
+
+
+def _configure_operator_yolo_augmentation(
+    config: dict[str, Any],
+    target: OperatorTarget,
+    options: OperatorTrainingOptions,
+) -> tuple[Path, Path]:
+    """Route one immutable job snapshot through color-safe YOLO augmentation."""
+    raw_images = target.dataset_root / "raw" / "images"
+    raw_labels = target.dataset_root / "raw" / "labels"
+    processed_images = target.dataset_root / "processed" / "images"
+    processed_labels = target.dataset_root / "processed" / "labels"
+    augmentation_cfg = config.setdefault("yolo_augmentation", {})
+    augmentation_cfg.setdefault("input", {}).update(
+        {"image_dir": str(raw_images), "label_dir": str(raw_labels)}
+    )
+    augmentation_cfg.setdefault("output", {}).update(
+        {"image_dir": str(processed_images), "label_dir": str(processed_labels)}
+    )
+    processing = augmentation_cfg.setdefault("processing", {})
+    processing.setdefault("num_workers", 2)
+    # Debug mode intentionally processes only one source image in the legacy
+    # augmentor, so it must never leak into an operator retraining job.
+    processing["debug_mode"] = False
+    policy = augmentation_cfg.setdefault("augmentation", {})
+    policy["num_images"] = options.augmentations_per_image
+    policy["include_originals"] = True
+    policy["target_size"] = options.imgsz
+    policy.setdefault("num_operations", [2, 3])
+    operations = policy.setdefault("operations", {})
+    if not isinstance(operations, dict):
+        raise OperatorHandoffError(
+            "yolo_augmentation.augmentation.operations must be a mapping."
+        )
+    safe_defaults: dict[str, dict[str, Any]] = {
+        "blur": {"kernel": [0, 1]},
+        "contrast": {"range": [0.92, 1.08]},
+        "multiply": {"range": [0.88, 1.15]},
+        "noise": {"scale": [0, 0.02]},
+        "rotate": {"angle": [-2, 2]},
+        "scale": {"range": [0.97, 1.03]},
+    }
+    for operation, values in safe_defaults.items():
+        operations.setdefault(operation, values)
+    # Wire color is a class signal. Hue, mirroring, and perspective changes
+    # are intentionally disabled even if a generic project preset enables them.
+    operations.pop("hue", None)
+    operations["flip"] = {"probability": 0.0}
+    operations["perspective"] = {"scale": [0.0, 0.0]}
+    return processed_images, processed_labels
 
 
 def apply_handoff_to_config(
@@ -403,12 +656,20 @@ def apply_handoff_to_config(
         "enabled": True,
         "dataset_root": str(target.dataset_root),
         "source_stage": "raw",
+        # The immutable review snapshot is the augmentation source, while the
+        # splitter must consume the generated variants plus copied originals.
+        "split_source_stage": "processed",
     }
+    augmented_images, augmented_labels = _configure_operator_yolo_augmentation(
+        updated,
+        target,
+        handoff.training_options,
+    )
     split_cfg = updated.setdefault("train_test_split", {})
     split_cfg.setdefault("input", {}).update(
         {
-            "image_dir": str(target.dataset_root / "raw" / "images"),
-            "label_dir": str(target.dataset_root / "raw" / "labels"),
+            "image_dir": str(augmented_images),
+            "label_dir": str(augmented_labels),
         }
     )
     split_cfg.setdefault("output", {})["output_dir"] = str(
@@ -470,10 +731,12 @@ def apply_handoff_to_config(
         )
     if deployed_training_weight is not None:
         training_cfg["model"] = str(deployed_training_weight)
-    configured_epochs = int(training_cfg.get("epochs", 20))
+    configured_epochs = handoff.training_options.epochs
     training_cfg.update(
         {
-            "epochs": max(configured_epochs, 20),
+            "epochs": configured_epochs,
+            "batch": handoff.training_options.batch,
+            "imgsz": handoff.training_options.imgsz,
             "optimizer": "AdamW",
             "lr0": min(float(training_cfg.get("lr0", 0.0005)), 0.0005),
             "lrf": float(training_cfg.get("lrf", 0.1)),
@@ -482,6 +745,13 @@ def apply_handoff_to_config(
             "mosaic": 0.0,
             "fliplr": 0.0,
             "close_mosaic": 0,
+            "hsv_h": 0.0,
+            "hsv_s": 0.0,
+            "hsv_v": 0.0,
+            "degrees": 0.0,
+            "translate": 0.0,
+            "scale": 0.0,
+            "erasing": 0.0,
             "cos_lr": True,
             "warmup_epochs": min(float(training_cfg.get("warmup_epochs", 1.0)), 1.0),
         }
@@ -527,6 +797,11 @@ def apply_handoff_to_config(
             },
         }
     )
+    # Keep QC evidence station-scoped. Path resolution replaces this placeholder
+    # with runs/<product>/<area>/quality/qc_summary.json before execution.
+    updated.setdefault("qc_summary", {}).setdefault(
+        "output_path", "./runs/project/quality/qc_summary.json"
+    )
     evaluation_cfg = updated.setdefault("yolo_evaluation", {})
     export_cfg = training_cfg.get("export_detection_config", {}) or {}
     production_confidence = float(
@@ -540,6 +815,7 @@ def apply_handoff_to_config(
         {
             "split": "test",
             "conf": production_confidence,
+            "imgsz": handoff.training_options.imgsz,
         }
     )
     gate_cfg = evaluation_cfg.setdefault("gate", {})
@@ -705,7 +981,7 @@ def _summarize_operator_feedback(target: OperatorTarget) -> dict[str, int]:
         return summary
 
     seen_ids: set[str] = set()
-    correction_labels = {"false_positive", "false_negative", "wrong_class"}
+    correction_labels = {"false_positive", "false_negative", "wrong_box", "wrong_class"}
     for row in rows:
         sample_id = str(row.get("sample_id") or "")
         if not sample_id or sample_id in seen_ids:
@@ -817,6 +1093,14 @@ def _copy_directory_files(source: Path, destination: Path) -> int:
         shutil.copy2(source_path, destination / source_path.name)
         count += 1
     return count
+
+
+def _directory_file_count(path: Path) -> int:
+    """Count non-temporary files in one job-snapshot directory."""
+    return sum(
+        candidate.is_file() and not candidate.name.startswith(".")
+        for candidate in path.iterdir()
+    )
 
 
 def _copy_legacy_raw_pairs(

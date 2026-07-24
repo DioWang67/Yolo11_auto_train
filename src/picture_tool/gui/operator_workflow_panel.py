@@ -168,12 +168,14 @@ class OperatorWorkflowPanel(QFrame):
         *,
         feedback_count: int,
         pending_count: int,
+        training_summary: str = "",
     ) -> None:
         """Set the stable job identity displayed for every workflow step."""
         self._pending_count = max(0, int(pending_count))
-        self.target_label.setText(
-            f"{product}／{area}  ·  本次 {max(0, int(feedback_count))} 張"
-        )
+        text = f"{product}／{area}  ·  本次 {max(0, int(feedback_count))} 張"
+        if training_summary.strip():
+            text += f"  ·  {training_summary.strip()}"
+        self.target_label.setText(text)
 
     def set_state(
         self,
