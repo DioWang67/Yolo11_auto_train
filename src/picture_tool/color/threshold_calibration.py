@@ -406,7 +406,9 @@ def _feedback_paths(paths: Iterable[str | Path]) -> Iterator[Path]:
     found: set[Path] = set()
     for raw_path in paths:
         path = Path(raw_path).expanduser().resolve()
-        candidates = path.rglob("feedback.csv") if path.is_dir() else (path,)
+        candidates = (
+            sorted(path.rglob("feedback.csv")) if path.is_dir() else (path,)
+        )
         for candidate in candidates:
             if candidate.is_file() and candidate not in found:
                 found.add(candidate)
