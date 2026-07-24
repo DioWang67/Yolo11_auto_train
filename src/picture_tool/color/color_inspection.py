@@ -836,7 +836,7 @@ class ImageCanvas(QtWidgets.QLabel):
 
         # 用正確的 stride 來建 QImage
         qimg = QtGui.QImage(
-            image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_BGR888
+            image.tobytes(), w, h, bytes_per_line, QtGui.QImage.Format.Format_BGR888
         ).copy()  # copy 以擁有資料的生命週期
 
         self._qimage = qimg
@@ -956,7 +956,10 @@ class ImageCanvas(QtWidgets.QLabel):
             alpha[..., 2] = 255
             alpha[..., 3] = (resized.astype(float) * 200).astype(np.uint8)
             overlay_img = QtGui.QImage(
-                alpha.data, display_w, display_h, QtGui.QImage.Format.Format_RGBA8888
+                alpha.tobytes(),
+                display_w,
+                display_h,
+                QtGui.QImage.Format.Format_RGBA8888,
             )
             painter.drawImage(0, 0, overlay_img)
 

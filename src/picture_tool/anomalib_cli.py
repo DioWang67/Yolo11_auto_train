@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "train-folder":
         try:
-            result = train_anomalib_folder(
+            training_result = train_anomalib_folder(
                 input_dir=args.input_dir,
                 product=args.product,
                 area=args.area,
@@ -121,12 +121,12 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, RuntimeError, ImportError) as exc:
             parser.exit(1, f"Anomalib training failed: {exc}\n")
 
-        print(f"Run directory: {result.run_dir}")
-        print(f"Checkpoint: {result.checkpoint_path or 'not found'}")
-        print(f"Report: {result.report_path}")
-        print(f"Normal images: {result.normal_image_count}")
-        print(f"Abnormal images: {result.abnormal_image_count}")
-        if result.baseline_only:
+        print(f"Run directory: {training_result.run_dir}")
+        print(f"Checkpoint: {training_result.checkpoint_path or 'not found'}")
+        print(f"Report: {training_result.report_path}")
+        print(f"Normal images: {training_result.normal_image_count}")
+        print(f"Abnormal images: {training_result.abnormal_image_count}")
+        if training_result.baseline_only:
             print("Status: baseline_only=true; threshold is not deployment-grade.")
         else:
             print("Status: validated layout detected.")
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "deploy":
         try:
-            result = deploy_anomalib_run(
+            deployment_result = deploy_anomalib_run(
                 run_dir=args.run_dir,
                 inference_root=args.inference_root,
                 product=args.product,
@@ -145,19 +145,22 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, FileExistsError, ValueError, OSError) as exc:
             parser.exit(1, f"Anomalib deploy failed: {exc}\n")
 
-        print(f"Deploy directory: {result.deploy_dir}")
-        print(f"Config: {result.config_path}")
-        print(f"Checkpoint: {result.checkpoint_path}")
-        print(f"Report: {result.report_path or 'not copied'}")
-        print(f"baseline_only: {str(result.baseline_only).lower()}")
-        print(f"usable_for_deployment: {str(result.usable_for_deployment).lower()}")
-        for warning in result.warnings:
+        print(f"Deploy directory: {deployment_result.deploy_dir}")
+        print(f"Config: {deployment_result.config_path}")
+        print(f"Checkpoint: {deployment_result.checkpoint_path}")
+        print(f"Report: {deployment_result.report_path or 'not copied'}")
+        print(f"baseline_only: {str(deployment_result.baseline_only).lower()}")
+        print(
+            "usable_for_deployment: "
+            f"{str(deployment_result.usable_for_deployment).lower()}"
+        )
+        for warning in deployment_result.warnings:
             print(f"warning: {warning}")
         return 0
 
     if args.command == "package":
         try:
-            result = package_anomalib_run(
+            package_result = package_anomalib_run(
                 run_dir=args.run_dir,
                 output_dir=args.output_dir,
                 product=args.product,
@@ -168,15 +171,18 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, FileExistsError, ValueError, OSError) as exc:
             parser.exit(1, f"Anomalib package failed: {exc}\n")
 
-        print(f"Package zip: {result.zip_path}")
-        print(f"Package directory: {result.package_dir}")
+        print(f"Package zip: {package_result.zip_path}")
+        print(f"Package directory: {package_result.package_dir}")
         print("Extract under: yolo11_inference/models")
-        print(f"Config: {result.config_path}")
-        print(f"Checkpoint: {result.checkpoint_path}")
-        print(f"Manifest: {result.manifest_path}")
-        print(f"baseline_only: {str(result.baseline_only).lower()}")
-        print(f"usable_for_deployment: {str(result.usable_for_deployment).lower()}")
-        for warning in result.warnings:
+        print(f"Config: {package_result.config_path}")
+        print(f"Checkpoint: {package_result.checkpoint_path}")
+        print(f"Manifest: {package_result.manifest_path}")
+        print(f"baseline_only: {str(package_result.baseline_only).lower()}")
+        print(
+            "usable_for_deployment: "
+            f"{str(package_result.usable_for_deployment).lower()}"
+        )
+        for warning in package_result.warnings:
             print(f"warning: {warning}")
         return 0
 

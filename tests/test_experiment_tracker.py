@@ -1,6 +1,5 @@
 import pytest
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from picture_tool.tracking.experiment_tracker import (
     MLflowTracker,
     TrackingInfrastructureError,

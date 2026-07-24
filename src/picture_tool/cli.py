@@ -3,10 +3,10 @@ from typing import Optional, List
 import typer  # type: ignore
 import yaml  # type: ignore
 from picture_tool.main_pipeline import (
-    load_config,
     setup_logging,
     run_pipeline,
 )
+from picture_tool.config_loader import load_config
 from picture_tool.exceptions import ConfigurationError, PipelineError
 
 app = typer.Typer(help="YOLO auto-train pipeline orchestration tools.")

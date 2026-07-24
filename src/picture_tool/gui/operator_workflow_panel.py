@@ -118,7 +118,10 @@ class OperatorWorkflowPanel(QFrame):
             "color: #f0f6fc; font-size: 17px; font-weight: 700;"
         )
         self.target_label = QLabel("尚未指定產品／站別")
-        self.target_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        self.target_label.setAlignment(
+            QtCore.Qt.AlignRight  # type: ignore[attr-defined]
+            | QtCore.Qt.AlignVCenter  # type: ignore[attr-defined]
+        )
         self.target_label.setStyleSheet(
             "color: #58a6ff; font-size: 13px; font-weight: 600;"
         )
@@ -132,7 +135,7 @@ class OperatorWorkflowPanel(QFrame):
         self.step_labels: list[QLabel] = []
         for number, step_name in enumerate(OPERATOR_WORKFLOW_STEPS, start=1):
             label = QLabel(f"{number}  {step_name}")
-            label.setAlignment(QtCore.Qt.AlignCenter)
+            label.setAlignment(QtCore.Qt.AlignCenter)  # type: ignore[attr-defined]
             label.setMinimumHeight(34)
             self.step_labels.append(label)
             steps_layout.addWidget(label, 1)

@@ -9,8 +9,6 @@ Shows ``PreflightIssue`` items before the pipeline runs:
 
 from __future__ import annotations
 
-from typing import List
-
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
@@ -46,7 +44,10 @@ class PreflightDialog(QDialog):
     def _setup_ui(self) -> None:
         self.setWindowTitle("執行前檢查")
         self.setMinimumWidth(560)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        self.setWindowFlags(
+            self.windowFlags()
+            & ~Qt.WindowContextHelpButtonHint  # type: ignore[attr-defined]
+        )
 
         outer = QVBoxLayout(self)
         outer.setSpacing(12)
@@ -88,12 +89,13 @@ class PreflightDialog(QDialog):
         else:
             btn_box = QDialogButtonBox()
             continue_btn = btn_box.addButton("繼續執行", QDialogButtonBox.AcceptRole)
-            cancel_btn = btn_box.addButton("取消", QDialogButtonBox.RejectRole)
-            continue_btn.setStyleSheet(
-                "QPushButton { background-color: #e67e22; color: white; "
-                "border-radius: 4px; padding: 6px 16px; font-weight: bold; }"
-                "QPushButton:hover { background-color: #ca6f1e; }"
-            )
+            btn_box.addButton("取消", QDialogButtonBox.RejectRole)
+            if continue_btn is not None:
+                continue_btn.setStyleSheet(
+                    "QPushButton { background-color: #e67e22; color: white; "
+                    "border-radius: 4px; padding: 6px 16px; font-weight: bold; }"
+                    "QPushButton:hover { background-color: #ca6f1e; }"
+                )
             btn_box.accepted.connect(self.accept)
             btn_box.rejected.connect(self.reject)
 
@@ -117,7 +119,10 @@ class PreflightDialog(QDialog):
         icon.setFont(QFont("Segoe UI", 12, QFont.Bold))
         icon.setStyleSheet(f"color: {_COLOR[sev]}; background: transparent; border: none;")
         icon.setFixedWidth(18)
-        icon.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        icon.setAlignment(
+            Qt.AlignTop  # type: ignore[attr-defined]
+            | Qt.AlignHCenter  # type: ignore[attr-defined]
+        )
         row.addWidget(icon)
 
         col = QVBoxLayout()
