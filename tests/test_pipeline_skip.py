@@ -510,6 +510,24 @@ def test_should_skip_yolo_train_when_weights_fresh(base_config, temp_dirs):
     assert reason is not None
 
 
+def test_completed_operator_checkpoint_skips_training_despite_config_change(
+    base_config, tmp_path
+):
+    checkpoint = tmp_path / "train10" / "weights" / "best.pt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"completed")
+    base_config["yolo_training"]["completed_job_checkpoint"] = str(checkpoint)
+    base_config["yolo_training"]["position_validation"] = {"enabled": False}
+
+    reason = training.skip_yolo_train(
+        base_config,
+        SimpleNamespace(force=False),
+    )
+
+    assert reason is not None
+    assert "already completed successfully" in reason
+
+
 def test_should_skip_dataset_lint_when_csv_fresh(base_config):
     reason = quality.skip_dataset_lint(base_config, SimpleNamespace(force=False))
     assert reason is not None

@@ -7,6 +7,12 @@ from .yolo_position_validator import (
     run_position_validation,
     validate_detections_against_area,
 )
+from .position_gate import (
+    PositionGateDecision,
+    PositionGateError,
+    PositionGatePolicy,
+    evaluate_position_gate,
+)
 
 __all__ = [
     "PositionAreaConfig",
@@ -16,4 +22,8 @@ __all__ = [
     "load_position_config",
     "run_position_validation",
     "validate_detections_against_area",
+    "PositionGateDecision",
+    "PositionGateError",
+    "PositionGatePolicy",
+    "evaluate_position_gate",
 ]

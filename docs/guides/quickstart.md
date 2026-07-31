@@ -104,6 +104,6 @@ yolo_training:
 
 ## Next Steps
 
-- See [Architecture](ARCHITECTURE.md)
-- See [Config Reference](config_reference.md)
-- See [Integration Guide (Train → Deploy)](INTEGRATION_GUIDE.md)
+- See [Architecture](../ARCHITECTURE.md)
+- See [Config Reference](../config_reference.md)
+- See [Integration Guide (Train → Deploy)](../INTEGRATION_GUIDE.md)

@@ -237,7 +237,20 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
 
         pv = yt.get("position_validation", {})
         pv["output_dir"] = str(quality_root / "position")
-        pv["sample_dir"] = str(split_root / "val" / "images")
+        pv["sample_dir"] = str(split_root / "test" / "images")
+        if handoff_cfg.get("enabled", False):
+            pv["golden_ok_dir"] = None
+            pv["golden_ng_dir"] = None
+            pv["golden_manifest_path"] = str(
+                data_root / "metadata" / "review_dataset_manifest.csv"
+            )
+            pv["golden_manifest_image_dir"] = str(
+                split_root / "test" / "images"
+            )
+        else:
+            pv["golden_ok_dir"] = str(split_root / "test" / "images")
+        pv["calibration_image_dir"] = str(split_root / "train" / "images")
+        pv["calibration_label_dir"] = str(split_root / "train" / "labels")
         pv["product"] = project
         if area_override:
             pv["area"] = area_override

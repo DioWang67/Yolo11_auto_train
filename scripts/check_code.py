@@ -5,7 +5,6 @@
 """
 import subprocess
 import sys
-from pathlib import Path
 
 def run_command(cmd, description):
     """執行命令並顯示結果"""

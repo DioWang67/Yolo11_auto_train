@@ -1,8 +1,6 @@
 
-import sys
 import numpy as np
 # import cv2  <-- Avoid cv2 dependency for verification
-from pathlib import Path
 
 def verify_sam2():
     print("Checking Ultralytics installation...")

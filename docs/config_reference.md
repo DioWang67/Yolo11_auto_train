@@ -99,6 +99,16 @@ Common keys: `enabled` (bool), `product` (str), `area` (str), `imgsz`, `sample_d
 `config_path` or inline `config`. When enabled, GUI/mixin validates required
 fields before allowing runs.
 
+For automatic generation, use `calibration_source: labels` with
+`calibration_image_dir` and `calibration_label_dir`. `golden_ok_dir` and
+`golden_ng_dir` are independent acceptance sets. The nested `gate` block controls
+minimum sample counts, maximum OK false-reject rate, minimum NG recall, baseline
+regression limits, and calibration/Golden-Set disjointness. Deployment defaults
+to `position_activation: preserve`. Operator retraining can instead set
+`golden_manifest_path` and `golden_manifest_image_dir`; only position-specific
+review outcomes in that holdout are evaluated. See
+[Position retraining deployment](POSITION_RETRAINING_DEPLOYMENT.md).
+
 ### `export_detection_config`
 Important keys: `enabled`, `output_path`, `weights_name`, `conf_thres`, `iou_thres`,
 `current_product`, `area`, `expected_items`, `include_all_products`.

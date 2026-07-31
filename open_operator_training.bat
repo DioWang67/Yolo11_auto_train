@@ -2,6 +2,8 @@
 setlocal EnableExtensions
 title YOLO Operator Training Center
 set "PROJECT_ROOT=%~dp0"
+set "YOLO_CONFIG_DIR=%PROJECT_ROOT%data\.ultralytics"
+if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 set "CHECK_MODE=0"
 set "BACKGROUND_ARG="
 if /I "%~1"=="--check" set "CHECK_MODE=1"
@@ -33,6 +35,13 @@ if errorlevel 1 (
     echo ERROR: Python cannot import picture_tool.
     echo Python: %PYTHON_EXE%
     echo Source: %PROJECT_ROOT%src
+    if "%CHECK_MODE%"=="0" if not defined BACKGROUND_ARG pause
+    exit /b 1
+)
+"%PYTHON_EXE%" -m picture_tool.doctor --runtime-only
+if errorlevel 1 (
+    echo ERROR: Training runtime environment check failed.
+    echo Python: %PYTHON_EXE%
     if "%CHECK_MODE%"=="0" if not defined BACKGROUND_ARG pause
     exit /b 1
 )

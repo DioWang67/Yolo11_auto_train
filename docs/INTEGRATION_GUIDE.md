@@ -51,6 +51,10 @@ runs/detect/Cable1/
 
 ### 方法 A：手動複製
 
+此方法只供隔離的開發／診斷環境確認目錄結構，不可作為正式產線發布。
+手動複製不會執行 challenger/incumbent Gate、ONNX/PT 等價驗證、checksum
+契約或建立完整回滾 manifest。正式站點請使用方法 B 或主 GUI 的受控補訓部署。
+
 ```bash
 # 建立目標目錄
 mkdir -p ../yolo11_inference/models/Cable1/A/yolo

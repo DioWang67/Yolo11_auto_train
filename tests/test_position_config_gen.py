@@ -9,12 +9,19 @@ when YOLO is None, which is always the case during pytest).
 import logging
 import math
 
+import cv2
+import numpy as np
 import pytest
+import yaml
 
 from picture_tool.position.position_config_gen import (
+    PositionConfigGenerator,
     _cluster_multi_instance,
     _mean,
+    _median,
     _mode_count,
+    _quantile,
+    _robust_statistical_aggregate,
     _simple_kmeans,
     _statistical_aggregate,
     _stdev,
@@ -52,6 +59,24 @@ class TestStdev:
     def test_two_values(self):
         # stdev([0, 10]) = sqrt((25+25)/1) = sqrt(50) ≈ 7.071
         assert _stdev([0.0, 10.0]) == pytest.approx(math.sqrt(50), rel=1e-6)
+
+
+def test_robust_helpers_resist_one_position_outlier():
+    boxes = [
+        [10, 10, 20, 20],
+        [11, 10, 21, 20],
+        [12, 10, 22, 20],
+        [500, 500, 510, 510],
+    ]
+
+    result = _robust_statistical_aggregate(boxes)
+
+    assert result["cx"] == pytest.approx(16.5)
+    assert result["cy"] == pytest.approx(15.0)
+    assert result["mad_cx"] == pytest.approx(1.0)
+    assert result["p99_center_distance"] > 400
+    assert _median([1.0, 9.0, 2.0]) == 2.0
+    assert _quantile([0.0, 10.0], 0.5) == pytest.approx(5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +318,69 @@ class TestClusterMultiInstance:
         assert "T#0" in result
         assert "T#1" in result
         assert "T#2" in result
+
+
+def _human_label_generator_fixture(tmp_path, **position_overrides):
+    dataset = tmp_path / "split"
+    images = dataset / "train" / "images"
+    labels = dataset / "train" / "labels"
+    images.mkdir(parents=True)
+    labels.mkdir(parents=True)
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    assert cv2.imwrite(str(images / "board.jpg"), image)
+    (labels / "board.txt").write_text(
+        "0 0.25 0.5 0.2 0.4\n1 0.75 0.5 0.2 0.4\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path / "runs" / "train"
+    run_dir.mkdir(parents=True)
+    position_config = {
+        "enabled": True,
+        "auto_generate": True,
+        "product": "Cable1",
+        "area": "A",
+        "calibration_min_samples": 1,
+    }
+    position_config.update(position_overrides)
+    config = {
+        "yolo_training": {
+            "dataset_dir": str(dataset),
+            "class_names": ["Red", "Green"],
+            "imgsz": 640,
+            "position_validation": position_config,
+        }
+    }
+    return config, run_dir
+
+
+def test_generator_defaults_to_human_labels_without_ultralytics(tmp_path):
+    config, run_dir = _human_label_generator_fixture(tmp_path)
+
+    output = PositionConfigGenerator.generate(
+        config,
+        run_dir,
+        logging.getLogger("position_generator_test"),
+    )
+
+    assert output == (run_dir / "auto_position_config.yaml").resolve()
+    generated = yaml.safe_load(output.read_text(encoding="utf-8"))
+    area = generated["Cable1"]["A"]
+    assert area["enabled"] is True
+    assert area["tolerance_unit"] == "pixel"
+    assert area["calibration"]["source"] == "human_verified_yolo_labels"
+    assert set(area["expected_boxes"]) == {"Red", "Green"}
+    manifest = run_dir / "position_calibration_manifest.json"
+    assert manifest.is_file()
+    pos_cfg = config["yolo_training"]["position_validation"]
+    assert pos_cfg["calibration_manifest_path"] == str(manifest.resolve())
+
+
+def test_generator_requires_explicit_iou_tolerance(tmp_path):
+    config, run_dir = _human_label_generator_fixture(tmp_path, mode="iou")
+
+    with pytest.raises(ValueError, match="requires an explicit positive tolerance"):
+        PositionConfigGenerator.generate(
+            config,
+            run_dir,
+            logging.getLogger("position_generator_test"),
+        )

@@ -100,6 +100,27 @@ def _operator_epoch_status(message: str) -> tuple[str, int] | None:
 def _operator_error_message(message: str) -> str:
     """Translate expected safety-gate failures into line-leader guidance."""
     normalized = message.lower()
+    if (
+        "position_training_preflight_failed" in normalized
+        or "position golden manifest has no eligible samples" in normalized
+    ):
+        match = re.search(
+            r"requires at least (\d+) eligible ok golden samples; "
+            r"found (\d+) ok and (\d+) ng",
+            normalized,
+        )
+        counts = (
+            f"\n目前符合資格：OK {match.group(2)} 張、NG {match.group(3)} 張；"
+            f"至少需要 OK {match.group(1)} 張。"
+            if match
+            else ""
+        )
+        return (
+            "位置檢測補訓尚未開始；一般 YOLO 模型與產線設定都不會變更。"
+            f"{counts}\n"
+            "請在人工複核中累積「位置誤判但實物正確」的 OK 案例；"
+            "純 POSITION_SHIFT 的確認 NG 可作為反例，資料足夠後再重新送出。"
+        )
     if "operator_training_preflight_failed" in normalized:
         issues: list[str] = []
         if "operator_feedback_not_actionable" in normalized:
@@ -162,6 +183,25 @@ def _operator_error_message(message: str) -> str:
             "請用目前產線模型重新檢測該圖片後再送出。"
         )
     return message
+
+
+def _operator_error_state(message: str) -> str:
+    """Map recoverable data shortages separately from execution failures."""
+    normalized = message.lower()
+    recoverable_tokens = (
+        "position_training_preflight_failed",
+        "position golden manifest has no eligible samples",
+        "operator_feedback_not_actionable",
+        "split_underrepresented",
+        "class_underrepresented",
+        "not enough independent",
+        "at least three independent",
+    )
+    return (
+        "waiting_feedback"
+        if any(token in normalized for token in recoverable_tokens)
+        else "failed"
+    )
 
 
 class MainWindow(QMainWindow):
@@ -710,7 +750,7 @@ class MainWindow(QMainWindow):
             operator_message = _operator_error_message(str(exc))
             if handoff is not None:
                 self._publish_operator_status(
-                    state="failed",
+                    state=_operator_error_state(str(exc)),
                     message=operator_message.splitlines()[0],
                     error=operator_message,
                 )
@@ -1111,7 +1151,11 @@ class MainWindow(QMainWindow):
         operator_message = _operator_error_message(message)
         if operator_target is not None:
             self._publish_operator_status(
-                state="cancelled" if operator_was_cancelled else "failed",
+                state=(
+                    "cancelled"
+                    if operator_was_cancelled
+                    else _operator_error_state(message)
+                ),
                 message=(
                     "模型更新已停止"
                     if operator_was_cancelled

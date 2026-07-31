@@ -210,6 +210,10 @@ iterative-telemetry==0.0.10
     # via dvc
 jinja2==3.1.6
     # via torch
+jsonargparse[signatures,typing-extensions]==4.34.0
+    # via
+    #   -r requirements.in
+    #   anomalib
 jmespath==1.0.1
     # via
     #   aiobotocore
@@ -252,7 +256,7 @@ networkx==3.6.1
     #   dvc
     #   scikit-image
     #   torch
-numpy==2.2.6
+numpy==1.26.4
     # via
     #   -r requirements.in
     #   albucore
@@ -288,12 +292,12 @@ onnxruntime==1.23.2
     # via -r requirements.in
 onnxsim==0.4.36
     # via -r requirements.in
-opencv-python==4.12.0.88
+opencv-python==4.9.0.80
     # via
     #   -r requirements.in
     #   imgaug
     #   ultralytics
-opencv-python-headless==4.12.0.88
+opencv-python-headless==4.9.0.80
     # via
     #   albucore
     #   albumentations
@@ -489,12 +493,12 @@ tifffile==2025.12.20
     # via scikit-image
 tomlkit==0.13.3
     # via dvc
-torch==2.9.1
+torch==2.4.1
     # via
     #   torchvision
     #   ultralytics
     #   ultralytics-thop
-torchvision==0.24.1
+torchvision==0.19.1
     # via ultralytics
 tqdm==4.67.1
     # via
@@ -530,7 +534,7 @@ tzdata==2025.3
     #   tzlocal
 tzlocal==5.3.1
     # via celery
-ultralytics==8.3.248
+ultralytics==8.3.156
     # via -r requirements.in
 ultralytics-thop==2.0.18
     # via ultralytics

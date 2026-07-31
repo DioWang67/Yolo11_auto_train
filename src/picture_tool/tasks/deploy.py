@@ -13,6 +13,8 @@ import json
 import logging
 import re
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, List, Tuple
@@ -51,6 +53,9 @@ STATION_LOCAL_FIELDS = {
     "buffer_limit",
     "flush_interval",
 }
+DEPLOYMENT_OWNED_FIELDS = frozenset(
+    {"weights", "position_config", "color_model_path"}
+)
 
 
 def _parse_version(filename: str) -> Tuple[int, int, int] | None:
@@ -272,11 +277,195 @@ def _preserve_station_fields(
         if isinstance(configured_fields, list)
         else STATION_LOCAL_FIELDS
     )
+    forbidden_fields = fields & DEPLOYMENT_OWNED_FIELDS
+    if forbidden_fields:
+        raise ValueError(
+            "deploy.station_fields cannot preserve deployment-owned fields: "
+            + ", ".join(sorted(forbidden_fields))
+        )
     merged = dict(generated)
     for field in fields:
         if field in existing:
             merged[field] = existing[field]
     return merged
+
+
+def _position_area_mapping(
+    config: dict[str, Any],
+    product: str,
+    area: str,
+) -> dict[str, Any] | None:
+    position_config = config.get("position_config")
+    if not isinstance(position_config, dict):
+        return None
+    product_config = position_config.get(product)
+    if not isinstance(product_config, dict):
+        return None
+    area_config = product_config.get(area)
+    return area_config if isinstance(area_config, dict) else None
+
+
+def _apply_position_activation_policy(
+    generated: dict[str, Any],
+    existing_config_path: Path,
+    deploy_cfg: dict[str, Any],
+    *,
+    product: str,
+    area: str,
+) -> dict[str, Any]:
+    """Keep runtime activation explicit while still deploying calibrated rules."""
+
+    candidate_area = _position_area_mapping(generated, product, area)
+    if candidate_area is None:
+        return generated
+    policy = str(
+        deploy_cfg.get("position_activation") or "preserve"
+    ).strip().lower()
+    if policy not in {"preserve", "enable", "disable"}:
+        raise ValueError(
+            "deploy.position_activation must be preserve, enable, or disable."
+        )
+
+    enabled = False
+    if policy == "enable":
+        enabled = True
+    elif policy == "disable":
+        enabled = False
+    elif existing_config_path.is_file():
+        try:
+            existing = (
+                yaml.safe_load(existing_config_path.read_text(encoding="utf-8"))
+                or {}
+            )
+        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise ValueError(
+                f"Unable to preserve station position activation: {exc}"
+            ) from exc
+        if isinstance(existing, dict):
+            existing_area = _position_area_mapping(existing, product, area)
+            enabled = bool(
+                existing_area.get("enabled", False)
+                if existing_area is not None
+                else False
+            )
+
+    merged = dict(generated)
+    position_config = dict(merged.get("position_config") or {})
+    product_config = dict(position_config.get(product) or {})
+    updated_area = dict(candidate_area)
+    updated_area["enabled"] = enabled
+    product_config[area] = updated_area
+    position_config[product] = product_config
+    merged["position_config"] = position_config
+    return merged
+
+
+def _preserve_disabled_station_position_contract(
+    generated: dict[str, Any],
+    existing_config_path: Path,
+    deploy_cfg: dict[str, Any],
+    *,
+    product: str,
+    area: str,
+) -> dict[str, Any]:
+    """Preserve an inactive station contract when this job has no golden set."""
+    policy = str(
+        deploy_cfg.get("position_contract_policy") or "validate_candidate"
+    ).strip().lower()
+    if policy == "validate_candidate":
+        return generated
+    if policy != "preserve_disabled_station":
+        raise ValueError(
+            "deploy.position_contract_policy must be validate_candidate or "
+            "preserve_disabled_station."
+        )
+    try:
+        existing = (
+            yaml.safe_load(existing_config_path.read_text(encoding="utf-8")) or {}
+        )
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ValueError(
+            f"Unable to preserve station position contract: {exc}"
+        ) from exc
+    if not isinstance(existing, dict):
+        raise ValueError("Existing station config must be a mapping.")
+    existing_area = _position_area_mapping(existing, product, area)
+    if existing_area is None or bool(existing_area.get("enabled", False)):
+        raise ValueError(
+            "An active or missing station position contract cannot bypass "
+            "position validation."
+        )
+    existing_position = existing.get("position_config")
+    if not isinstance(existing_position, dict):
+        raise ValueError("Existing station position contract is invalid.")
+    merged = dict(generated)
+    merged["position_config"] = existing_position
+    return merged
+
+
+def _load_position_gate(
+    run_dir: Path,
+    *,
+    required: bool,
+) -> tuple[dict[str, Any], Path | None]:
+    path = run_dir / "position_gate.json"
+    if not path.is_file():
+        if required:
+            raise ValueError(f"Position gate report not found: {path}")
+        return {}, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Unable to read position gate report: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Position gate report must contain an object.")
+    if required and payload.get("passed") is not True:
+        failures = payload.get("failures") or []
+        raise ValueError(
+            "Deployment blocked by position gate: "
+            + "; ".join(str(item) for item in failures)
+        )
+    return payload, path
+
+
+def _sha256_json(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verified_position_evidence(
+    gate: dict[str, Any],
+    *,
+    path_field: str,
+    hash_field: str,
+    label: str,
+    required: bool = False,
+) -> tuple[Path | None, str | None]:
+    raw_path = str(gate.get(path_field) or "").strip()
+    if not raw_path:
+        if required:
+            raise ValueError(f"Position gate has no {label} path.")
+        return None, None
+    path = Path(raw_path).resolve()
+    if not path.is_file():
+        raise ValueError(f"Position {label} was not found: {path}")
+    expected_hash = str(gate.get(hash_field) or "").strip().lower()
+    if (
+        len(expected_hash) != 64
+        or any(character not in "0123456789abcdef" for character in expected_hash)
+    ):
+        raise ValueError(f"Position gate has no valid {label} checksum.")
+    actual_hash = _sha256_file(path)
+    if actual_hash != expected_hash:
+        raise ValueError(
+            f"Position {label} checksum changed after gate evaluation."
+        )
+    return path, actual_hash
 
 
 def _load_training_metadata(run_dir: Path) -> dict[str, Any]:
@@ -311,6 +500,197 @@ def _load_evaluation_gate(run_dir: Path, *, required: bool) -> dict[str, Any]:
             + "; ".join(str(item) for item in failures)
         )
     return payload
+
+
+def _load_model_acceptance_report(
+    report_path: Path,
+    *,
+    required: bool,
+) -> dict[str, Any]:
+    """Load and validate the deployment-blocking acceptance decision."""
+    if not report_path.is_file():
+        if required:
+            raise ValueError(
+                f"Model acceptance gate report not found: {report_path}"
+            )
+        return {}
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Unable to read model acceptance gate report: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Model acceptance gate report must be an object.")
+    if required and not payload.get("passed", False):
+        failures = payload.get("failures") or []
+        raise ValueError(
+            "Deployment blocked by model acceptance gate: "
+            + "; ".join(str(item) for item in failures)
+        )
+    return payload
+
+
+def _run_model_acceptance_gate(
+    *,
+    config: dict[str, Any],
+    run_dir: Path,
+    inference_project_root: Path,
+    inference_models_dir: Path,
+    product: str,
+    area: str,
+    candidate_config: dict[str, Any],
+    candidate_weight: Path,
+    color_model: Path | None,
+    logger: logging.Logger,
+) -> tuple[dict[str, Any], Path | None]:
+    """Run the inference-owned headless gate against a job-scoped bundle."""
+    ycfg = config.get("yolo_training", {}) or {}
+    deploy_cfg = ycfg.get("deploy", {}) or {}
+    gate_cfg = deploy_cfg.get("acceptance_gate", {}) or {}
+    if not isinstance(gate_cfg, dict) or not gate_cfg.get("enabled", False):
+        logger.info("Model acceptance gate disabled.")
+        return {}, None
+
+    dataset_root = Path(str(gate_cfg.get("dataset_root") or "")).expanduser()
+    snapshot_manifest = Path(
+        str(gate_cfg.get("snapshot_manifest") or "")
+    ).expanduser()
+    if not dataset_root.is_absolute():
+        dataset_root = (inference_project_root / dataset_root).resolve()
+    else:
+        dataset_root = dataset_root.resolve()
+    if not snapshot_manifest.is_absolute():
+        snapshot_manifest = (dataset_root / snapshot_manifest).resolve()
+    else:
+        snapshot_manifest = snapshot_manifest.resolve()
+    if not dataset_root.is_dir():
+        raise FileNotFoundError(
+            f"Acceptance dataset root not found: {dataset_root}"
+        )
+    if not snapshot_manifest.is_file():
+        raise FileNotFoundError(
+            f"Acceptance snapshot manifest not found: {snapshot_manifest}"
+        )
+
+    runner_path = inference_project_root / "app" / "acceptance" / "headless.py"
+    global_config = inference_project_root / "config.yaml"
+    if not runner_path.is_file() or not global_config.is_file():
+        raise FileNotFoundError(
+            "Inference acceptance runtime is incomplete: "
+            f"runner={runner_path}, config={global_config}"
+        )
+
+    candidate_models_root = run_dir / "acceptance_candidate" / "models"
+    candidate_station_dir = (
+        candidate_models_root / product / area / "yolo"
+    )
+    candidate_config_path = candidate_station_dir / "config.yaml"
+    _write_yaml_atomic(candidate_config_path, candidate_config)
+    report_path = run_dir / "model_acceptance_gate.json"
+
+    command = [
+        sys.executable,
+        "-m",
+        "app.acceptance.headless",
+        "--project-root",
+        str(inference_project_root),
+        "--models-root",
+        str(candidate_models_root),
+        "--global-config",
+        str(global_config),
+        "--color-revisions-root",
+        str(inference_models_dir.parent / ".color_revisions"),
+        "--dataset-root",
+        str(dataset_root),
+        "--snapshot-manifest",
+        str(snapshot_manifest),
+        "--report",
+        str(report_path),
+        "--product",
+        product,
+        "--area",
+        area,
+        "--inference-type",
+        "yolo",
+        "--candidate-version",
+        "candidate",
+        "--candidate-weight",
+        str(candidate_weight),
+        "--candidate-config",
+        str(candidate_config_path),
+        "--min-confirmed",
+        str(int(gate_cfg.get("min_confirmed", 1))),
+        "--max-false-positives",
+        str(int(gate_cfg.get("max_false_positives", 0))),
+        "--max-false-negatives",
+        str(int(gate_cfg.get("max_false_negatives", 0))),
+        "--max-regressions",
+        str(int(gate_cfg.get("max_regressions", 0))),
+    ]
+    if color_model is not None:
+        command.extend(["--color-model", str(color_model)])
+    if not bool(gate_cfg.get("require_all_confirmed", True)):
+        command.append("--allow-pending")
+    if not bool(gate_cfg.get("require_no_errors", True)):
+        command.append("--allow-errors")
+
+    timeout_seconds = max(float(gate_cfg.get("timeout_seconds", 1800.0)), 1.0)
+    logger.info(
+        "Running frozen model acceptance set for %s/%s (%s).",
+        product,
+        area,
+        snapshot_manifest.parent.name,
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=inference_project_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Model acceptance exceeded {timeout_seconds:.0f} seconds."
+        ) from exc
+    runner_log_path = run_dir / "model_acceptance_runner.log"
+    runner_log_path.write_text(
+        completed.stdout
+        + ("\n[stderr]\n" + completed.stderr if completed.stderr else ""),
+        encoding="utf-8",
+    )
+    for line in completed.stdout.splitlines():
+        if line.startswith("[acceptance]"):
+            logger.info("%s", line)
+    if completed.returncode != 0:
+        diagnostic_lines = (
+            completed.stderr.splitlines() or completed.stdout.splitlines()
+        )[-20:]
+        for line in diagnostic_lines:
+            logger.warning("%s", line)
+
+    report = _load_model_acceptance_report(report_path, required=True)
+    if completed.returncode != 0:
+        raise ValueError(
+            "Model acceptance runner failed with exit code "
+            f"{completed.returncode}."
+        )
+    candidate = report.get("candidate") or {}
+    if candidate.get("sha256") != _sha256_file(candidate_weight):
+        raise ValueError(
+            "Model acceptance report does not match the candidate weight."
+        )
+    if candidate.get("runtime_config_sha256") != _sha256_file(
+        candidate_config_path
+    ):
+        raise ValueError(
+            "Model acceptance report does not match the candidate config."
+        )
+    return report, report_path
 
 
 def _verify_deployment_runtime_pair(
@@ -413,6 +793,62 @@ def run_deploy(config: dict, args: Any) -> None:
         logger.error("Failed to read detection config: %s", exc)
         raise
 
+    candidate_position_area = _position_area_mapping(
+        det_cfg_data,
+        product,
+        area,
+    )
+    # A disabled candidate can become enabled through the preserve/enable
+    # activation policy. Therefore every deployed position contract requires
+    # gate evidence, independent of its pre-policy enabled flag.
+    position_contract_policy = str(
+        dcfg.get("position_contract_policy") or "validate_candidate"
+    ).strip().lower()
+    if position_contract_policy not in {
+        "validate_candidate",
+        "preserve_disabled_station",
+    }:
+        raise ValueError(
+            "deploy.position_contract_policy must be validate_candidate or "
+            "preserve_disabled_station."
+        )
+    position_gate_required = (
+        candidate_position_area is not None
+        and position_contract_policy == "validate_candidate"
+    )
+    position_gate, position_gate_path = _load_position_gate(
+        run_dir,
+        required=position_gate_required,
+    )
+    if position_gate:
+        if str(position_gate.get("product") or "") != product:
+            raise ValueError("Position gate product does not match deploy target.")
+        if str(position_gate.get("area") or "") != area:
+            raise ValueError("Position gate area does not match deploy target.")
+    position_report_path, position_report_sha256 = _verified_position_evidence(
+        position_gate,
+        path_field="candidate_report",
+        hash_field="candidate_report_sha256",
+        label="validation evidence",
+        required=position_gate_required,
+    )
+    position_baseline_path, position_baseline_sha256 = (
+        _verified_position_evidence(
+            position_gate,
+            path_field="baseline_report",
+            hash_field="baseline_report_sha256",
+            label="baseline evidence",
+        )
+    )
+    position_calibration_path, position_calibration_sha256 = (
+        _verified_position_evidence(
+            position_gate,
+            path_field="calibration_manifest",
+            hash_field="calibration_manifest_sha256",
+            label="calibration evidence",
+        )
+    )
+
     selected_weights_path = select_runtime_weight(
         run_dir, str(det_cfg_data.get("weights") or "")
     )
@@ -467,6 +903,43 @@ def run_deploy(config: dict, args: Any) -> None:
             f"for {color_cfg_name}."
         )
 
+    candidate_deploy_config = dict(det_cfg_data)
+    candidate_deploy_config["weights"] = str(selected_weights_path.resolve())
+    if color_source is not None and color_cfg_name:
+        candidate_deploy_config["color_model_path"] = str(color_source.resolve())
+    station_config_path = dest_dir / "config.yaml"
+    candidate_deploy_config = _preserve_station_fields(
+        candidate_deploy_config,
+        station_config_path,
+        dcfg,
+    )
+    candidate_deploy_config = _preserve_disabled_station_position_contract(
+        candidate_deploy_config,
+        station_config_path,
+        dcfg,
+        product=product,
+        area=area,
+    )
+    candidate_deploy_config = _apply_position_activation_policy(
+        candidate_deploy_config,
+        station_config_path,
+        dcfg,
+        product=product,
+        area=area,
+    )
+    acceptance_report, acceptance_report_path = _run_model_acceptance_gate(
+        config=config,
+        run_dir=run_dir,
+        inference_project_root=inference_models_dir.parent,
+        inference_models_dir=inference_models_dir,
+        product=product,
+        area=area,
+        candidate_config=candidate_deploy_config,
+        candidate_weight=selected_weights_path,
+        color_model=color_source,
+        logger=logger,
+    )
+
     lock_dir = _acquire_deploy_lock(dest_dir, float(dcfg.get("lock_timeout", 30.0)))
     try:
         version = _resolve_version(
@@ -503,6 +976,18 @@ def run_deploy(config: dict, args: Any) -> None:
         )
 
         weight_sha256 = _atomic_copy_verified(selected_weights_path, versioned_path)
+        accepted_weight_sha256 = (
+            (acceptance_report.get("candidate") or {}).get("sha256")
+            if acceptance_report
+            else None
+        )
+        if (
+            accepted_weight_sha256 is not None
+            and accepted_weight_sha256 != weight_sha256
+        ):
+            raise ValueError(
+                "Candidate weight changed after model acceptance completed."
+            )
         if paired_training_path == versioned_path:
             paired_training_sha256 = weight_sha256
         else:
@@ -552,6 +1037,63 @@ def run_deploy(config: dict, args: Any) -> None:
                     color_cfg_name,
                 )
 
+        position_gate_relative: str | None = None
+        position_report_relative: str | None = None
+        position_baseline_relative: str | None = None
+        position_calibration_relative: str | None = None
+        acceptance_report_relative: str | None = None
+        acceptance_report_sha256: str | None = None
+        evidence_dir = dest_dir / "versions"
+        if acceptance_report_path is not None:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            acceptance_destination = (
+                evidence_dir / f"{versioned_name}.model_acceptance.json"
+            )
+            _atomic_copy_verified(
+                acceptance_report_path,
+                acceptance_destination,
+            )
+            acceptance_report_relative = (
+                f"versions/{acceptance_destination.name}"
+            )
+            acceptance_report_sha256 = _sha256_file(
+                acceptance_destination
+            )
+        if position_gate_path is not None:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            gate_destination = evidence_dir / f"{versioned_name}.position_gate.json"
+            _atomic_copy_verified(position_gate_path, gate_destination)
+            position_gate_relative = f"versions/{gate_destination.name}"
+        if position_report_path is not None:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            report_destination = (
+                evidence_dir / f"{versioned_name}.position_validation.json"
+            )
+            _atomic_copy_verified(position_report_path, report_destination)
+            position_report_relative = f"versions/{report_destination.name}"
+            position_report_sha256 = _sha256_file(report_destination)
+        if position_baseline_path is not None:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            baseline_destination = (
+                evidence_dir / f"{versioned_name}.position_baseline.json"
+            )
+            _atomic_copy_verified(position_baseline_path, baseline_destination)
+            position_baseline_relative = f"versions/{baseline_destination.name}"
+            position_baseline_sha256 = _sha256_file(baseline_destination)
+        if position_calibration_path is not None:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            calibration_destination = (
+                evidence_dir / f"{versioned_name}.position_calibration.json"
+            )
+            _atomic_copy_verified(
+                position_calibration_path,
+                calibration_destination,
+            )
+            position_calibration_relative = (
+                f"versions/{calibration_destination.name}"
+            )
+            position_calibration_sha256 = _sha256_file(calibration_destination)
+
         deploy_config = dict(det_cfg_data)
         deploy_config["weights"] = (
             f"models/{product}/{area}/yolo/weights/{versioned_name}"
@@ -563,6 +1105,30 @@ def run_deploy(config: dict, args: Any) -> None:
 
         config_path = dest_dir / "config.yaml"
         deploy_config = _preserve_station_fields(deploy_config, config_path, dcfg)
+        deploy_config = _preserve_disabled_station_position_contract(
+            deploy_config,
+            config_path,
+            dcfg,
+            product=product,
+            area=area,
+        )
+        deploy_config = _apply_position_activation_policy(
+            deploy_config,
+            config_path,
+            dcfg,
+            product=product,
+            area=area,
+        )
+        deployed_position_area = _position_area_mapping(
+            deploy_config,
+            product,
+            area,
+        )
+        position_config_sha256 = (
+            _sha256_json(deploy_config.get("position_config"))
+            if deployed_position_area is not None
+            else None
+        )
         training_metadata = _load_training_metadata(run_dir)
         trained_at = training_metadata.get(
             "trained_at"
@@ -613,10 +1179,56 @@ def run_deploy(config: dict, args: Any) -> None:
             "training_config_hash": training_metadata.get("config_hash"),
             "evaluation_metrics": evaluation_gate.get("metrics", {}),
             "evaluation_gate_passed": evaluation_gate.get("passed"),
+            "model_acceptance_gate_passed": (
+                acceptance_report.get("passed")
+                if acceptance_report
+                else None
+            ),
+            "model_acceptance_metrics": acceptance_report.get("metrics", {}),
+            "model_acceptance_baseline_metrics": acceptance_report.get(
+                "baseline_metrics", {}
+            ),
+            "model_acceptance_report": acceptance_report_relative,
+            "model_acceptance_report_sha256": acceptance_report_sha256,
+            "model_acceptance_snapshot_sha256": (
+                (acceptance_report.get("dataset") or {}).get(
+                    "snapshot_manifest_sha256"
+                )
+                if acceptance_report
+                else None
+            ),
             "config_snapshot": config_snapshot_relative,
             "color_model_file": color_cfg_name or None,
             "color_model_sha256": color_model_sha256,
             "color_model_source": color_source_kind if color_model_sha256 else None,
+            "position_runtime_enabled": bool(
+                deployed_position_area.get("enabled", False)
+                if deployed_position_area is not None
+                else False
+            ),
+            "position_config_sha256": position_config_sha256,
+            "position_gate_required": position_gate_required,
+            "position_gate_passed": (
+                position_gate.get("passed")
+                if position_gate
+                else None
+            ),
+            "position_gate_sha256": (
+                _sha256_file(position_gate_path)
+                if position_gate_path is not None
+                else None
+            ),
+            "position_gate_report": position_gate_relative,
+            "position_validation_sha256": position_report_sha256,
+            "position_validation_report": position_report_relative,
+            "position_baseline_sha256": position_baseline_sha256,
+            "position_baseline_report": position_baseline_relative,
+            "position_calibration_sha256": position_calibration_sha256,
+            "position_calibration_manifest": position_calibration_relative,
+            "position_metrics": position_gate.get("metrics", {}),
+            "position_baseline_metrics": position_gate.get(
+                "baseline_metrics"
+            ),
         }
         # Each deployed weight keeps immutable metadata and the matching runtime
         # config. This makes later rollback deterministic instead of guessing
