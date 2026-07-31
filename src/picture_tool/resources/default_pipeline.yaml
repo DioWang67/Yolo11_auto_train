@@ -269,6 +269,16 @@ yolo_training:
     area: null
     imgsz: 640
     sample_dir: null
+    golden_ok_dir: null
+    golden_ng_dir: null
+    golden_manifest_path: null
+    golden_manifest_image_dir: null
+    calibration_source: labels
+    calibration_image_dir: null
+    calibration_label_dir: null
+    calibration_min_samples: 3
+    calibration_require_all_classes: true
+    calibration_exclude_augmented: true
     config_path: ./models/yolo/position_config.yaml
     config: {}
     output_dir: ./runs/project/quality/position
@@ -277,6 +287,16 @@ yolo_training:
     conf: 0.25
     tolerance_override: null
     auto_generate: true
+    gate:
+      enabled: true
+      min_ok_samples: 1
+      max_ok_false_reject_rate: 0.0
+      min_ng_samples: 0
+      min_ng_recall: 0.0
+      require_baseline: false
+      max_ok_false_reject_regression: 0.0
+      max_ng_recall_regression: 0.0
+      require_disjoint_calibration: true
   export_detection_config:
     enabled: true
     output_path: null  # default to run directory when null

@@ -3,9 +3,12 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from picture_tool.gui.operator_handoff import (
     OperatorHandoffError,
+    _find_completed_job_checkpoint,
+    _find_incomplete_job_checkpoint,
     apply_handoff_to_config,
     load_operator_handoff,
     materialize_job_dataset_snapshot,
@@ -49,6 +52,16 @@ def _write_handoff(
     deployed_weights = inference_models / product / area / "yolo" / "weights"
     deployed_weights.mkdir(parents=True, exist_ok=True)
     (deployed_weights / "best.pt").write_bytes(b"deployed-model")
+    (deployed_weights.parent / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "position_config": {
+                    product: {area: {"enabled": False}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     path = training_root / "handoff.json"
     payload = {
         "schema_version": 1,
@@ -91,6 +104,7 @@ def test_handoff_prepares_split_train_and_safe_deploy(tmp_path, monkeypatch):
     assert deploy["product"] == "Cable1"
     assert deploy["area"] == "A"
     assert deploy["preserve_station_settings"] is True
+    assert deploy["position_activation"] == "preserve"
     assert deploy["runtime_pair_verification"]["enabled"] is True
     assert deploy["force"] is False
     assert prepared["yolo_training"]["export_onnx"] == {
@@ -100,6 +114,14 @@ def test_handoff_prepares_split_train_and_safe_deploy(tmp_path, monkeypatch):
     assert prepared["yolo_training"]["export_detection_config"][
         "weights_name"
     ] == "best.onnx"
+    position = prepared["yolo_training"]["position_validation"]
+    assert position["calibration_source"] == "labels"
+    assert position["calibration_min_samples"] == 3
+    assert position["calibration_require_all_classes"] is True
+    assert position["gate"]["enabled"] is False
+    assert position["gate"]["min_ok_samples"] == 10
+    assert position["gate"]["max_ok_false_reject_rate"] == 0.0
+    assert position["gate"]["require_disjoint_calibration"] is True
     assert Path(prepared["yolo_training"]["model"]).name == "best.pt"
     assert prepared["dataset_readiness"]["require_review_manifest"] is True
     assert prepared["dataset_readiness"]["min_instances_per_class"] == 5
@@ -132,6 +154,123 @@ def test_handoff_prepares_split_train_and_safe_deploy(tmp_path, monkeypatch):
     assert Path(resolved["qc_summary"]["output_path"]) == (
         Path("runs") / "Cable1" / "A" / "quality" / "qc_summary.json"
     )
+    resolved_position = resolved["yolo_training"]["position_validation"]
+    assert Path(resolved_position["golden_manifest_path"]) == (
+        dataset_root / "metadata" / "review_dataset_manifest.csv"
+    )
+    assert Path(resolved_position["golden_manifest_image_dir"]) == (
+        dataset_root / "split" / "test" / "images"
+    )
+
+
+def test_handoff_skips_position_gate_when_station_is_disabled_and_no_goldens(
+    tmp_path, monkeypatch
+):
+    training_root = tmp_path / "train"
+    path = _write_handoff(training_root)
+    handoff = load_operator_handoff(path, training_root=training_root)
+    target = handoff.selected_target
+    station_config = (
+        handoff.inference_models_dir
+        / target.product
+        / target.area
+        / "yolo"
+        / "config.yaml"
+    )
+    station_config.parent.mkdir(parents=True, exist_ok=True)
+    station_config.write_text(
+        yaml.safe_dump(
+            {
+                "position_config": {
+                    target.product: {
+                        target.area: {
+                            "enabled": False,
+                            "mode": "center",
+                            "tolerance": 28.0,
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(training_root)
+
+    prepared = apply_handoff_to_config({"yolo_training": {}}, handoff)
+
+    position = prepared["yolo_training"]["position_validation"]
+    deploy = prepared["yolo_training"]["deploy"]
+    assert prepared["operator_feedback"]["position_golden_count"] == 0
+    assert position["enabled"] is False
+    assert position["gate"]["enabled"] is False
+    assert deploy["position_contract_policy"] == "preserve_disabled_station"
+
+
+def test_resume_checkpoint_must_belong_to_the_same_job_snapshot(
+    tmp_path, monkeypatch
+):
+    training_root = tmp_path / "train"
+    path = _write_handoff(training_root)
+    monkeypatch.chdir(training_root)
+    handoff = load_operator_handoff(path, training_root=training_root)
+    target = handoff.selected_target
+
+    matching_run = training_root / "runs" / "Cable1" / "A" / "train3"
+    (matching_run / "weights").mkdir(parents=True)
+    checkpoint = matching_run / "weights" / "last.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    (matching_run / "weights" / "best.pt").write_bytes(b"best")
+    (matching_run / "args.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "data": str((target.dataset_root / "split" / "data.yaml").resolve()),
+                "epochs": 20,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (matching_run / "results.csv").write_text(
+        "epoch,metric\n1,0.1\n2,0.2\n",
+        encoding="utf-8",
+    )
+
+    unrelated_run = training_root / "runs" / "Cable1" / "A" / "train4"
+    (unrelated_run / "weights").mkdir(parents=True)
+    (unrelated_run / "weights" / "last.pt").write_bytes(b"other")
+    (unrelated_run / "args.yaml").write_text(
+        yaml.safe_dump({"data": str(tmp_path / "other" / "data.yaml"), "epochs": 20}),
+        encoding="utf-8",
+    )
+    (unrelated_run / "results.csv").write_text(
+        "epoch,metric\n1,0.1\n10,0.2\n",
+        encoding="utf-8",
+    )
+
+    resume = _find_incomplete_job_checkpoint(
+        handoff,
+        configured_epochs=20,
+    )
+    assert resume is not None
+    assert resume.path == checkpoint.resolve()
+    assert resume.completed_epochs == 2
+    assert resume.native_resume is False
+
+    (matching_run / "last_run_metadata.json").write_text(
+        json.dumps({"trained_at": "2026-07-27T16:03:28+08:00"}),
+        encoding="utf-8",
+    )
+
+    assert (
+        _find_incomplete_job_checkpoint(
+            handoff,
+            configured_epochs=20,
+        )
+        is None
+    )
+    assert _find_completed_job_checkpoint(
+        handoff,
+        configured_epochs=20,
+    ) == (matching_run / "weights" / "best.pt").resolve()
 
 
 def test_handoff_rejects_dataset_outside_training_data(tmp_path):
@@ -252,6 +391,16 @@ def _write_schema3_handoff(
     weights = models / "Cable1" / "A" / "yolo" / "weights"
     weights.mkdir(parents=True, exist_ok=True)
     (weights / "best.pt").write_bytes(b"model")
+    (weights.parent / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "position_config": {
+                    "Cable1": {"A": {"enabled": False}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     job_id = "20260715T120000Z-testjob"
     job_dir = training_root / "data" / ".operator_handoff" / "jobs" / job_id
     job_dir.mkdir(parents=True)
@@ -558,6 +707,147 @@ def test_schema4_rejects_missing_or_unsafe_training_options(tmp_path):
         load_operator_handoff(handoff_path, training_root=training_root)
 
 
+def _upgrade_handoff_to_schema5(
+    handoff_path: Path,
+    *,
+    position_training_mode: str,
+    position_activation: str = "preserve",
+) -> dict:
+    payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 5
+    payload["training_options"] = {
+        "epochs": 20,
+        "augmentations_per_image": 20,
+        "batch": 8,
+        "imgsz": 640,
+        "position_training_mode": position_training_mode,
+        "position_activation": position_activation,
+    }
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def _write_station_position_state(
+    models_dir: Path, *, enabled: bool
+) -> None:
+    config_path = models_dir / "Cable1" / "A" / "yolo" / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "position_config": {
+                    "Cable1": {"A": {"enabled": enabled}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_schema5_forced_position_mode_fails_before_training_without_ok_goldens(
+    tmp_path,
+):
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = _upgrade_handoff_to_schema5(
+        handoff_path,
+        position_training_mode="calibrate_validate",
+    )
+    _write_station_position_state(
+        Path(payload["inference_models_dir"]), enabled=False
+    )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    with pytest.raises(
+        OperatorHandoffError,
+        match=r"requires at least 10 eligible OK golden samples; found 0 OK",
+    ):
+        apply_handoff_to_config({"yolo_training": {}}, handoff)
+
+
+def test_legacy_active_position_station_fails_before_training_without_goldens(
+    tmp_path,
+):
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = json.loads(handoff_path.read_text(encoding="utf-8"))
+    _write_station_position_state(
+        Path(payload["inference_models_dir"]), enabled=True
+    )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    with pytest.raises(
+        OperatorHandoffError,
+        match=r"requires at least 10 eligible OK golden samples; found 0 OK",
+    ):
+        apply_handoff_to_config({"yolo_training": {}}, handoff)
+
+
+def test_schema5_yolo_only_rejects_an_active_position_station(tmp_path):
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = _upgrade_handoff_to_schema5(
+        handoff_path,
+        position_training_mode="yolo_only",
+    )
+    _write_station_position_state(
+        Path(payload["inference_models_dir"]), enabled=True
+    )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    with pytest.raises(OperatorHandoffError, match="explicitly disabled"):
+        apply_handoff_to_config({"yolo_training": {}}, handoff)
+
+
+def test_schema5_position_goldens_are_reserved_for_test_and_enable_after_gate(
+    tmp_path,
+):
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = _upgrade_handoff_to_schema5(
+        handoff_path,
+        position_training_mode="calibrate_validate",
+        position_activation="enable_after_gate",
+    )
+    _write_station_position_state(
+        Path(payload["inference_models_dir"]), enabled=False
+    )
+    manifest = (
+        training_root
+        / "data"
+        / "Cable1"
+        / "A"
+        / "metadata"
+        / "review_dataset_manifest.csv"
+    )
+    manifest.write_text(
+        "sample_id,output_image,output_label,annotation_status,review_label\n"
+        "ready1,,,verified_annotation,false_positive\n",
+        encoding="utf-8",
+    )
+    with manifest.open("a", encoding="utf-8") as handle:
+        for index in range(10):
+            handle.write(
+                f"position-ok-{index},,,verified_snapshot,position_false_reject\n"
+            )
+    payload["targets"][0]["total_ready_count"] = 11
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+    prepared = apply_handoff_to_config({"yolo_training": {}}, handoff)
+
+    assert prepared["operator_feedback"]["position_golden_ok_count"] == 10
+    assert prepared["train_test_split"]["force_train_sample_ids"] == ["ready1"]
+    assert prepared["train_test_split"]["force_test_sample_ids"] == [
+        f"position-ok-{index}" for index in range(10)
+    ]
+    position = prepared["yolo_training"]["position_validation"]
+    deploy = prepared["yolo_training"]["deploy"]
+    assert position["enabled"] is True
+    assert position["gate"]["enabled"] is True
+    assert deploy["position_contract_policy"] == "validate_candidate"
+    assert deploy["position_activation"] == "enable"
+
+
 def test_handoff_rejects_confirmation_only_feedback(tmp_path: Path) -> None:
     training_root = tmp_path / "train"
     handoff_path = _write_schema3_handoff(training_root)
@@ -580,6 +870,36 @@ def test_handoff_rejects_confirmation_only_feedback(tmp_path: Path) -> None:
         apply_handoff_to_config({"yolo_training": {"class_names": ["Black"]}}, handoff)
 
 
+def test_legacy_position_feedback_waits_before_training_until_minimum_is_met(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    manifest = (
+        training_root
+        / "data"
+        / "Cable1"
+        / "A"
+        / "metadata"
+        / "review_dataset_manifest.csv"
+    )
+    manifest.write_text(
+        "sample_id,output_image,output_label,annotation_status,review_label\n"
+        "ready1,,,verified_snapshot,position_false_reject\n",
+        encoding="utf-8",
+    )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    with pytest.raises(
+        OperatorHandoffError,
+        match=r"requires at least 10 eligible OK golden samples; found 1 OK",
+    ):
+        apply_handoff_to_config(
+            {"yolo_training": {"class_names": ["Black"]}},
+            handoff,
+        )
+
+
 def test_handoff_rejects_runtime_onnx_without_exact_paired_pt(tmp_path) -> None:
     training_root = tmp_path / "train"
     handoff_path = _write_handoff(training_root)
@@ -588,7 +908,14 @@ def test_handoff_rejects_runtime_onnx_without_exact_paired_pt(tmp_path) -> None:
     runtime = station / "weights" / "best.onnx"
     runtime.write_bytes(b"runtime")
     (station / "config.yaml").write_text(
-        "weights: models/Cable1/A/yolo/weights/best.onnx\n",
+        yaml.safe_dump(
+            {
+                "weights": "models/Cable1/A/yolo/weights/best.onnx",
+                "position_config": {
+                    "Cable1": {"A": {"enabled": False}}
+                },
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -609,7 +936,16 @@ def test_handoff_accepts_checksum_verified_runtime_and_training_pair(
     runtime = station / "weights" / "Cable1_A_v1.0.0_20260715.onnx"
     runtime.write_bytes(b"runtime")
     (station / "config.yaml").write_text(
-        f"weights: models/Cable1/A/yolo/weights/{runtime.name}\n",
+        yaml.safe_dump(
+            {
+                "weights": (
+                    f"models/Cable1/A/yolo/weights/{runtime.name}"
+                ),
+                "position_config": {
+                    "Cable1": {"A": {"enabled": False}}
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (station / "deployment_manifest.yaml").write_text(

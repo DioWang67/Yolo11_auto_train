@@ -3,7 +3,10 @@ from picture_tool.gui.readiness import (
     count_images,
     format_readiness_preview,
 )
-from picture_tool.gui.main_window import _operator_error_message
+from picture_tool.gui.main_window import (
+    _operator_error_message,
+    _operator_error_state,
+)
 
 
 def test_operator_error_message_keeps_line_leader_guidance_actionable():
@@ -36,6 +39,24 @@ def test_operator_error_message_explains_model_pair_and_feedback_preflight():
     assert "同版本的 PT" in message
     assert "成對驗證與部署工具" in message
     assert "產線模型不會變更" in message
+
+
+def test_position_preflight_shortage_waits_for_feedback_with_counts():
+    raw = (
+        "position_training_preflight_failed: position calibration/validation "
+        "requires at least 10 eligible OK golden samples; found 0 OK and 0 NG."
+    )
+
+    message = _operator_error_message(raw)
+
+    assert _operator_error_state(raw) == "waiting_feedback"
+    assert "位置檢測補訓尚未開始" in message
+    assert "OK 0 張、NG 0 張" in message
+    assert "至少需要 OK 10 張" in message
+
+
+def test_unexpected_pipeline_error_remains_failed():
+    assert _operator_error_state("CUDA out of memory") == "failed"
 
 
 def test_count_images_recurses_supported_extensions(tmp_path):

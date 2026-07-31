@@ -1,6 +1,7 @@
 import logging
 import json
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
@@ -14,8 +15,8 @@ from picture_tool.tracking.experiment_tracker import get_tracker
 
 
 # Define a stop exception for cleaner handling
-class TrainingInterrupted(Exception):
-    pass
+class TrainingInterrupted(RuntimeError):
+    """Raised after a cooperative stop leaves a resumable YOLO checkpoint."""
 
 
 import os  # noqa: E402
@@ -72,6 +73,12 @@ def _parse_yolo_config(config: dict) -> dict:
         "close_mosaic": int(ycfg.get("close_mosaic", 10)),
         "cos_lr": bool(ycfg.get("cos_lr", False)),
         "warmup_epochs": float(ycfg.get("warmup_epochs", 3.0)),
+        "resume_checkpoint": str(ycfg.get("resume_checkpoint") or "").strip(),
+        "resume_completed_epochs": int(ycfg.get("resume_completed_epochs") or 0),
+        "resume_completed_before_run": int(
+            ycfg.get("resume_completed_before_run") or 0
+        ),
+        "resume_native": bool(ycfg.get("resume_native", False)),
     }
     for field in ("epochs", "imgsz", "batch", "patience"):
         if params[field] <= 0:
@@ -85,6 +92,24 @@ def _parse_yolo_config(config: dict) -> dict:
             raise ValueError(f"yolo_training.{field} must be between 0 and 1")
     if params["warmup_epochs"] < 0.0 or params["close_mosaic"] < 0:
         raise ValueError("YOLO warmup/close_mosaic settings cannot be negative")
+    if params["resume_checkpoint"]:
+        checkpoint = Path(params["resume_checkpoint"]).expanduser().resolve()
+        if checkpoint.suffix.lower() != ".pt" or not checkpoint.is_file():
+            raise ValueError(
+                "yolo_training.resume_checkpoint must reference an existing .pt file"
+            )
+        params["resume_checkpoint"] = str(checkpoint)
+        if not 0 <= params["resume_completed_epochs"] < params["epochs"]:
+            raise ValueError(
+                "yolo_training.resume_completed_epochs must be between zero "
+                "and the requested epoch count"
+            )
+        if not 0 <= params["resume_completed_before_run"] <= params[
+            "resume_completed_epochs"
+        ]:
+            raise ValueError(
+                "yolo_training.resume_completed_before_run is invalid"
+            )
     return params
 
 
@@ -132,12 +157,38 @@ def _build_yolo_model(model_cfg: str) -> str:
     return str(model_cfg)
 
 
-def _attach_yolo_callbacks(model: Any, logger: logging.Logger, stop_event: Any) -> None:
+def _attach_yolo_callbacks(
+    model: Any,
+    logger: logging.Logger,
+    stop_event: Any,
+    *,
+    data_yaml: Path,
+    requested_total_epochs: int,
+    completed_before_run: int,
+) -> None:
     """Attach required lifecycle callbacks for logging and cancellation to YOLO."""
     tb_state = {"batch": 0}
 
     def on_train_start(trainer):
         logger.info("  [YOLO Lifecycle] Training successfully started.")
+        run_dir = Path(str(trainer.save_dir)).resolve()
+        lineage_path = run_dir / "operator_resume_lineage.json"
+        try:
+            lineage_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "data_yaml": str(data_yaml.resolve()),
+                        "requested_total_epochs": requested_total_epochs,
+                        "completed_before_run": completed_before_run,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("Unable to persist resume lineage: %s", exc)
 
     def on_train_epoch_start(trainer):
         epoch = getattr(trainer, "epoch", 0) + 1
@@ -186,11 +237,26 @@ def _attach_yolo_callbacks(model: Any, logger: logging.Logger, stop_event: Any) 
         except (AttributeError, TypeError) as e:
             logger.debug(f"Ignoring batch callback attribute error: {e}")
 
+    def on_model_save(trainer):
+        if not (stop_event and stop_event.is_set()):
+            return
+        source = Path(str(trainer.last)).resolve()
+        destination = source.with_name("last.resume.pt")
+        if not source.is_file():
+            logger.warning("Unable to preserve resume checkpoint; last.pt is missing.")
+            return
+        try:
+            shutil.copy2(source, destination)
+            logger.info("Preserved native resume checkpoint: %s", destination)
+        except OSError as exc:
+            logger.warning("Unable to preserve native resume checkpoint: %s", exc)
+
     try:
         model.add_callback("on_train_start", on_train_start)
         model.add_callback("on_train_epoch_start", on_train_epoch_start)
         model.add_callback("on_train_epoch_end", on_train_epoch_end)
         model.add_callback("on_train_batch_end", on_train_batch_end)
+        model.add_callback("on_model_save", on_model_save)
     except AttributeError as e:
         logger.warning(
             f"Could not attach progress callbacks to YOLO model (not supported): {e}"
@@ -211,7 +277,8 @@ def train_yolo(
     # 1. Parse and Validate Configurations
     params = _parse_yolo_config(config)
     names = _prepare_dataset_names(params["dataset_dir"], params["names"], logger)
-    model_arg = _build_yolo_model(params["model_cfg"])
+    resume_checkpoint = params["resume_checkpoint"]
+    model_arg = resume_checkpoint or _build_yolo_model(params["model_cfg"])
 
     # 2. Prepare data.yaml
     data_yaml = _ensure_data_yaml(params["dataset_dir"], names)
@@ -250,30 +317,61 @@ def train_yolo(
     model = yolo_instance if yolo_instance else model_factory(model_arg)
 
     stop_event = getattr(args, "stop_event", None)
-    _attach_yolo_callbacks(model, logger, stop_event)
+    native_resume = bool(params["resume_native"])
+    completed_epochs = int(params["resume_completed_epochs"])
+    completed_before_run = (
+        int(params["resume_completed_before_run"])
+        if native_resume
+        else completed_epochs
+    )
+    _attach_yolo_callbacks(
+        model,
+        logger,
+        stop_event,
+        data_yaml=data_yaml,
+        requested_total_epochs=params["epochs"],
+        completed_before_run=completed_before_run,
+    )
 
     # 5. Execute Training
+    training_arguments = {
+        "data": str(data_yaml),
+        "epochs": (
+            params["epochs"]
+            if native_resume
+            else params["epochs"] - completed_epochs
+        ),
+        "imgsz": params["imgsz"],
+        "batch": params["batch"],
+        "device": params["device"],
+        "workers": params["workers"],
+        "project": params["project"],
+        "name": params["name"],
+        "exist_ok": False,
+        "optimizer": params["optimizer"],
+        "lr0": params["lr0"],
+        "lrf": params["lrf"],
+        "patience": params["patience"],
+        "freeze": params["freeze"],
+        "mosaic": params["mosaic"],
+        "fliplr": params["fliplr"],
+        "close_mosaic": params["close_mosaic"],
+        "cos_lr": params["cos_lr"],
+        "warmup_epochs": params["warmup_epochs"],
+    }
+    if resume_checkpoint and native_resume:
+        training_arguments["resume"] = True
+        logger.info("Resuming YOLO training from checkpoint: %s", resume_checkpoint)
+    elif resume_checkpoint:
+        logger.warning(
+            "Checkpoint optimizer state is unavailable; continuing from epoch "
+            "weights for the remaining %d epochs.",
+            training_arguments["epochs"],
+        )
+
     try:
         train_results = model.train(
-            data=str(data_yaml),
-            epochs=params["epochs"],
-            imgsz=params["imgsz"],
-            batch=params["batch"],
-            device=params["device"],
-            workers=params["workers"],
-            project=params["project"],
-            name=params["name"],
-            exist_ok=False,
-            optimizer=params["optimizer"],
-            lr0=params["lr0"],
-            lrf=params["lrf"],
-            patience=params["patience"],
-            freeze=params["freeze"],
-            mosaic=params["mosaic"],
-            fliplr=params["fliplr"],
-            close_mosaic=params["close_mosaic"],
-            cos_lr=params["cos_lr"],
-            warmup_epochs=params["warmup_epochs"],
+            **training_arguments,
         )
     except RuntimeError as e:
         # Pass up specific runtime errors from Ultralytics (e.g., CUDA OOM)
@@ -282,11 +380,9 @@ def train_yolo(
         logger.error(f"Unexpected training failure: {e}")
         raise RuntimeError(f"YOLO training failed due to unforeseen error: {e}") from e
 
-    # 6. Finalize Outputs
-    if stop_event and stop_event.is_set():
-        logger.info("Training interrupted by user (graceful shutdown).")
-        return Path(params["project"]) / params["name"]
-
+    # 6. Resolve the actual Ultralytics run before handling interruption.
+    # With exist_ok=False the directory can be train2/train3/etc.; returning the
+    # configured base name would detach a resume request from its checkpoint.
     run_dir: Optional[Path] = None
     if hasattr(train_results, "save_dir"):
         candidate = getattr(train_results, "save_dir")
@@ -301,6 +397,17 @@ def train_yolo(
         run_dir = Path(str(trainer_obj.save_dir)).resolve()
     if run_dir is None:
         run_dir = (Path(params["project"]) / params["name"]).resolve()
+    if stop_event and stop_event.is_set():
+        tracker.end_run()
+        checkpoint = run_dir / "weights" / "last.pt"
+        if not checkpoint.is_file():
+            raise TrainingInterrupted(
+                "Training stopped safely, but no resumable last.pt was produced."
+            )
+        logger.info("Training interrupted safely; checkpoint: %s", checkpoint)
+        raise TrainingInterrupted(
+            f"Training stopped safely; resume checkpoint: {checkpoint}"
+        )
     logger.info(f"Training completed. Run directory: {run_dir}")
 
     # Record Robust Caching Metadata

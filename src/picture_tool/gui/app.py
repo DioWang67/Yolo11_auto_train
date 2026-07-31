@@ -29,15 +29,18 @@ def _apply_background_resource_policy() -> None:
         return
     try:
         import ctypes
+        from ctypes import wintypes
 
         below_normal_priority_class = 0x00004000
-        windll = getattr(ctypes, "windll", None)
-        if windll is None:
-            raise OSError("ctypes.windll is unavailable")
-        kernel32 = windll.kernel32
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetPriorityClass.restype = wintypes.BOOL
         process = kernel32.GetCurrentProcess()
         if not kernel32.SetPriorityClass(process, below_normal_priority_class):
-            raise OSError("SetPriorityClass returned false")
+            error_code = ctypes.get_last_error()
+            raise OSError(error_code, "SetPriorityClass failed")
     except (AttributeError, OSError) as exc:
         print(
             f"WARNING: unable to lower background training priority: {exc}",

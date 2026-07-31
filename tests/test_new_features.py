@@ -24,12 +24,32 @@ def test_pydantic_invalid_config():
             "class_names": [],  # Should fail
         }
     }
-    # We expect some error (ValueError or Pydantic ValidationError)
-    try:
+    with pytest.raises(ValueError, match="Config validation failed"):
         validate_config_schema(cfg, strict=True)
-        assert False, "Should have raised ValidationError"
-    except (ValueError, Exception):
-        pass
+
+
+@pytest.mark.parametrize(
+    "position_validation",
+    [
+        {"calibration_source": "challenger_predictions"},
+        {"calibration_min_samples": 0},
+        {"gate": {"max_ok_false_reject_rate": 1.1}},
+        {"gate": {"min_ng_recall": -0.1}},
+        {"mode": "rectangle"},
+        {"tolerance_unit": "millimeter"},
+        {"tolerance": -1},
+        {"conf": 1.1},
+    ],
+)
+def test_position_gate_config_rejects_unsafe_values(position_validation):
+    cfg = {
+        "yolo_training": {
+            "position_validation": position_validation,
+        }
+    }
+
+    with pytest.raises(ValueError, match="Config validation failed"):
+        validate_config_schema(cfg, strict=True)
 
 
 def test_serving_endpoint():

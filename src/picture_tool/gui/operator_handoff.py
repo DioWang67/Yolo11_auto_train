@@ -47,6 +47,24 @@ YOLO_IMAGE_SUFFIXES = frozenset(
     {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 )
 TERMINAL_OPERATOR_JOB_STATES = frozenset({"deployed", "failed", "cancelled"})
+POSITION_MODE_AUTO = "auto"
+POSITION_MODE_YOLO_ONLY = "yolo_only"
+POSITION_MODE_CALIBRATE_VALIDATE = "calibrate_validate"
+POSITION_TRAINING_MODES = frozenset(
+    {
+        POSITION_MODE_AUTO,
+        POSITION_MODE_YOLO_ONLY,
+        POSITION_MODE_CALIBRATE_VALIDATE,
+    }
+)
+POSITION_ACTIVATION_PRESERVE = "preserve"
+POSITION_ACTIVATION_ENABLE_AFTER_GATE = "enable_after_gate"
+POSITION_ACTIVATION_MODES = frozenset(
+    {
+        POSITION_ACTIVATION_PRESERVE,
+        POSITION_ACTIVATION_ENABLE_AFTER_GATE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +75,30 @@ class OperatorTrainingOptions:
     augmentations_per_image: int = 20
     batch: int = 8
     imgsz: int = 640
+    position_training_mode: str = POSITION_MODE_AUTO
+    position_activation: str = POSITION_ACTIVATION_PRESERVE
+
+
+@dataclass(frozen=True)
+class PositionGoldenSummary:
+    """Immutable position-golden cohorts resolved from the review manifest."""
+
+    ok_sample_ids: tuple[str, ...] = ()
+    ng_sample_ids: tuple[str, ...] = ()
+
+    @property
+    def all_sample_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(set(self.ok_sample_ids) | set(self.ng_sample_ids)))
+
+
+@dataclass(frozen=True)
+class OperatorResumeCheckpoint:
+    """A checkpoint proven to belong to one operator job snapshot."""
+
+    path: Path
+    completed_epochs: int
+    completed_before_run: int
+    native_resume: bool
 
 
 @dataclass(frozen=True)
@@ -90,6 +132,7 @@ class OperatorHandoff:
     job_id: str = ""
     status_path: Path | None = None
     training_options: OperatorTrainingOptions = OperatorTrainingOptions()
+    schema_version: int = 1
 
     @property
     def selected_target(self) -> OperatorTarget:
@@ -172,32 +215,52 @@ def resolve_latest_operator_handoff(training_root: str | Path) -> Path:
 
 
 def _load_training_options(
-    value: Any, *, required: bool
+    value: Any, *, schema_version: int
 ) -> OperatorTrainingOptions:
-    """Validate the schema-v4 training options without trusting GUI input."""
+    """Validate job settings without trusting inference-side GUI input."""
+    required = schema_version >= 4
     if value is None:
         if required:
-            raise OperatorHandoffError("Schema-v4 handoff is missing training_options.")
+            raise OperatorHandoffError(
+                f"Schema-v{schema_version} handoff is missing training_options."
+            )
         return OperatorTrainingOptions()
     if not isinstance(value, dict):
         raise OperatorHandoffError("training_options must be a mapping.")
-    allowed = {"epochs", "augmentations_per_image", "batch", "imgsz"}
+    integer_options = {"epochs", "augmentations_per_image", "batch", "imgsz"}
+    string_options = {"position_training_mode", "position_activation"}
+    allowed = integer_options | string_options
     unexpected = set(value) - allowed
     if unexpected:
         raise OperatorHandoffError(
             "Unsupported training option(s): " + ", ".join(sorted(unexpected))
         )
-    missing = allowed - set(value)
+    required_options = set(integer_options)
+    if schema_version >= 5:
+        required_options.update(string_options)
+    missing = required_options - set(value)
     if required and missing:
         raise OperatorHandoffError(
-            "Schema-v4 handoff is missing training option(s): "
+            f"Schema-v{schema_version} handoff is missing training option(s): "
             + ", ".join(sorted(missing))
         )
-    invalid_types = [key for key in value if type(value[key]) is not int]
+    invalid_types = [
+        key for key in value if key in integer_options and type(value[key]) is not int
+    ]
     if invalid_types:
         raise OperatorHandoffError(
             "Training option(s) must be integers: "
             + ", ".join(sorted(invalid_types))
+        )
+    invalid_string_types = [
+        key
+        for key in value
+        if key in string_options and not isinstance(value[key], str)
+    ]
+    if invalid_string_types:
+        raise OperatorHandoffError(
+            "Training option(s) must be strings: "
+            + ", ".join(sorted(invalid_string_types))
         )
     defaults = OperatorTrainingOptions()
     options = OperatorTrainingOptions(
@@ -207,6 +270,12 @@ def _load_training_options(
         ),
         batch=value.get("batch", defaults.batch),
         imgsz=value.get("imgsz", defaults.imgsz),
+        position_training_mode=value.get(
+            "position_training_mode", defaults.position_training_mode
+        ),
+        position_activation=value.get(
+            "position_activation", defaults.position_activation
+        ),
     )
     ranges = {
         "epochs": (options.epochs, 20, 300),
@@ -226,6 +295,24 @@ def _load_training_options(
     if options.imgsz % 32 != 0:
         raise OperatorHandoffError(
             "training_options.imgsz must be a multiple of 32."
+        )
+    if options.position_training_mode not in POSITION_TRAINING_MODES:
+        raise OperatorHandoffError(
+            "training_options.position_training_mode must be one of: "
+            + ", ".join(sorted(POSITION_TRAINING_MODES))
+        )
+    if options.position_activation not in POSITION_ACTIVATION_MODES:
+        raise OperatorHandoffError(
+            "training_options.position_activation must be one of: "
+            + ", ".join(sorted(POSITION_ACTIVATION_MODES))
+        )
+    if (
+        options.position_training_mode == POSITION_MODE_YOLO_ONLY
+        and options.position_activation == POSITION_ACTIVATION_ENABLE_AFTER_GATE
+    ):
+        raise OperatorHandoffError(
+            "YOLO-only retraining cannot enable position detection because "
+            "no position gate will run."
         )
     return options
 
@@ -253,12 +340,18 @@ def load_operator_handoff(
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OperatorHandoffError(f"Unable to read handoff: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("schema_version") not in {1, 2, 3, 4}:
+    if not isinstance(payload, dict) or payload.get("schema_version") not in {
+        1,
+        2,
+        3,
+        4,
+        5,
+    }:
         raise OperatorHandoffError("Unsupported operator handoff schema.")
     schema_version = int(payload.get("schema_version", 0))
     training_options = _load_training_options(
         payload.get("training_options"),
-        required=schema_version >= 4,
+        schema_version=schema_version,
     )
 
     data_root = Path(str(payload.get("data_root") or "")).resolve()
@@ -440,6 +533,7 @@ def load_operator_handoff(
         job_id=job_id,
         status_path=status_path,
         training_options=training_options,
+        schema_version=schema_version,
     )
     handoff.selected_target
     return handoff
@@ -638,6 +732,165 @@ def _configure_operator_yolo_augmentation(
     return processed_images, processed_labels
 
 
+def _find_incomplete_job_checkpoint(
+    handoff: OperatorHandoff,
+    *,
+    configured_epochs: int,
+) -> OperatorResumeCheckpoint | None:
+    """Find an incomplete YOLO run whose data.yaml belongs to this job snapshot."""
+    target = handoff.selected_target
+    expected_data_yaml = (target.dataset_root / "split" / "data.yaml").resolve()
+    runs_root = (
+        handoff.data_root.parent / "runs" / target.product / target.area
+    ).resolve()
+    if not runs_root.is_dir():
+        return None
+
+    candidates: list[tuple[int, int, OperatorResumeCheckpoint]] = []
+    completed_run_timestamps: list[int] = []
+    for run_dir in runs_root.iterdir():
+        if not run_dir.is_dir():
+            continue
+        checkpoint = run_dir / "weights" / "last.pt"
+        native_checkpoint = run_dir / "weights" / "last.resume.pt"
+        args_path = run_dir / "args.yaml"
+        results_path = run_dir / "results.csv"
+        if not checkpoint.is_file() or not args_path.is_file() or not results_path.is_file():
+            continue
+        try:
+            training_args = yaml.safe_load(
+                args_path.read_text(encoding="utf-8")
+            ) or {}
+            source_data = Path(str(training_args.get("data") or "")).resolve()
+            total_epochs = int(training_args.get("epochs") or 0)
+            with results_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                completed_epochs = max(
+                    (
+                        int(float(str(row.get("epoch") or "0")))
+                        for row in csv.DictReader(handle)
+                    ),
+                    default=0,
+                )
+            completed_before_run = 0
+            lineage_path = run_dir / "operator_resume_lineage.json"
+            if lineage_path.is_file():
+                lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
+                lineage_data = Path(str(lineage.get("data_yaml") or "")).resolve()
+                lineage_total = int(lineage.get("requested_total_epochs") or 0)
+                if (
+                    lineage_data != expected_data_yaml
+                    or lineage_total != configured_epochs
+                ):
+                    continue
+                completed_before_run = int(
+                    lineage.get("completed_before_run") or 0
+                )
+        except (OSError, UnicodeDecodeError, yaml.YAMLError, TypeError, ValueError):
+            continue
+        effective_completed = completed_before_run + completed_epochs
+        if (
+            source_data != expected_data_yaml
+            or (
+                not (run_dir / "operator_resume_lineage.json").is_file()
+                and total_epochs != configured_epochs
+            )
+            or effective_completed <= 0
+            or effective_completed >= configured_epochs
+        ):
+            continue
+        completion_metadata = run_dir / "last_run_metadata.json"
+        if completion_metadata.is_file():
+            completed_run_timestamps.append(completion_metadata.stat().st_mtime_ns)
+            continue
+        selected_checkpoint = (
+            native_checkpoint if native_checkpoint.is_file() else checkpoint
+        )
+        resume = OperatorResumeCheckpoint(
+            path=selected_checkpoint.resolve(),
+            completed_epochs=effective_completed,
+            completed_before_run=completed_before_run,
+            native_resume=native_checkpoint.is_file(),
+        )
+        candidates.append(
+            (
+                effective_completed,
+                selected_checkpoint.stat().st_mtime_ns,
+                resume,
+            )
+        )
+    if completed_run_timestamps and (
+        not candidates
+        or max(completed_run_timestamps) >= max(item[1] for item in candidates)
+    ):
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _find_completed_job_checkpoint(
+    handoff: OperatorHandoff,
+    *,
+    configured_epochs: int,
+) -> Path | None:
+    """Find the newest successfully finalized run for this exact job snapshot."""
+    target = handoff.selected_target
+    expected_data_yaml = (target.dataset_root / "split" / "data.yaml").resolve()
+    runs_root = (
+        handoff.data_root.parent / "runs" / target.product / target.area
+    ).resolve()
+    if not runs_root.is_dir():
+        return None
+
+    completed: list[tuple[int, Path]] = []
+    for run_dir in runs_root.iterdir():
+        args_path = run_dir / "args.yaml"
+        metadata_path = run_dir / "last_run_metadata.json"
+        checkpoint = run_dir / "weights" / "best.pt"
+        if not (
+            run_dir.is_dir()
+            and args_path.is_file()
+            and metadata_path.is_file()
+            and checkpoint.is_file()
+        ):
+            continue
+        try:
+            training_args = yaml.safe_load(
+                args_path.read_text(encoding="utf-8")
+            ) or {}
+            source_data = Path(str(training_args.get("data") or "")).resolve()
+            lineage_path = run_dir / "operator_resume_lineage.json"
+            if lineage_path.is_file():
+                lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
+                requested_epochs = int(
+                    lineage.get("requested_total_epochs") or 0
+                )
+                lineage_data = Path(str(lineage.get("data_yaml") or "")).resolve()
+            else:
+                requested_epochs = int(training_args.get("epochs") or 0)
+                lineage_data = source_data
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            yaml.YAMLError,
+            TypeError,
+            ValueError,
+        ):
+            continue
+        if (
+            source_data == expected_data_yaml
+            and lineage_data == expected_data_yaml
+            and requested_epochs == configured_epochs
+        ):
+            completed.append(
+                (metadata_path.stat().st_mtime_ns, checkpoint.resolve())
+            )
+    if not completed:
+        return None
+    return max(completed, key=lambda item: item[0])[1]
+
+
 def apply_handoff_to_config(
     config: dict[str, Any], handoff: OperatorHandoff
 ) -> dict[str, Any]:
@@ -652,6 +905,13 @@ def apply_handoff_to_config(
     """
     updated = copy.deepcopy(config)
     target = handoff.selected_target
+    position_goldens = _summarize_position_golden_samples(target)
+    station_position_enabled = _station_position_enabled(handoff)
+    position_validation_required = _resolve_position_validation_requirement(
+        handoff,
+        station_position_enabled=station_position_enabled,
+        goldens=position_goldens,
+    )
     updated["operator_handoff"] = {
         "enabled": True,
         "dataset_root": str(target.dataset_root),
@@ -682,10 +942,17 @@ def apply_handoff_to_config(
         "val": max(int(configured_group_minimums.get("val", 0)), 5),
         "test": max(int(configured_group_minimums.get("test", 0)), 10),
     }
-    # Every case submitted in this operator job is feedback that must actually
-    # reach the optimizer.  The remaining historical source groups still form
-    # validation/test cohorts in the splitter.
-    split_cfg["force_train_sample_ids"] = list(target.sample_ids)
+    # Position goldens are evaluation evidence and must never leak into the
+    # optimizer. Other submitted corrections are guaranteed to reach train.
+    forced_test_sample_ids = (
+        set(position_goldens.all_sample_ids)
+        if position_validation_required
+        else set()
+    )
+    split_cfg["force_train_sample_ids"] = sorted(
+        set(target.sample_ids) - forced_test_sample_ids
+    )
+    split_cfg["force_test_sample_ids"] = sorted(forced_test_sample_ids)
     training_cfg = updated.setdefault("yolo_training", {})
     configured_names = training_cfg.get("class_names") or []
     if target.class_names:
@@ -712,6 +979,15 @@ def apply_handoff_to_config(
                 )
     training_cfg["dataset_dir"] = str(target.dataset_root / "split")
     feedback_summary = _summarize_operator_feedback(target)
+    feedback_summary["position_golden_count"] = len(
+        position_goldens.all_sample_ids
+    )
+    feedback_summary["position_golden_ok_count"] = len(
+        position_goldens.ok_sample_ids
+    )
+    feedback_summary["position_golden_ng_count"] = len(
+        position_goldens.ng_sample_ids
+    )
     updated["operator_feedback"] = feedback_summary
     eligibility_issues: list[str] = []
     if (
@@ -756,6 +1032,107 @@ def apply_handoff_to_config(
             "warmup_epochs": min(float(training_cfg.get("warmup_epochs", 1.0)), 1.0),
         }
     )
+    completed_checkpoint = _find_completed_job_checkpoint(
+        handoff,
+        configured_epochs=configured_epochs,
+    )
+    resume_checkpoint = _find_incomplete_job_checkpoint(
+        handoff,
+        configured_epochs=configured_epochs,
+    ) if completed_checkpoint is None else None
+    if completed_checkpoint is not None:
+        training_cfg["completed_job_checkpoint"] = str(completed_checkpoint)
+        for key in (
+            "resume_checkpoint",
+            "resume_completed_epochs",
+            "resume_completed_before_run",
+            "resume_native",
+        ):
+            training_cfg.pop(key, None)
+    elif resume_checkpoint is not None:
+        training_cfg.pop("completed_job_checkpoint", None)
+        training_cfg.update(
+            {
+                "resume_checkpoint": str(resume_checkpoint.path),
+                "resume_completed_epochs": resume_checkpoint.completed_epochs,
+                "resume_completed_before_run": (
+                    resume_checkpoint.completed_before_run
+                ),
+                "resume_native": resume_checkpoint.native_resume,
+            }
+        )
+    else:
+        training_cfg.pop("completed_job_checkpoint", None)
+        for key in (
+            "resume_checkpoint",
+            "resume_completed_epochs",
+            "resume_completed_before_run",
+            "resume_native",
+        ):
+            training_cfg.pop(key, None)
+    position_cfg = training_cfg.setdefault("position_validation", {})
+    position_cfg.update(
+        {
+            "enabled": position_validation_required,
+            "auto_generate": True,
+            "calibration_source": "labels",
+            "calibration_min_samples": max(
+                int(position_cfg.get("calibration_min_samples", 0)),
+                OPERATOR_MIN_IMAGES_PER_SPLIT[0][1],
+            ),
+            "calibration_require_all_classes": True,
+            "calibration_exclude_augmented": True,
+        }
+    )
+    position_gate_cfg = position_cfg.setdefault("gate", {})
+    position_gate_cfg.update(
+        {
+            "enabled": position_validation_required,
+            "min_ok_samples": max(
+                int(position_gate_cfg.get("min_ok_samples", 0)),
+                OPERATOR_MIN_IMAGES_PER_SPLIT[2][1],
+            ),
+            "max_ok_false_reject_rate": min(
+                float(
+                    position_gate_cfg.get(
+                        "max_ok_false_reject_rate",
+                        0.0,
+                    )
+                ),
+                0.005,
+            ),
+            "min_ng_samples": max(
+                int(position_gate_cfg.get("min_ng_samples", 0)),
+                0,
+            ),
+            "min_ng_recall": max(
+                float(position_gate_cfg.get("min_ng_recall", 0.0)),
+                0.0,
+            ),
+            "require_baseline": bool(
+                position_gate_cfg.get("require_baseline", False)
+            ),
+            "max_ok_false_reject_regression": min(
+                float(
+                    position_gate_cfg.get(
+                        "max_ok_false_reject_regression",
+                        0.0,
+                    )
+                ),
+                0.01,
+            ),
+            "max_ng_recall_regression": min(
+                float(
+                    position_gate_cfg.get(
+                        "max_ng_recall_regression",
+                        0.0,
+                    )
+                ),
+                0.01,
+            ),
+            "require_disjoint_calibration": True,
+        }
+    )
     deploy_cfg = training_cfg.setdefault("deploy", {})
     deploy_cfg.update(
         {
@@ -765,6 +1142,17 @@ def apply_handoff_to_config(
             "area": target.area,
             "version": "auto",
             "preserve_station_settings": True,
+            "position_activation": (
+                "enable"
+                if handoff.training_options.position_activation
+                == POSITION_ACTIVATION_ENABLE_AFTER_GATE
+                else "preserve"
+            ),
+            "position_contract_policy": (
+                "validate_candidate"
+                if position_validation_required
+                else "preserve_disabled_station"
+            ),
             "runtime_pair_verification": {
                 "enabled": True,
                 "rtol": 0.001,
@@ -773,6 +1161,14 @@ def apply_handoff_to_config(
             "force": False,
         }
     )
+    acceptance_root = (
+        handoff.inference_models_dir.parent
+        / "acceptance"
+        / target.product
+        / target.area
+    )
+    acceptance_gate = _resolve_model_acceptance_gate(acceptance_root)
+    deploy_cfg["acceptance_gate"] = acceptance_gate
     # Operator retraining always publishes the portable CPU runtime.  These
     # assignments intentionally override legacy presets that still point the
     # generated inference config at best.pt.
@@ -888,6 +1284,68 @@ def apply_handoff_to_config(
     return updated
 
 
+def _resolve_model_acceptance_gate(
+    acceptance_root: Path,
+) -> dict[str, Any]:
+    """Freeze the latest reviewed acceptance snapshot into this operator job."""
+    if not acceptance_root.is_dir():
+        return {"enabled": False}
+    snapshots_root = acceptance_root / "snapshots"
+    if not snapshots_root.is_dir():
+        raise OperatorHandoffError(
+            f"Acceptance data exists but has no snapshots: {acceptance_root}"
+        )
+    candidates = sorted(
+        (path for path in snapshots_root.iterdir() if path.is_dir()),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+    for snapshot_root in candidates:
+        manifest_path = snapshot_root / "ground_truth.csv"
+        summary_path = snapshot_root / "snapshot.json"
+        if not manifest_path.is_file() or not summary_path.is_file():
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OperatorHandoffError(
+                f"Acceptance snapshot cannot be read: {summary_path}: {exc}"
+            ) from exc
+        if not isinstance(summary, dict):
+            raise OperatorHandoffError(
+                f"Acceptance snapshot summary is invalid: {summary_path}"
+            )
+        metrics = summary.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            raise OperatorHandoffError(
+                f"Acceptance snapshot metrics are invalid: {summary_path}"
+            )
+        confirmed = int(
+            summary.get("confirmed_count", metrics.get("confirmed", 0))
+        )
+        false_positives = int(metrics.get("fp", 0))
+        false_negatives = int(metrics.get("fn", 0))
+        if confirmed <= 0:
+            raise OperatorHandoffError(
+                f"Acceptance snapshot has no confirmed samples: {summary_path}"
+            )
+        return {
+            "enabled": True,
+            "dataset_root": str(acceptance_root),
+            "snapshot_manifest": str(manifest_path),
+            "min_confirmed": confirmed,
+            "max_false_positives": false_positives,
+            "max_false_negatives": false_negatives,
+            "max_regressions": 0,
+            "require_all_confirmed": True,
+            "require_no_errors": True,
+            "timeout_seconds": 1800,
+        }
+    raise OperatorHandoffError(
+        f"Acceptance data exists but has no complete snapshot: {snapshots_root}"
+    )
+
+
 def find_deployed_training_weight(handoff: OperatorHandoff) -> Path | None:
     """Find the current PyTorch checkpoint used as the fine-tuning base.
 
@@ -975,6 +1433,7 @@ def _summarize_operator_feedback(target: OperatorTarget) -> dict[str, int]:
         "corrected_count": 0,
         "verified_empty_count": 0,
         "confirmed_count": 0,
+        "position_false_reject_count": 0,
         "unknown_count": 0,
         "actionable_count": 0,
     }
@@ -1005,15 +1464,150 @@ def _summarize_operator_feedback(target: OperatorTarget) -> dict[str, int]:
             summary["corrected_count"] += 1
         elif review_label == "verified_empty" or annotation_status == "verified_empty":
             summary["verified_empty_count"] += 1
+        elif review_label == "position_false_reject":
+            summary["position_false_reject_count"] += 1
         elif review_label == "confirmed_ng":
             summary["confirmed_count"] += 1
         else:
             summary["unknown_count"] += 1
     summary["unknown_count"] += len(submitted_ids - seen_ids)
     summary["actionable_count"] = (
-        summary["corrected_count"] + summary["verified_empty_count"]
+        summary["corrected_count"]
+        + summary["verified_empty_count"]
+        + summary["position_false_reject_count"]
     )
     return summary
+
+
+def _summarize_position_golden_samples(
+    target: OperatorTarget,
+) -> PositionGoldenSummary:
+    """Resolve disjoint OK/NG position cohorts from the review manifest."""
+    manifest_path = target.dataset_root / "metadata" / "review_dataset_manifest.csv"
+    try:
+        with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return PositionGoldenSummary()
+
+    ok_sample_ids: set[str] = set()
+    ng_sample_ids: set[str] = set()
+    for row in rows:
+        explicit_status = str(
+            row.get("position_golden_status") or ""
+        ).strip().upper()
+        review_label = str(row.get("review_label") or "").strip().lower()
+        reasons = {
+            reason.strip().upper()
+            for reason in str(row.get("decision_reasons") or "").split("|")
+            if reason.strip()
+        }
+        sample_id = str(
+            row.get("sample_id") or row.get("output_image") or ""
+        ).strip()
+        if not sample_id:
+            continue
+        if explicit_status == "PASS":
+            ok_sample_ids.add(sample_id)
+            ng_sample_ids.discard(sample_id)
+        elif explicit_status == "FAIL":
+            ng_sample_ids.add(sample_id)
+            ok_sample_ids.discard(sample_id)
+        elif review_label == "position_false_reject":
+            ok_sample_ids.add(sample_id)
+            ng_sample_ids.discard(sample_id)
+        elif (
+            review_label == "confirmed_ng" and reasons == {"POSITION_SHIFT"}
+        ):
+            if sample_id not in ok_sample_ids:
+                ng_sample_ids.add(sample_id)
+    return PositionGoldenSummary(
+        ok_sample_ids=tuple(sorted(ok_sample_ids)),
+        ng_sample_ids=tuple(sorted(ng_sample_ids)),
+    )
+
+
+def _resolve_position_validation_requirement(
+    handoff: OperatorHandoff,
+    *,
+    station_position_enabled: bool | None,
+    goldens: PositionGoldenSummary,
+) -> bool:
+    """Resolve the selected mode and fail before training on unsafe requests."""
+    mode = handoff.training_options.position_training_mode
+    activation = handoff.training_options.position_activation
+    if handoff.schema_version < 5 and mode == POSITION_MODE_AUTO:
+        # Legacy handoffs did not carry an explicit position intent. Preserve a
+        # known-disabled station, but never let an active station discover
+        # missing golden evidence only after expensive YOLO training.
+        if station_position_enabled is None and not goldens.all_sample_ids:
+            raise OperatorHandoffError(
+                "position_training_preflight_failed: legacy handoff cannot "
+                "determine whether station position detection is enabled. "
+                "Open the job from the current inference GUI and submit it again."
+            )
+        required = station_position_enabled is True or bool(goldens.all_sample_ids)
+    elif mode == POSITION_MODE_YOLO_ONLY:
+        if station_position_enabled is not False:
+            raise OperatorHandoffError(
+                "position_training_preflight_failed: YOLO-only mode requires a "
+                "station whose position detection is explicitly disabled."
+            )
+        required = False
+    elif mode == POSITION_MODE_CALIBRATE_VALIDATE:
+        required = True
+    else:
+        required = (
+            station_position_enabled is not False
+            or bool(goldens.all_sample_ids)
+        )
+
+    if activation == POSITION_ACTIVATION_ENABLE_AFTER_GATE and not required:
+        raise OperatorHandoffError(
+            "position_training_preflight_failed: position detection cannot be "
+            "enabled because this job will not run position validation."
+        )
+
+    minimum_ok_samples = OPERATOR_MIN_IMAGES_PER_SPLIT[2][1]
+    if (
+        required
+        and len(goldens.ok_sample_ids) < minimum_ok_samples
+    ):
+        raise OperatorHandoffError(
+            "position_training_preflight_failed: position calibration/validation "
+            f"requires at least {minimum_ok_samples} eligible OK golden samples; "
+            f"found {len(goldens.ok_sample_ids)} OK and "
+            f"{len(goldens.ng_sample_ids)} NG."
+        )
+    return required
+
+
+def _station_position_enabled(handoff: OperatorHandoff) -> bool | None:
+    """Read current runtime activation; unknown values retain the strict gate."""
+    target = handoff.selected_target
+    config_path = (
+        handoff.inference_models_dir
+        / target.product
+        / target.area
+        / "yolo"
+        / "config.yaml"
+    )
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    position_config = config.get("position_config")
+    if not isinstance(position_config, dict):
+        return None
+    product_config = position_config.get(target.product)
+    if not isinstance(product_config, dict):
+        return None
+    area_config = product_config.get(target.area)
+    if not isinstance(area_config, dict):
+        return None
+    return bool(area_config.get("enabled", False))
 
 
 def _sha256_file(path: Path) -> str:

@@ -11,6 +11,12 @@ from picture_tool.train.anomalib_trainer import (
 from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.position import load_position_config, run_position_validation
+from picture_tool.position.position_gate import (
+    PositionGatePolicy,
+    evaluate_position_gate,
+    load_json_mapping,
+    write_position_gate_report,
+)
 from picture_tool.path_resolver import parse_project_area_override
 from picture_tool.pipeline.artifacts import find_anomalib_run_artifact
 from picture_tool.pipeline.utils import detect_existing_weights, mtime_latest
@@ -31,12 +37,36 @@ def run_yolo_train(config, args):
     # Post-training steps
     # 1. Position Config Generation
     try:
-        PositionConfigGenerator.generate(config, run_dir, logger)
-    except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
-        logger.error(f"Position config generation failed: {e}")
+        generated_position_config = PositionConfigGenerator.generate(
+            config,
+            run_dir,
+            logger,
+        )
+        position_cfg = (
+            (config.get("yolo_training", {}) or {}).get(
+                "position_validation",
+                {},
+            )
+            or {}
+        )
+        selected_tasks = {
+            str(task) for task in (getattr(args, "tasks", []) or [])
+        }
+        position_required = bool(
+            position_cfg.get("enabled")
+            and position_cfg.get("auto_generate", True)
+            and (not selected_tasks or "position_validation" in selected_tasks)
+        )
+        if position_required and generated_position_config is None:
+            raise RuntimeError(
+                "Position validation is enabled, but no position configuration "
+                "was generated."
+            )
+    except (FileNotFoundError, ValueError, RuntimeError, OSError) as exc:
+        logger.error("Position config generation failed: %s", exc)
         raise RuntimeError(
-            f"Pipeline aborted: Position config generation failed - {e}"
-        ) from e
+            f"Pipeline aborted: Position config generation failed - {exc}"
+        ) from exc
 
     # 2. ONNX Export
     try:
@@ -53,16 +83,18 @@ def run_yolo_train(config, args):
             raise RuntimeError(
                 "Configured YOLO runtime export did not produce a validated artifact."
             )
-    except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
-        logger.error(f"ONNX export failed: {e}")
-        raise RuntimeError(f"Pipeline aborted: ONNX export failed - {e}") from e
+    except (ImportError, FileNotFoundError, RuntimeError, OSError) as exc:
+        logger.error("ONNX export failed: %s", exc)
+        raise RuntimeError(
+            f"Pipeline aborted: ONNX export failed - {exc}"
+        ) from exc
 
     # 3. Detection Config Export
     ycfg = config.get("yolo_training", {})
     pos_cfg = ycfg.get("position_validation", {})
-    selected_tasks = getattr(args, "tasks", []) or []
-    req_tasks = {str(t) for t in selected_tasks}
-    position_requested = not req_tasks or "position_validation" in req_tasks
+    position_requested = (
+        not selected_tasks or "position_validation" in selected_tasks
+    )
     position_validation_active = bool(
         isinstance(pos_cfg, dict) and pos_cfg.get("enabled") and position_requested
     )
@@ -71,11 +103,11 @@ def run_yolo_train(config, args):
         DetectionConfigExporter.export(
             config, run_dir, logger, include_position=position_validation_active
         )
-    except (FileNotFoundError, ValueError, OSError) as e:
-        logger.error(f"Detection config export failed: {e}")
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        logger.error("Detection config export failed: %s", exc)
         raise RuntimeError(
-            f"Pipeline aborted: Detection config export failed - {e}"
-        ) from e
+            f"Pipeline aborted: Detection config export failed - {exc}"
+        ) from exc
 
 
 def run_anomalib_train(config, args):
@@ -251,6 +283,13 @@ def run_yolo_evaluation(config, args):
 def run_position_validation_task(config, args):
     """Run offline position validation using trained weights and sample images."""
     ycfg = config.get("yolo_training", {}) if isinstance(config, dict) else {}
+    configured_position = ycfg.get("position_validation", {}) or {}
+    if not configured_position.get("enabled", False):
+        logging.getLogger(__name__).info(
+            "Position validation skipped; the existing disabled station "
+            "position contract will be preserved."
+        )
+        return None
     run_root = Path(str(ycfg.get("project", DEFAULT_RUNS_DIR / "project")))
     run_name = str(ycfg.get("name", "train"))
     default_run_dir = run_root / run_name
@@ -271,10 +310,11 @@ def run_position_validation_task(config, args):
     # Fallback: If no usable config is provided, check for auto-generated one in run_dir
     pv_cfg = ycfg.get("position_validation", {})
 
-    # DEBUG: Log current config state
-    logging.getLogger(__name__).info(
-        f"DEBUG: Checking position config. Config keys: {list(pv_cfg.keys())}. "
-        f"Run dir: {run_dir}. Exists: {run_dir.exists()}"
+    logging.getLogger(__name__).debug(
+        "Checking position config: keys=%s, run_dir=%s, exists=%s",
+        list(pv_cfg.keys()),
+        run_dir,
+        run_dir.exists(),
     )
 
     auto_conf = run_dir / "auto_position_config.yaml"
@@ -302,17 +342,17 @@ def run_position_validation_task(config, args):
                 auto_conf,
             )
         else:
-            logging.getLogger(__name__).error(
-                "position_validation is enabled but no usable position config was found "
-                "for %s/%s and no auto_position_config.yaml exists in %s.",
-                product or "<unknown>",
-                area or "<unknown>",
-                run_dir,
+            raise FileNotFoundError(
+                "position_validation is enabled but no usable position config "
+                "was found for "
+                f"{product or '<unknown>'}/{area or '<unknown>'} and no "
+                f"auto_position_config.yaml exists in {run_dir}."
             )
-            return None
     else:
-        logging.getLogger(__name__).info(
-            f"DEBUG: Position config present in keys. Config: {pv_cfg.get('config')}, Path: {pv_cfg.get('config_path')}"
+        logging.getLogger(__name__).debug(
+            "Position config source selected: config=%s, config_path=%s",
+            pv_cfg.get("config"),
+            pv_cfg.get("config_path"),
         )
 
     if not run_dir.exists():
@@ -322,7 +362,79 @@ def run_position_validation_task(config, args):
             "Provide yolo_training.position_validation.weights or run yolo_train manually."
         )
 
-    return run_position_validation(config, run_dir, logger=logging.getLogger(__name__))
+    report_path = run_position_validation(
+        config,
+        run_dir,
+        logger=logging.getLogger(__name__),
+    )
+    if report_path is None:
+        raise RuntimeError(
+            "Position validation is enabled but did not produce a report."
+        )
+    _run_position_gate(config, run_dir, report_path)
+    return report_path
+
+
+def _run_position_gate(
+    config: dict[str, Any],
+    run_dir: Path,
+    report_path: Path,
+) -> Path | None:
+    ycfg = config.get("yolo_training", {}) or {}
+    position_cfg = ycfg.get("position_validation", {}) or {}
+    gate_cfg = position_cfg.get("gate", {}) or {}
+    if not isinstance(gate_cfg, dict) or not gate_cfg.get("enabled", False):
+        return None
+
+    candidate_report = load_json_mapping(
+        report_path,
+        "position validation report",
+    )
+    baseline_path_value = gate_cfg.get("baseline_report_path")
+    baseline_path = (
+        Path(str(baseline_path_value)).resolve()
+        if baseline_path_value
+        else None
+    )
+    baseline_report = (
+        load_json_mapping(baseline_path, "baseline position report")
+        if baseline_path is not None
+        else None
+    )
+    calibration_path_value = position_cfg.get("calibration_manifest_path")
+    calibration_path = (
+        Path(str(calibration_path_value)).resolve()
+        if calibration_path_value
+        else None
+    )
+    calibration_manifest = (
+        load_json_mapping(calibration_path, "position calibration manifest")
+        if calibration_path is not None
+        else None
+    )
+    policy = PositionGatePolicy.from_mapping(gate_cfg)
+    decision = evaluate_position_gate(
+        candidate_report,
+        policy=policy,
+        baseline_report=baseline_report,
+        calibration_manifest=calibration_manifest,
+    )
+    gate_path = (run_dir / "position_gate.json").resolve()
+    write_position_gate_report(
+        gate_path,
+        decision,
+        product=str(position_cfg.get("product") or ""),
+        area=str(position_cfg.get("area") or ""),
+        candidate_report_path=report_path,
+        baseline_report_path=baseline_path,
+        calibration_manifest_path=calibration_path,
+    )
+    if not decision.passed:
+        raise RuntimeError(
+            "Position deployment gate failed: "
+            + "; ".join(decision.failures)
+        )
+    return gate_path
 
 
 def _position_config_has_target(source, product: str, area: str) -> bool:
@@ -353,6 +465,19 @@ def _find_latest_run_dir(project: Path, name: str) -> Path | None:
 def skip_yolo_train(config, args):
     if getattr(args, "force", False):
         return None
+    y = config.get("yolo_training", {})
+    completed_job_checkpoint = Path(
+        str(y.get("completed_job_checkpoint") or "")
+    )
+    if (
+        str(y.get("completed_job_checkpoint") or "").strip()
+        and completed_job_checkpoint.suffix.lower() == ".pt"
+        and completed_job_checkpoint.is_file()
+    ):
+        return (
+            "Operator job training already completed successfully; "
+            f"reusing {completed_job_checkpoint}."
+        )
 
     dataset_dir = Path(
         str(
@@ -367,7 +492,6 @@ def skip_yolo_train(config, args):
     if split_is_populated:
         validate_training_dataset(config, logger=logging.getLogger(__name__))
 
-    y = config.get("yolo_training", {})
     project = Path(str(y.get("project", DEFAULT_RUNS_DIR / "detect")))
     name = str(y.get("name", "train"))
 

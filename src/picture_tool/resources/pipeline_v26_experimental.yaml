@@ -45,6 +45,11 @@ yolo_training:
     enabled: true
     config_path: ./models/yolo/position_config.yaml
     auto_generate: true
+    calibration_source: labels
+    gate:
+      enabled: true
+      min_ok_samples: 1
+      max_ok_false_reject_rate: 0.0
 
 # Re-use Input/Output settings from default (assuming shared data)
 train_test_split:

@@ -101,6 +101,7 @@ def _deterministic_group_split(
     val_ratio: float,
     test_ratio: float,
     has_forced_train: bool,
+    has_forced_test: bool = False,
     minimum_val_groups: int = 0,
     minimum_test_groups: int = 0,
 ) -> tuple[List[int], List[int], List[int]]:
@@ -109,7 +110,10 @@ def _deterministic_group_split(
     random.Random(42).shuffle(shuffled)
     minimums = {
         "val": max(1 if val_ratio > 0 else 0, minimum_val_groups),
-        "test": max(1 if test_ratio > 0 else 0, minimum_test_groups),
+        "test": max(
+            1 if test_ratio > 0 and not has_forced_test else 0,
+            minimum_test_groups,
+        ),
     }
     val_count = max(minimums["val"], int(round(len(shuffled) * val_ratio)))
     test_count = max(minimums["test"], int(round(len(shuffled) * test_ratio)))
@@ -270,29 +274,67 @@ def split_dataset(config, log_file=None, logger=None):
     raw_forced_sample_ids = split_config.get("force_train_sample_ids", [])
     if not isinstance(raw_forced_sample_ids, list):
         raise ValueError("force_train_sample_ids 必須是 sample ID 清單")
-    forced_sample_ids = {
+    raw_forced_test_sample_ids = split_config.get("force_test_sample_ids", [])
+    if not isinstance(raw_forced_test_sample_ids, list):
+        raise ValueError("force_test_sample_ids 必須是 sample ID 清單")
+    forced_train_sample_ids = {
         str(sample_id).strip()
         for sample_id in raw_forced_sample_ids
         if str(sample_id).strip()
     }
-    if forced_sample_ids and train_ratio <= 0:
+    forced_test_sample_ids = {
+        str(sample_id).strip()
+        for sample_id in raw_forced_test_sample_ids
+        if str(sample_id).strip()
+    }
+    overlapping_sample_ids = forced_train_sample_ids & forced_test_sample_ids
+    if overlapping_sample_ids:
+        raise ValueError(
+            "Samples cannot be forced into both train and test: "
+            + ", ".join(sorted(overlapping_sample_ids)[:5])
+        )
+    if forced_train_sample_ids and train_ratio <= 0:
         raise ValueError("有補訓樣本時，train split ratio 必須大於 0")
+    if forced_test_sample_ids and test_ratio <= 0:
+        raise ValueError("有位置黃金樣本時，test split ratio 必須大於 0")
     forced_train_idx = {
         index
         for index, group in enumerate(source_groups)
-        if _group_review_sample_ids(group) & forced_sample_ids
+        if _group_review_sample_ids(group) & forced_train_sample_ids
     }
-    found_forced_ids = {
+    forced_test_idx = {
+        index
+        for index, group in enumerate(source_groups)
+        if _group_review_sample_ids(group) & forced_test_sample_ids
+    }
+    overlapping_group_indices = forced_train_idx & forced_test_idx
+    if overlapping_group_indices:
+        raise ValueError(
+            "One augmented source family cannot be assigned to both train and test."
+        )
+    found_forced_train_ids = {
         sample_id
         for index in forced_train_idx
         for sample_id in _group_review_sample_ids(source_groups[index])
-        if sample_id in forced_sample_ids
+        if sample_id in forced_train_sample_ids
     }
-    missing_forced_ids = forced_sample_ids - found_forced_ids
-    if missing_forced_ids:
+    missing_forced_train_ids = forced_train_sample_ids - found_forced_train_ids
+    if missing_forced_train_ids:
         raise ValueError(
             "Submitted feedback samples are missing from the split input: "
-            + ", ".join(sorted(missing_forced_ids)[:5])
+            + ", ".join(sorted(missing_forced_train_ids)[:5])
+        )
+    found_forced_test_ids = {
+        sample_id
+        for index in forced_test_idx
+        for sample_id in _group_review_sample_ids(source_groups[index])
+        if sample_id in forced_test_sample_ids
+    }
+    missing_forced_test_ids = forced_test_sample_ids - found_forced_test_ids
+    if missing_forced_test_ids:
+        raise ValueError(
+            "Position golden samples are missing from the split input: "
+            + ", ".join(sorted(missing_forced_test_ids)[:5])
         )
     if len(source_groups) < 3:
         raise ValueError(
@@ -300,9 +342,16 @@ def split_dataset(config, log_file=None, logger=None):
             "train/val/test splitting."
         )
     group_indices = [
-        index for index in range(len(source_groups)) if index not in forced_train_idx
+        index
+        for index in range(len(source_groups))
+        if index not in forced_train_idx and index not in forced_test_idx
     ]
-    required_dynamic_groups = int(val_ratio > 0) + int(test_ratio > 0)
+    dynamic_minimum_test_groups = max(
+        0, minimum_test_groups - len(forced_test_idx)
+    )
+    required_dynamic_groups = int(val_ratio > 0) + int(
+        test_ratio > 0 and not forced_test_idx
+    )
     if not forced_train_idx and train_ratio > 0:
         required_dynamic_groups += 1
     if len(group_indices) < required_dynamic_groups:
@@ -310,13 +359,15 @@ def split_dataset(config, log_file=None, logger=None):
             "Not enough independent historical source groups after reserving "
             "submitted feedback for training. Continue collecting reviewed images."
         )
-    required_holdout_groups = minimum_val_groups + minimum_test_groups
+    required_holdout_groups = minimum_val_groups + dynamic_minimum_test_groups
     required_train_groups = 0 if forced_train_idx else int(train_ratio > 0)
     if len(group_indices) < required_holdout_groups + required_train_groups:
         raise ValueError(
             "Not enough independent historical source groups for safe validation: "
             f"available={len(group_indices)}, required_val={minimum_val_groups}, "
-            f"required_test={minimum_test_groups}. Continue collecting reviewed images."
+            f"required_dynamic_test={dynamic_minimum_test_groups}, "
+            f"reserved_test={len(forced_test_idx)}. "
+            "Continue collecting reviewed images."
         )
     train_idx = val_idx = test_idx = None
     if (
@@ -332,7 +383,10 @@ def split_dataset(config, log_file=None, logger=None):
         if not all(sum(row) == 0 for row in group_matrix):
             try:
                 effective_minimum_val = max(int(val_ratio > 0), minimum_val_groups)
-                effective_minimum_test = max(int(test_ratio > 0), minimum_test_groups)
+                effective_minimum_test = max(
+                    int(test_ratio > 0 and not forced_test_idx),
+                    dynamic_minimum_test_groups,
+                )
                 holdout_count = max(
                     effective_minimum_val + effective_minimum_test,
                     int(round(len(group_indices) * (val_ratio + test_ratio))),
@@ -380,11 +434,13 @@ def split_dataset(config, log_file=None, logger=None):
             val_ratio=val_ratio,
             test_ratio=test_ratio,
             has_forced_train=bool(forced_train_idx),
+            has_forced_test=bool(forced_test_idx),
             minimum_val_groups=minimum_val_groups,
-            minimum_test_groups=minimum_test_groups,
+            minimum_test_groups=dynamic_minimum_test_groups,
         )
 
     train_idx = sorted({int(index) for index in train_idx} | forced_train_idx)
+    test_idx = sorted({int(index) for index in test_idx} | forced_test_idx)
 
     train_images, train_labels = _flatten_groups(source_groups, train_idx)
     val_images, val_labels = _flatten_groups(source_groups, val_idx)

@@ -261,3 +261,50 @@ def test_splitter_rejects_missing_submitted_feedback(tmp_path):
 
     with pytest.raises(ValueError, match="missing from the split input"):
         split_dataset(config)
+
+
+def test_splitter_reserves_position_golden_family_for_test(tmp_path):
+    processed_images = tmp_path / "processed" / "images"
+    processed_labels = tmp_path / "processed" / "labels"
+    processed_images.mkdir(parents=True)
+    processed_labels.mkdir(parents=True)
+    sample_id = "position-golden"
+    stems = [
+        f"review_{sample_id}",
+        f"review_{sample_id}_aug_1",
+        "history_a",
+        "history_b",
+    ]
+    for index, stem in enumerate(stems):
+        (processed_images / f"{stem}.png").write_bytes(
+            f"image-{index}".encode()
+        )
+        (processed_labels / f"{stem}.txt").write_text(
+            "0 0.5 0.5 0.2 0.2\n", encoding="utf-8"
+        )
+    output_dir = tmp_path / "split"
+    config = {
+        "train_test_split": {
+            "input": {
+                "image_dir": str(processed_images),
+                "label_dir": str(processed_labels),
+            },
+            "output": {"output_dir": str(output_dir)},
+            "split_ratios": {"train": 0.5, "val": 0.25, "test": 0.25},
+            "stratified": False,
+            "force_test_sample_ids": [sample_id],
+        },
+        "yolo_training": {"class_names": ["part"]},
+    }
+
+    split_dataset(config)
+
+    assert (
+        output_dir / "test" / "images" / f"review_{sample_id}.png"
+    ).is_file()
+    assert (
+        output_dir / "test" / "images" / f"review_{sample_id}_aug_1.png"
+    ).is_file()
+    assert not (
+        output_dir / "train" / "images" / f"review_{sample_id}.png"
+    ).exists()

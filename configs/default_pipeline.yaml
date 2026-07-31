@@ -274,7 +274,17 @@ yolo_training:
     product: project
     area: A
     imgsz: 640
-    sample_dir: ./data/project/split/val/images
+    sample_dir: ./data/project/split/test/images
+    golden_ok_dir: ./data/project/split/test/images
+    golden_ng_dir: null
+    golden_manifest_path: null
+    golden_manifest_image_dir: null
+    calibration_source: labels
+    calibration_image_dir: ./data/project/split/train/images
+    calibration_label_dir: ./data/project/split/train/labels
+    calibration_min_samples: 3
+    calibration_require_all_classes: true
+    calibration_exclude_augmented: true
     config_path: ./models/yolo/position_config.yaml
     config: {}
     output_dir: ./runs/project/quality/position
@@ -283,6 +293,16 @@ yolo_training:
     conf: 0.1
     tolerance_override: null
     auto_generate: true
+    gate:
+      enabled: true
+      min_ok_samples: 1
+      max_ok_false_reject_rate: 0.0
+      min_ng_samples: 0
+      min_ng_recall: 0.0
+      require_baseline: false
+      max_ok_false_reject_regression: 0.0
+      max_ng_recall_regression: 0.0
+      require_disjoint_calibration: true
   export_detection_config:
     enabled: true
     output_path: null
@@ -373,6 +393,17 @@ yolo_training:
       enabled: true                       # compare ONNX/PT outputs before publishing
       rtol: 0.001
       atol: 0.001
+    acceptance_gate:
+      enabled: false                      # operator handoff enables this for a frozen snapshot
+      dataset_root: null
+      snapshot_manifest: null
+      min_confirmed: 1
+      max_false_positives: 0
+      max_false_negatives: 0
+      max_regressions: 0
+      require_all_confirmed: true
+      require_no_errors: true
+      timeout_seconds: 1800
     force: false                          # never overwrite an existing semantic version by default
 yolo_evaluation:
   weights: null
