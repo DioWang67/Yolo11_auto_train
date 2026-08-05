@@ -133,5 +133,5 @@ Position golden manifest has no eligible samples in the holdout image directory.
 
 角色操作與現場處置另見：
 
-- [`yolo11_inference/docs/OPERATOR_MANUAL.md`](../../yolo11_inference/docs/OPERATOR_MANUAL.md)
-- [`yolo11_inference/docs/ENGINEERING_MANUAL.md`](../../yolo11_inference/docs/ENGINEERING_MANUAL.md)
+- [`yolo11_inference/docs/manuals/OPERATOR_MANUAL.md`](../../yolo11_inference/docs/manuals/OPERATOR_MANUAL.md)
+- [`yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md`](../../yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md)
