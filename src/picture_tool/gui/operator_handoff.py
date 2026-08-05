@@ -1320,11 +1320,17 @@ def _resolve_model_acceptance_gate(
             raise OperatorHandoffError(
                 f"Acceptance snapshot metrics are invalid: {summary_path}"
             )
-        confirmed = int(
-            summary.get("confirmed_count", metrics.get("confirmed", 0))
-        )
-        false_positives = int(metrics.get("fp", 0))
-        false_negatives = int(metrics.get("fn", 0))
+        raw_confirmed = summary.get("confirmed_count")
+        if raw_confirmed is None:
+            raw_confirmed = metrics.get("confirmed", 0)
+        try:
+            confirmed = int(raw_confirmed)
+            false_positives = int(metrics.get("fp", 0))
+            false_negatives = int(metrics.get("fn", 0))
+        except (TypeError, ValueError) as exc:
+            raise OperatorHandoffError(
+                f"Acceptance snapshot counts are invalid: {summary_path}"
+            ) from exc
         if confirmed <= 0:
             raise OperatorHandoffError(
                 f"Acceptance snapshot has no confirmed samples: {summary_path}"

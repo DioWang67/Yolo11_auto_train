@@ -60,6 +60,28 @@ def test_operator_job_rejects_acceptance_data_without_snapshot(
         _resolve_model_acceptance_gate(acceptance_root)
 
 
+def test_operator_job_rejects_non_numeric_acceptance_counts(tmp_path: Path) -> None:
+    acceptance_root = tmp_path / "acceptance" / "Cable1" / "A"
+    snapshot = acceptance_root / "snapshots" / "invalid-counts"
+    snapshot.mkdir(parents=True)
+    (snapshot / "ground_truth.csv").write_text(
+        "sample_id,review_status\nsample,confirmed\n",
+        encoding="utf-8",
+    )
+    (snapshot / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "confirmed_count": "not-a-number",
+                "metrics": {"fp": 0, "fn": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OperatorHandoffError, match="counts are invalid"):
+        _resolve_model_acceptance_gate(acceptance_root)
+
+
 def test_deploy_acceptance_runner_publishes_candidate_scoped_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
