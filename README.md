@@ -3,9 +3,9 @@
 完整推論回訓與安全部署流程請見 [docs/SEAMLESS_WORKFLOW.md](docs/SEAMLESS_WORKFLOW.md)。
 
 現場日常操作請見
-[`yolo11_inference/docs/OPERATOR_MANUAL.md`](../yolo11_inference/docs/OPERATOR_MANUAL.md)；
+[`yolo11_inference/docs/manuals/OPERATOR_MANUAL.md`](../yolo11_inference/docs/manuals/OPERATOR_MANUAL.md)；
 工程設定、位置 Gate、資料庫與部署請見
-[`yolo11_inference/docs/ENGINEERING_MANUAL.md`](../yolo11_inference/docs/ENGINEERING_MANUAL.md)。
+[`yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md`](../yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md)。
 
 影像處理與 YOLO 自動化訓練/驗證工具，提供 CLI 與 PyQt GUI。涵蓋：格式轉換、資料增強、資料分割、資料檢查、YOLO 訓練/評估、批次推論、顏色檢測、位置驗證、報告產生等。
 

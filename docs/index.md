@@ -4,8 +4,8 @@ Picture Tool 是一個工業視覺訓練工具包，自動化從資料準備到�
 
 現場角色文件：
 
-- [產線操作者／班組長手冊](../../yolo11_inference/docs/OPERATOR_MANUAL.md)
-- [工程維運與部署手冊](../../yolo11_inference/docs/ENGINEERING_MANUAL.md)
+- [產線操作者／班組長手冊](../../yolo11_inference/docs/manuals/OPERATOR_MANUAL.md)
+- [工程維運與部署手冊](../../yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md)
 
 ## 文件導覽
 

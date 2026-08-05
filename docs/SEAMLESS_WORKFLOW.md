@@ -5,9 +5,9 @@
 ## 文件入口
 
 - 日常檢測、紀錄、Excel 與班組長操作：
-  [`yolo11_inference/docs/OPERATOR_MANUAL.md`](../../yolo11_inference/docs/OPERATOR_MANUAL.md)
+  [`yolo11_inference/docs/manuals/OPERATOR_MANUAL.md`](../../yolo11_inference/docs/manuals/OPERATOR_MANUAL.md)
 - 設定、Gate、資料庫、部署與回滾：
-  [`yolo11_inference/docs/ENGINEERING_MANUAL.md`](../../yolo11_inference/docs/ENGINEERING_MANUAL.md)
+  [`yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md`](../../yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md)
 
 ## 產線組長快速操作
 
