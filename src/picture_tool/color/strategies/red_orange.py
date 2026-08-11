@@ -46,6 +46,7 @@ class RedOrangeStrategy(GenericStrategy):
         # Reuse generic LAB and Hue Similarity
         generic_score, generic_debug = super().match_ratio(hsv_vals, lab_vals, color_range)
         debug.update(generic_debug)
+        debug["hsv_ratio"] = hsv_ratio
 
         # LAB Chroma similarity is specific to O/R
         lab_chroma_similarity = 1.0

@@ -39,6 +39,7 @@ class GreenStrategy(GenericStrategy):
         # Delegate matching to generic
         generic_score, generic_debug = super().match_ratio(hsv_vals, lab_vals, color_range)
         debug.update(generic_debug)
+        debug["hsv_ratio"] = hsv_ratio
 
         # Green weights
         weights = {"hsv": 0.6, "lab": 0.2, "hue_sim": 0.2}

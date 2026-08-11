@@ -154,9 +154,18 @@ def _infer_target(relative: Path) -> tuple[str, str]:
     if not parts or parts[0].lower() in TECHNICAL_ROOTS:
         return "unclassified", ""
     product = parts[0]
-    area = parts[1] if len(parts) > 1 and len(parts[1]) <= 8 else ""
-    if area.lower() in {"raw", "processed", "split", "qc", "metadata"}:
+    second_segment = parts[1] if len(parts) > 1 else ""
+    if second_segment.lower() in {
+        "raw",
+        "processed",
+        "split",
+        "qc",
+        "metadata",
+        "review",
+    }:
         area = "A"
+    else:
+        area = second_segment if len(second_segment) <= 8 else ""
     return product, area
 
 
