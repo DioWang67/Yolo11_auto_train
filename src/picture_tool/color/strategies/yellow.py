@@ -44,6 +44,7 @@ class YellowStrategy(GenericStrategy):
         )
         
         debug.update(generic_debug)
+        debug["hsv_ratio"] = hsv_ratio
         debug["final_score"] = float(final_score)
         return float(final_score), debug
 

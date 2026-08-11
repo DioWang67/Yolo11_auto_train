@@ -129,6 +129,8 @@ jobs:
             --cov-report=term-missing \
             --junitxml=reports/coverage-junit.xml \
             --timeout=60
+      - name: Enforce 80 percent project-wide coverage
+        run: python -m coverage report --fail-under=80
       - name: Enforce 80 percent on critical workflows
         run: |
           python -m coverage report \

@@ -5,7 +5,6 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 
 try:
@@ -34,7 +33,6 @@ except ImportError:
     YOLO = None  # type: ignore
 
 MODEL_INSTANCE = None
-STARTUP_MODEL_PATH: Optional[str] = None
 _MODEL_LOCK = threading.Lock()  # Thread-safe model loading
 
 
@@ -74,7 +72,9 @@ def load_model(model_path: str):
 async def lifespan(app: FastAPI):
     # Startup logic
     default_model = Path("runs/detect/train/weights/best.pt")
-    if default_model.exists():
+    if MODEL_INSTANCE is not None:
+        logging.info("Using the model loaded by the service entrypoint.")
+    elif default_model.exists():
         try:
             load_model(str(default_model))
         except (RuntimeError, FileNotFoundError, OSError) as e:
@@ -202,16 +202,10 @@ def main():
     args = parser.parse_args()
 
     if args.model:
-        # Pre-set for startup load
-        # Hacky global set for simplicity in this script scope
-        global STARTUP_MODEL_PATH
-        STARTUP_MODEL_PATH = args.model
-
-        # Better way: startup event checks this var, or we load it here but app state is cleaner
-        if Path(args.model).exists():
-            # We can't easily pass args to startup_event without closures or env vars
-            # So let's just attempt load if we are in main block context logic
-            pass
+        try:
+            load_model(args.model)
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
+            parser.error(f"Unable to load initial model: {exc}")
 
     uvicorn.run(app, host=args.host, port=args.port)
 
