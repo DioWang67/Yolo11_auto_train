@@ -28,6 +28,9 @@ class WorkspacePaths:
     inference_project: Path
     training_data: Path
     inference_models: Path
+    station_data: Path
+    inference_results: Path
+    inference_artifacts: Path
     manifest_path: Path | None
 
     @classmethod
@@ -99,12 +102,32 @@ class WorkspacePaths:
         projects = _require_mapping(payload, "projects")
         paths = _require_mapping(payload, "paths")
         root = manifest.parent.resolve()
+        inference_project = _resolve_relative_path(root, projects, "inference")
+        station_data = _resolve_optional_relative_path(
+            root,
+            paths,
+            "station_data",
+            default=inference_project,
+        )
         return cls(
             workspace_root=root,
             training_project=_resolve_relative_path(root, projects, "training"),
-            inference_project=_resolve_relative_path(root, projects, "inference"),
+            inference_project=inference_project,
             training_data=_resolve_relative_path(root, paths, "training_data"),
             inference_models=_resolve_relative_path(root, paths, "inference_models"),
+            station_data=station_data,
+            inference_results=_resolve_optional_relative_path(
+                root,
+                paths,
+                "inference_results",
+                default=station_data / "Result",
+            ),
+            inference_artifacts=_resolve_optional_relative_path(
+                root,
+                paths,
+                "inference_artifacts",
+                default=inference_project,
+            ),
             manifest_path=manifest,
         )
 
@@ -141,6 +164,18 @@ def _resolve_relative_path(
     return resolved
 
 
+def _resolve_optional_relative_path(
+    root: Path,
+    values: Mapping[str, object],
+    key: str,
+    *,
+    default: Path,
+) -> Path:
+    if key not in values:
+        return default.resolve()
+    return _resolve_relative_path(root, values, key)
+
+
 def _normalise_search_start(start: Path) -> Path:
     resolved = start.expanduser().resolve()
     return resolved.parent if resolved.is_file() else resolved
@@ -166,6 +201,9 @@ def _discover_legacy_siblings(start: Path) -> WorkspacePaths | None:
                 inference_project=inference_project.resolve(),
                 training_data=(training_project / "data").resolve(),
                 inference_models=(inference_project / "models").resolve(),
+                station_data=inference_project.resolve(),
+                inference_results=(inference_project / "Result").resolve(),
+                inference_artifacts=inference_project.resolve(),
                 manifest_path=None,
             )
     return None
