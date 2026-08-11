@@ -134,6 +134,10 @@ class TestTasksFunctionality:
         """Deploy should point config.yaml at versioned ONNX when selected."""
         import yaml
 
+        from picture_tool.runtime_pair_deployment import (
+            NumericalComparison,
+            PairVerification,
+        )
         import picture_tool.tasks.deploy as deploy_module
         from picture_tool.tasks.deploy import run_deploy
 
@@ -185,18 +189,28 @@ class TestTasksFunctionality:
             }
         }
 
-        comparison = SimpleNamespace(
+        comparison = NumericalComparison(
             runtime_shape=(1, 9, 8400),
             training_shape=(1, 9, 8400),
             max_abs_error=0.0001,
             mean_abs_error=0.00001,
             p99_abs_error=0.00005,
+            passed=True,
         )
         verification_calls = []
 
         def verify(runtime, training, **kwargs):
             verification_calls.append((runtime, training, kwargs))
-            return SimpleNamespace(input_size=640, comparison=comparison)
+            return PairVerification(
+                runtime_path=runtime.resolve(),
+                training_weight_path=training.resolve(),
+                runtime_sha256=hashlib.sha256(runtime.read_bytes()).hexdigest(),
+                training_weight_sha256=hashlib.sha256(
+                    training.read_bytes()
+                ).hexdigest(),
+                input_size=640,
+                comparison=comparison,
+            )
 
         monkeypatch.setattr(deploy_module, "verify_runtime_pair", verify)
         run_deploy(config, SimpleNamespace())
@@ -213,7 +227,9 @@ class TestTasksFunctionality:
         assert deployed_config["gain"] == "12.5"
         assert deployed_config["calibration"] == {"target_luma": 120.0}
         assert (deployed_dir / "weights" / "best.onnx").exists()
-        assert list((deployed_dir / "weights").glob("PCBA1_A_v1.0.0_*.onnx"))
+        versioned_weight = next(
+            (deployed_dir / "weights").glob("PCBA1_A_v1.0.0_*.onnx")
+        )
         deployment_manifest = yaml.safe_load(
             (deployed_dir / "deployment_manifest.yaml").read_text(encoding="utf-8")
         )
@@ -224,6 +240,9 @@ class TestTasksFunctionality:
             deployment_manifest["runtime_pair_verification"]["max_abs_error"]
             == pytest.approx(0.0001)
         )
+        assert deployment_manifest["runtime_pair_verification"][
+            "runtime_sha256"
+        ] == hashlib.sha256(versioned_weight.read_bytes()).hexdigest()
         assert len(verification_calls) == 1
         paired_training = (
             deployed_dir / "weights" / deployment_manifest["training_weight_file"]
@@ -233,9 +252,6 @@ class TestTasksFunctionality:
         assert len(deployment_manifest["training_weight_sha256"]) == 64
         assert deployment_manifest["trained_at"]
         assert deployment_manifest["deployed_at"]
-        versioned_weight = next(
-            (deployed_dir / "weights").glob("PCBA1_A_v1.0.0_*.onnx")
-        )
         assert versioned_weight.with_name(
             f"{versioned_weight.name}.manifest.yaml"
         ).exists()

@@ -27,6 +27,9 @@ def _write_manifest(root: Path, *, inference_models: str = "inference/models") -
                 "paths": {
                     "training_data": "training/data",
                     "inference_models": inference_models,
+                    "station_data": "station/inference",
+                    "inference_results": "Result",
+                    "inference_artifacts": "artifacts/inference",
                 },
             },
             sort_keys=False,
@@ -49,6 +52,11 @@ def test_discover_uses_nearest_ancestor_manifest(tmp_path: Path) -> None:
     assert paths.inference_project == (workspace / "inference").resolve()
     assert paths.training_data == (workspace / "training" / "data").resolve()
     assert paths.inference_models == (workspace / "inference" / "models").resolve()
+    assert paths.station_data == (workspace / "station" / "inference").resolve()
+    assert paths.inference_results == (workspace / "Result").resolve()
+    assert paths.inference_artifacts == (
+        workspace / "artifacts" / "inference"
+    ).resolve()
     assert paths.manifest_path == manifest.resolve()
 
 
@@ -117,6 +125,9 @@ def test_discover_supports_legacy_sibling_repositories(tmp_path: Path) -> None:
     assert paths.training_project == training.resolve()
     assert paths.inference_project == inference.resolve()
     assert paths.inference_models == (inference / "models").resolve()
+    assert paths.station_data == inference.resolve()
+    assert paths.inference_results == (inference / "Result").resolve()
+    assert paths.inference_artifacts == inference.resolve()
     assert paths.manifest_path is None
 
 

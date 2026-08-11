@@ -18,6 +18,10 @@ from typing import Any
 import yaml
 
 from picture_tool.pending_annotations import validate_yolo_label_text
+from picture_tool.workspace_paths import (
+    WorkspaceConfigurationError,
+    WorkspacePaths,
+)
 from picture_tool.quality.operator_dataset_conflicts import (
     OperatorDatasetConflictError,
     analysis_payload,
@@ -129,6 +133,8 @@ class OperatorHandoff:
     ready_count: int
     pending_count: int
     targets: tuple[OperatorTarget, ...]
+    inference_station_data_dir: Path | None = None
+    inference_project_root: Path | None = None
     job_id: str = ""
     status_path: Path | None = None
     training_options: OperatorTrainingOptions = OperatorTrainingOptions()
@@ -164,12 +170,60 @@ def resolve_latest_operator_handoff(training_root: str | Path) -> Path:
         OperatorHandoffError: If the pointer, job path, or status is unsafe.
     """
     root = Path(training_root).expanduser().resolve()
-    operator_root = (root / "data" / ".operator_handoff").resolve()
-    latest_path = operator_root / "latest.json"
-    if not latest_path.is_file():
+    workspace_paths: WorkspacePaths | None = None
+    try:
+        workspace_paths = WorkspacePaths.discover(root)
+    except WorkspaceConfigurationError:
+        workspace_paths = None
+    legacy_operator_root = (root / "data" / ".operator_handoff").resolve()
+    operator_roots: list[Path] = []
+    if workspace_paths is not None:
+        operator_roots.append(
+            (workspace_paths.training_data / ".operator_handoff").resolve()
+        )
+    if legacy_operator_root not in operator_roots:
+        operator_roots.append(legacy_operator_root)
+    roots_with_latest = [
+        candidate
+        for candidate in operator_roots
+        if (candidate / "latest.json").is_file()
+    ]
+    if not roots_with_latest:
         raise OperatorHandoffError(
             "No operator training job is available. Submit reviewed images first."
         )
+
+    first_error: OperatorHandoffError | None = None
+    for operator_root in roots_with_latest:
+        try:
+            return _resolve_operator_handoff_candidate(
+                operator_root=operator_root,
+                training_root=root,
+                legacy_operator_root=legacy_operator_root,
+                workspace_paths=workspace_paths,
+            )
+        except OperatorHandoffError as exc:
+            if first_error is None:
+                first_error = exc
+
+    # Root ordering is deterministic (canonical, then legacy). Keeping the
+    # first validation error also preserves the historical single-root error.
+    if first_error is None:
+        raise OperatorHandoffError(
+            "No operator training job is available. Submit reviewed images first."
+        )
+    raise first_error
+
+
+def _resolve_operator_handoff_candidate(
+    *,
+    operator_root: Path,
+    training_root: Path,
+    legacy_operator_root: Path,
+    workspace_paths: WorkspacePaths | None,
+) -> Path:
+    """Validate one root's latest pointer and return a resumable handoff."""
+    latest_path = operator_root / "latest.json"
     try:
         latest_payload = json.loads(latest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -205,6 +259,21 @@ def resolve_latest_operator_handoff(training_root: str | Path) -> Path:
         raise OperatorHandoffError(
             "The latest operator job does not match its immutable handoff."
         )
+    schema_version = immutable_payload.get("schema_version")
+    if schema_version == 6:
+        if workspace_paths is None:
+            workspace_paths = _require_schema6_workspace(training_root)
+        expected_operator_root = (
+            workspace_paths.training_data / ".operator_handoff"
+        ).resolve()
+    elif schema_version in {1, 2, 3, 4, 5}:
+        expected_operator_root = legacy_operator_root
+    else:
+        raise OperatorHandoffError("Unsupported operator handoff schema.")
+    if operator_root != expected_operator_root:
+        raise OperatorHandoffError(
+            f"Schema-v{schema_version} latest pointer is outside its training data root."
+        )
     state = str(status_payload.get("state") or "queued").strip().lower()
     if state in TERMINAL_OPERATOR_JOB_STATES:
         raise OperatorHandoffError(
@@ -212,6 +281,16 @@ def resolve_latest_operator_handoff(training_root: str | Path) -> Path:
             "Submit or explicitly open another job."
         )
     return handoff_path
+
+
+def _require_schema6_workspace(training_root: Path) -> WorkspacePaths:
+    """Load the canonical workspace required by the schema-v6 trust boundary."""
+    try:
+        return WorkspacePaths.discover(training_root)
+    except WorkspaceConfigurationError as exc:
+        raise OperatorHandoffError(
+            "Schema-v6 handoff requires a discoverable workspace contract."
+        ) from exc
 
 
 def _load_training_options(
@@ -346,16 +425,33 @@ def load_operator_handoff(
         3,
         4,
         5,
+        6,
     }:
         raise OperatorHandoffError("Unsupported operator handoff schema.")
     schema_version = int(payload.get("schema_version", 0))
+    if schema_version >= 6:
+        if not str(payload.get("inference_station_data_dir") or "").strip():
+            raise OperatorHandoffError(
+                "Schema-v6 handoff is missing inference_station_data_dir."
+            )
+        if not str(payload.get("inference_project_root") or "").strip():
+            raise OperatorHandoffError(
+                "Schema-v6 handoff is missing inference_project_root."
+            )
+    workspace_paths = (
+        _require_schema6_workspace(root) if schema_version >= 6 else None
+    )
     training_options = _load_training_options(
         payload.get("training_options"),
         schema_version=schema_version,
     )
 
     data_root = Path(str(payload.get("data_root") or "")).resolve()
-    allowed_data_root = (root / "data").resolve()
+    allowed_data_root = (
+        workspace_paths.training_data.resolve()
+        if workspace_paths is not None
+        else (root / "data").resolve()
+    )
     if not data_root.is_relative_to(allowed_data_root):
         raise OperatorHandoffError(
             f"Handoff data root is outside training data: {data_root}"
@@ -382,6 +478,47 @@ def load_operator_handoff(
         raise OperatorHandoffError(
             f"Inference models directory not found: {models_dir}"
         )
+    station_data_value = str(
+        payload.get("inference_station_data_dir") or ""
+    ).strip()
+    project_root_value = str(payload.get("inference_project_root") or "").strip()
+    station_data_dir = (
+        Path(station_data_value).resolve() if station_data_value else None
+    )
+    if station_data_dir is not None and not station_data_dir.is_dir():
+        raise OperatorHandoffError(
+            f"Inference station data directory not found: {station_data_dir}"
+        )
+    inference_project_root = (
+        Path(project_root_value).resolve() if project_root_value else None
+    )
+    if inference_project_root is not None and not inference_project_root.is_dir():
+        raise OperatorHandoffError(
+            f"Inference project root not found: {inference_project_root}"
+        )
+    if schema_version >= 6:
+        assert workspace_paths is not None
+        expected_paths = {
+            "training_project": (root, workspace_paths.training_project),
+            "inference_models_dir": (
+                models_dir,
+                workspace_paths.inference_models,
+            ),
+            "inference_station_data_dir": (
+                station_data_dir,
+                workspace_paths.station_data,
+            ),
+            "inference_project_root": (
+                inference_project_root,
+                workspace_paths.inference_project,
+            ),
+        }
+        for field_name, (actual_path, expected_path) in expected_paths.items():
+            if actual_path != expected_path:
+                raise OperatorHandoffError(
+                    f"Schema-v6 {field_name} does not match workspace.yaml: "
+                    f"expected {expected_path}, got {actual_path}"
+                )
     targets_value = payload.get("targets")
     if not isinstance(targets_value, list):
         raise OperatorHandoffError("Handoff targets must be a list.")
@@ -527,6 +664,8 @@ def load_operator_handoff(
         path=path,
         data_root=data_root,
         inference_models_dir=models_dir,
+        inference_station_data_dir=station_data_dir,
+        inference_project_root=inference_project_root,
         ready_count=ready_count,
         pending_count=pending_count,
         targets=tuple(targets),
@@ -1138,6 +1277,19 @@ def apply_handoff_to_config(
         {
             "enabled": True,
             "inference_models_dir": str(handoff.inference_models_dir),
+            "inference_project_root": str(
+                handoff.inference_project_root
+                if handoff.inference_project_root is not None
+                else handoff.inference_models_dir.parent
+            ),
+            "color_revisions_root": str(
+                (
+                    handoff.inference_station_data_dir
+                    if handoff.inference_station_data_dir is not None
+                    else handoff.inference_models_dir.parent
+                )
+                / ".color_revisions"
+            ),
             "product": target.product,
             "area": target.area,
             "version": "auto",
@@ -1161,13 +1313,21 @@ def apply_handoff_to_config(
             "force": False,
         }
     )
+    station_data_dir = (
+        handoff.inference_station_data_dir
+        if handoff.inference_station_data_dir is not None
+        else handoff.inference_models_dir.parent
+    )
     acceptance_root = (
-        handoff.inference_models_dir.parent
+        station_data_dir
         / "acceptance"
         / target.product
         / target.area
     )
-    acceptance_gate = _resolve_model_acceptance_gate(acceptance_root)
+    acceptance_gate = _resolve_model_acceptance_gate(
+        acceptance_root,
+        required=handoff.schema_version >= 6,
+    )
     deploy_cfg["acceptance_gate"] = acceptance_gate
     # Operator retraining always publishes the portable CPU runtime.  These
     # assignments intentionally override legacy presets that still point the
@@ -1286,9 +1446,16 @@ def apply_handoff_to_config(
 
 def _resolve_model_acceptance_gate(
     acceptance_root: Path,
+    *,
+    required: bool = False,
 ) -> dict[str, Any]:
     """Freeze the latest reviewed acceptance snapshot into this operator job."""
     if not acceptance_root.is_dir():
+        if required:
+            raise OperatorHandoffError(
+                "Required model acceptance data is missing: "
+                f"{acceptance_root}"
+            )
         return {"enabled": False}
     snapshots_root = acceptance_root / "snapshots"
     if not snapshots_root.is_dir():
@@ -1320,6 +1487,14 @@ def _resolve_model_acceptance_gate(
             raise OperatorHandoffError(
                 f"Acceptance snapshot metrics are invalid: {summary_path}"
             )
+        verified_manifest_sha256: str | None = None
+        if required:
+            verified_manifest_sha256 = _validate_required_acceptance_snapshot(
+                manifest_path=manifest_path,
+                summary_path=summary_path,
+                summary=summary,
+                metrics=metrics,
+            )
         raw_confirmed = summary.get("confirmed_count")
         if raw_confirmed is None:
             raw_confirmed = metrics.get("confirmed", 0)
@@ -1335,7 +1510,7 @@ def _resolve_model_acceptance_gate(
             raise OperatorHandoffError(
                 f"Acceptance snapshot has no confirmed samples: {summary_path}"
             )
-        return {
+        gate = {
             "enabled": True,
             "dataset_root": str(acceptance_root),
             "snapshot_manifest": str(manifest_path),
@@ -1347,9 +1522,101 @@ def _resolve_model_acceptance_gate(
             "require_no_errors": True,
             "timeout_seconds": 1800,
         }
+        if verified_manifest_sha256 is not None:
+            gate["snapshot_manifest_sha256"] = verified_manifest_sha256
+        return gate
     raise OperatorHandoffError(
         f"Acceptance data exists but has no complete snapshot: {snapshots_root}"
     )
+
+
+def _validate_required_acceptance_snapshot(
+    *,
+    manifest_path: Path,
+    summary_path: Path,
+    summary: dict[str, Any],
+    metrics: dict[str, Any],
+) -> str:
+    """Verify schema-v1 acceptance evidence and return its measured digest."""
+    if type(summary.get("schema_version")) is not int or summary["schema_version"] != 1:
+        raise OperatorHandoffError(
+            f"Acceptance snapshot schema is unsupported: {summary_path}"
+        )
+    snapshot_id = str(summary.get("snapshot_id") or "").strip()
+    if snapshot_id != summary_path.parent.name:
+        raise OperatorHandoffError(
+            f"Acceptance snapshot identity does not match directory: {summary_path}"
+        )
+    expected_manifest_sha256 = str(summary.get("manifest_sha256") or "").strip()
+    try:
+        actual_manifest_sha256 = _sha256_file(manifest_path)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise OperatorHandoffError(
+            f"Acceptance snapshot manifest cannot be hashed: {manifest_path}: {exc}"
+        ) from exc
+    if expected_manifest_sha256 != actual_manifest_sha256:
+        raise OperatorHandoffError(
+            f"Acceptance snapshot manifest checksum does not match: {manifest_path}"
+        )
+    try:
+        with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            required_fields = {
+                "review_status",
+                "expected_verdict",
+                "machine_status",
+            }
+            if not reader.fieldnames or not required_fields.issubset(reader.fieldnames):
+                raise OperatorHandoffError(
+                    f"Acceptance snapshot manifest schema is invalid: {manifest_path}"
+                )
+            rows = list(reader)
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise OperatorHandoffError(
+            f"Acceptance snapshot manifest cannot be read: {manifest_path}: {exc}"
+        ) from exc
+    record_count = summary.get("record_count")
+    if type(record_count) is not int or record_count != len(rows):
+        raise OperatorHandoffError(
+            f"Acceptance snapshot record_count does not match manifest: {summary_path}"
+        )
+    confirmed_count = sum(
+        str(row.get("review_status") or "").strip() == "confirmed" for row in rows
+    )
+    summary_confirmed = summary.get("confirmed_count")
+    metrics_confirmed = metrics.get("confirmed")
+    if (
+        type(summary_confirmed) is not int
+        or type(metrics_confirmed) is not int
+        or summary_confirmed != confirmed_count
+        or metrics_confirmed != confirmed_count
+    ):
+        raise OperatorHandoffError(
+            f"Acceptance snapshot confirmed_count does not match manifest: {summary_path}"
+        )
+    actual_false_positives = sum(
+        str(row.get("review_status") or "").strip() == "confirmed"
+        and str(row.get("expected_verdict") or "").strip() != "NG"
+        and str(row.get("machine_status") or "").strip() == "NG"
+        for row in rows
+    )
+    actual_false_negatives = sum(
+        str(row.get("review_status") or "").strip() == "confirmed"
+        and str(row.get("expected_verdict") or "").strip() == "NG"
+        and str(row.get("machine_status") or "").strip() == "OK"
+        for row in rows
+    )
+    for field_name, actual_value in (
+        ("fp", actual_false_positives),
+        ("fn", actual_false_negatives),
+    ):
+        configured_value = metrics.get(field_name)
+        if type(configured_value) is not int or configured_value != actual_value:
+            raise OperatorHandoffError(
+                "Acceptance snapshot metrics do not match manifest: "
+                f"{summary_path}: {field_name}"
+            )
+    return actual_manifest_sha256
 
 
 def find_deployed_training_weight(handoff: OperatorHandoff) -> Path | None:
@@ -1644,15 +1911,38 @@ def find_deployed_runtime_weight(handoff: OperatorHandoff) -> Path | None:
     if not raw_weights:
         return None
     path = Path(raw_weights)
+    inference_project_root = (
+        handoff.inference_project_root
+        if handoff.inference_project_root is not None
+        else handoff.inference_models_dir.parent
+    ).resolve()
+    models_prefixed_candidate = (
+        handoff.inference_models_dir.joinpath(*path.parts[1:])
+        if (
+            not path.is_absolute()
+            and path.parts
+            and path.parts[0].casefold() == "models"
+            and all(part not in {".", ".."} for part in path.parts[1:])
+        )
+        else None
+    )
     candidates = (
         [path]
         if path.is_absolute()
-        else [handoff.inference_models_dir.parent / path, station_dir / path.name]
+        else [
+            *(
+                [models_prefixed_candidate]
+                if models_prefixed_candidate is not None
+                else []
+            ),
+            inference_project_root / path,
+            station_dir / path,
+        ]
     )
-    allowed_root = handoff.inference_models_dir.parent.resolve()
+    allowed_roots = (inference_project_root, handoff.inference_models_dir.resolve())
     for candidate in candidates:
         resolved = candidate.expanduser().resolve()
-        if resolved.is_relative_to(allowed_root) and resolved.is_file():
+        if any(resolved.is_relative_to(root) for root in allowed_roots) and resolved.is_file():
             return resolved
     return None
 

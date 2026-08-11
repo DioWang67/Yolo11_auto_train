@@ -10,6 +10,7 @@ from picture_tool.gui.operator_handoff import (
     _find_completed_job_checkpoint,
     _find_incomplete_job_checkpoint,
     apply_handoff_to_config,
+    find_deployed_runtime_weight,
     load_operator_handoff,
     materialize_job_dataset_snapshot,
     resolve_latest_operator_handoff,
@@ -18,7 +19,16 @@ from picture_tool.path_resolver import resolve_project_paths
 
 
 def _create_dataset(root: Path, product: str = "Cable1", area: str = "A") -> Path:
-    dataset = root / "data" / product / area
+    return _create_dataset_at_data_root(root / "data", product=product, area=area)
+
+
+def _create_dataset_at_data_root(
+    data_root: Path,
+    *,
+    product: str = "Cable1",
+    area: str = "A",
+) -> Path:
+    dataset = data_root / product / area
     (dataset / "raw" / "images").mkdir(parents=True, exist_ok=True)
     (dataset / "raw" / "labels").mkdir(parents=True, exist_ok=True)
     metadata = dataset / "metadata"
@@ -376,8 +386,10 @@ def _write_schema3_handoff(
     training_root: Path,
     *,
     pending_sample_ids: list[str] | None = None,
+    data_root: Path | None = None,
 ) -> Path:
-    dataset = _create_dataset(training_root)
+    resolved_data_root = (data_root or training_root / "data").resolve()
+    dataset = _create_dataset_at_data_root(resolved_data_root)
     image = dataset / "raw" / "images" / "sample.jpg"
     label = dataset / "raw" / "labels" / "sample.txt"
     image.write_bytes(b"original-image")
@@ -402,7 +414,7 @@ def _write_schema3_handoff(
         encoding="utf-8",
     )
     job_id = "20260715T120000Z-testjob"
-    job_dir = training_root / "data" / ".operator_handoff" / "jobs" / job_id
+    job_dir = resolved_data_root / ".operator_handoff" / "jobs" / job_id
     job_dir.mkdir(parents=True)
     handoff = job_dir / "handoff.json"
     status = job_dir / "status.json"
@@ -410,7 +422,7 @@ def _write_schema3_handoff(
         "schema_version": 3,
         "job_id": job_id,
         "created_at": "2026-07-15T12:00:00+00:00",
-        "data_root": str((training_root / "data").resolve()),
+        "data_root": str(resolved_data_root),
         "status_path": str(status.resolve()),
         "inference_models_dir": str(models.resolve()),
         "ready_count": 1,
@@ -725,6 +737,330 @@ def _upgrade_handoff_to_schema5(
     }
     handoff_path.write_text(json.dumps(payload), encoding="utf-8")
     return payload
+
+
+def _upgrade_handoff_to_schema6(
+    handoff_path: Path,
+    *,
+    station_data_dir: Path,
+    inference_project_root: Path,
+) -> dict:
+    payload = _upgrade_handoff_to_schema5(
+        handoff_path,
+        position_training_mode="yolo_only",
+    )
+    payload["schema_version"] = 6
+    payload["inference_station_data_dir"] = str(station_data_dir.resolve())
+    payload["inference_project_root"] = str(inference_project_root.resolve())
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def _write_acceptance_snapshot(station_data_dir: Path) -> Path:
+    acceptance_root = station_data_dir / "acceptance" / "Cable1" / "A"
+    snapshot_root = acceptance_root / "snapshots" / "current"
+    snapshot_root.mkdir(parents=True)
+    manifest_path = snapshot_root / "ground_truth.csv"
+    manifest_path.write_text(
+        "sample_id,review_status,expected_verdict,machine_status\n"
+        "sample,confirmed,OK,OK\n",
+        encoding="utf-8",
+    )
+    (snapshot_root / "snapshot.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "snapshot_id": snapshot_root.name,
+                "record_count": 1,
+                "confirmed_count": 1,
+                "manifest_sha256": hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest(),
+                "metrics": {"confirmed": 1, "fp": 0, "fn": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return acceptance_root
+
+
+def _write_schema6_workspace(
+    workspace_root: Path,
+    *,
+    training_data: str = "train/data",
+) -> None:
+    (workspace_root / "workspace.yaml").write_text(
+        f"""\
+schema_version: 1
+projects:
+  training: train
+  inference: inference
+paths:
+  training_data: {training_data}
+  inference_models: inference/models
+  station_data: station_data
+  inference_results: Result
+  inference_artifacts: artifacts/inference
+""",
+        encoding="utf-8",
+    )
+
+
+def test_schema6_requires_explicit_workspace_paths(tmp_path: Path) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    payload = _upgrade_handoff_to_schema5(
+        handoff_path,
+        position_training_mode="yolo_only",
+    )
+    payload["schema_version"] = 6
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OperatorHandoffError, match="inference_station_data_dir"):
+        load_operator_handoff(handoff_path, training_root=training_root)
+
+    station_data_dir = tmp_path / "station_data"
+    station_data_dir.mkdir()
+    payload["inference_station_data_dir"] = str(station_data_dir)
+    handoff_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OperatorHandoffError, match="inference_project_root"):
+        load_operator_handoff(handoff_path, training_root=training_root)
+
+
+def test_schema6_uses_station_acceptance_and_explicit_deploy_roots(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    station_data_dir = tmp_path / "station_data"
+    inference_project_root = tmp_path / "inference"
+    station_data_dir.mkdir()
+    inference_project_root.mkdir(exist_ok=True)
+    _write_schema6_workspace(tmp_path)
+    payload = _upgrade_handoff_to_schema6(
+        handoff_path,
+        station_data_dir=station_data_dir,
+        inference_project_root=inference_project_root,
+    )
+    _write_station_position_state(
+        Path(payload["inference_models_dir"]), enabled=False
+    )
+    acceptance_root = _write_acceptance_snapshot(station_data_dir)
+
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+    prepared = apply_handoff_to_config({"yolo_training": {}}, handoff)
+    deploy = prepared["yolo_training"]["deploy"]
+
+    assert handoff.inference_station_data_dir == station_data_dir.resolve()
+    assert handoff.inference_project_root == inference_project_root.resolve()
+    assert deploy["inference_project_root"] == str(inference_project_root.resolve())
+    assert deploy["color_revisions_root"] == str(
+        station_data_dir.resolve() / ".color_revisions"
+    )
+    assert deploy["acceptance_gate"]["enabled"] is True
+    assert deploy["acceptance_gate"]["dataset_root"] == str(acceptance_root)
+    snapshot_manifest = acceptance_root / "snapshots" / "current" / "ground_truth.csv"
+    assert deploy["acceptance_gate"]["snapshot_manifest_sha256"] == hashlib.sha256(
+        snapshot_manifest.read_bytes()
+    ).hexdigest()
+
+
+def test_schema6_missing_acceptance_fails_closed(tmp_path: Path) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    station_data_dir = tmp_path / "station_data"
+    inference_project_root = tmp_path / "inference"
+    station_data_dir.mkdir()
+    inference_project_root.mkdir(exist_ok=True)
+    _write_schema6_workspace(tmp_path)
+    payload = _upgrade_handoff_to_schema6(
+        handoff_path,
+        station_data_dir=station_data_dir,
+        inference_project_root=inference_project_root,
+    )
+    _write_station_position_state(
+        Path(payload["inference_models_dir"]), enabled=False
+    )
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    with pytest.raises(OperatorHandoffError, match="acceptance data is missing"):
+        apply_handoff_to_config({"yolo_training": {}}, handoff)
+
+
+def test_schema6_rejects_paths_outside_workspace_contract(tmp_path: Path) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    station_data_dir = tmp_path / "station_data"
+    inference_project_root = tmp_path / "inference"
+    rogue_station_data = tmp_path / "rogue-station-data"
+    for path in (station_data_dir, rogue_station_data):
+        path.mkdir()
+    inference_project_root.mkdir(exist_ok=True)
+    _write_schema6_workspace(tmp_path)
+    _upgrade_handoff_to_schema6(
+        handoff_path,
+        station_data_dir=rogue_station_data,
+        inference_project_root=inference_project_root,
+    )
+
+    with pytest.raises(OperatorHandoffError, match="does not match workspace.yaml"):
+        load_operator_handoff(handoff_path, training_root=training_root)
+
+
+def test_schema6_uses_workspace_training_data_for_latest_and_load(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    data_root = tmp_path / "shared" / "operator-training-data"
+    handoff_path = _write_schema3_handoff(training_root, data_root=data_root)
+    station_data_dir = tmp_path / "station_data"
+    inference_project_root = tmp_path / "inference"
+    station_data_dir.mkdir()
+    inference_project_root.mkdir(exist_ok=True)
+    _write_schema6_workspace(
+        tmp_path,
+        training_data="shared/operator-training-data",
+    )
+    _upgrade_handoff_to_schema6(
+        handoff_path,
+        station_data_dir=station_data_dir,
+        inference_project_root=inference_project_root,
+    )
+    operator_root = data_root / ".operator_handoff"
+    (operator_root / "latest.json").write_text(
+        handoff_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    resolved = resolve_latest_operator_handoff(training_root)
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+
+    assert resolved == handoff_path.resolve()
+    assert handoff.data_root == data_root.resolve()
+
+
+@pytest.mark.parametrize(
+    ("canonical_condition", "expected_job"),
+    [
+        ("resumable", "canonical"),
+        ("terminal", "legacy"),
+        ("corrupt", "legacy"),
+    ],
+)
+def test_schema6_latest_selection_prefers_resumable_job_across_roots(
+    tmp_path: Path,
+    canonical_condition: str,
+    expected_job: str,
+) -> None:
+    training_root = tmp_path / "train"
+    canonical_data_root = tmp_path / "shared" / "operator-training-data"
+    canonical_handoff = _write_schema3_handoff(
+        training_root,
+        data_root=canonical_data_root,
+    )
+    station_data_dir = tmp_path / "station_data"
+    inference_project_root = tmp_path / "inference"
+    station_data_dir.mkdir()
+    inference_project_root.mkdir(exist_ok=True)
+    _write_schema6_workspace(
+        tmp_path,
+        training_data="shared/operator-training-data",
+    )
+    _upgrade_handoff_to_schema6(
+        canonical_handoff,
+        station_data_dir=station_data_dir,
+        inference_project_root=inference_project_root,
+    )
+
+    legacy_handoff = _write_schema3_handoff(training_root)
+    _upgrade_handoff_to_schema5(
+        legacy_handoff,
+        position_training_mode="yolo_only",
+    )
+    (legacy_handoff.parent.parent.parent / "latest.json").write_text(
+        legacy_handoff.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (legacy_handoff.parent / "status.json").write_text(
+        json.dumps({"state": "queued"}),
+        encoding="utf-8",
+    )
+
+    canonical_latest = canonical_handoff.parent.parent.parent / "latest.json"
+    if canonical_condition == "corrupt":
+        canonical_latest.write_text("{", encoding="utf-8")
+    else:
+        canonical_latest.write_text(
+            canonical_handoff.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        canonical_state = (
+            "deployed" if canonical_condition == "terminal" else "queued"
+        )
+        (canonical_handoff.parent / "status.json").write_text(
+            json.dumps({"state": canonical_state}),
+            encoding="utf-8",
+        )
+
+    expected_path = (
+        canonical_handoff if expected_job == "canonical" else legacy_handoff
+    )
+
+    assert resolve_latest_operator_handoff(training_root) == expected_path.resolve()
+
+
+def test_schema5_keeps_legacy_training_data_root(tmp_path: Path) -> None:
+    training_root = tmp_path / "train"
+    handoff_path = _write_schema3_handoff(training_root)
+    shared_data = tmp_path / "shared" / "operator-training-data"
+    shared_data.mkdir(parents=True)
+    _write_schema6_workspace(
+        tmp_path,
+        training_data="shared/operator-training-data",
+    )
+    _upgrade_handoff_to_schema5(
+        handoff_path,
+        position_training_mode="yolo_only",
+    )
+    operator_root = training_root / "data" / ".operator_handoff"
+    (operator_root / "latest.json").write_text(
+        handoff_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    assert resolve_latest_operator_handoff(training_root) == handoff_path.resolve()
+    assert load_operator_handoff(
+        handoff_path,
+        training_root=training_root,
+    ).data_root == (training_root / "data").resolve()
+
+
+def test_runtime_weight_resolves_models_prefix_against_custom_models_root(
+    tmp_path: Path,
+) -> None:
+    training_root = tmp_path / "train"
+    custom_models = tmp_path / "custom-model-store"
+    handoff_path = _write_handoff(training_root, models_dir=custom_models)
+    handoff = load_operator_handoff(handoff_path, training_root=training_root)
+    runtime_weight = (
+        custom_models
+        / "Cable1"
+        / "A"
+        / "yolo"
+        / "weights"
+        / "custom.onnx"
+    )
+    runtime_weight.write_bytes(b"custom-runtime")
+    config_path = custom_models / "Cable1" / "A" / "yolo" / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {"weights": "models/Cable1/A/yolo/weights/custom.onnx"}
+        ),
+        encoding="utf-8",
+    )
+
+    assert find_deployed_runtime_weight(handoff) == runtime_weight.resolve()
 
 
 def _write_station_position_state(
