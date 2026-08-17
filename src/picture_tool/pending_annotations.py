@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
@@ -16,6 +17,8 @@ from typing import Any, Iterator
 
 from picture_tool.operator_job import OperatorJobError, update_job_status
 
+
+logger = logging.getLogger(__name__)
 
 READY_FIELDS = [
     "source_manifest",
@@ -75,6 +78,19 @@ YOLO_IMAGE_SUFFIXES = frozenset(
     {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 )
 
+# LabelImg only ever shows the file name, so the correction the operator has to
+# perform travels in that name. The leading digit keeps identical work grouped
+# together when the file list is sorted, which removes the constant task
+# switching of guessing each image's defect.
+ANNOTATION_TASK_PREFIXES = {
+    "missed_detection_requires_box_annotation": "1-補框",
+    "false_detection_requires_correction": "2-刪錯框",
+    "wrong_class_requires_correction": "3-改類別",
+    "box_geometry_requires_correction": "4-調整框",
+    "operator_uncertain_requires_review": "5-待確認",
+}
+DEFAULT_ANNOTATION_TASK_PREFIX = "9-確認"
+
 
 class PendingAnnotationError(ValueError):
     """Raised when pending annotation data is unsafe to promote."""
@@ -113,6 +129,19 @@ class _PendingLabelInspection:
     status: str
     label_text: str = ""
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class _PlannedPromotion:
+    """One fully validated pending row, resolved before any file is moved."""
+
+    sample_id: str
+    pending_image: Path
+    pending_label: Path
+    output_image: Path
+    output_label: Path
+    label_text: str
+    ready_row: dict[str, str]
 
 
 def configure_pending_workspace(
@@ -187,7 +216,7 @@ def configure_pending_job_workspace(
             row.get("output_image"), shared_images, field_name="output_image"
         )
         if source is not None and source.is_file():
-            desired_sources[source.name] = source
+            desired_sources[workspace_image_name(row, source)] = source
 
     workspace = handoff.parent / "annotation_images"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -206,6 +235,20 @@ def configure_pending_job_workspace(
             ) != _sha256_file(source):
                 _copy_atomic(source, destination)
     return workspace, labels_dir, classes_file
+
+
+def workspace_image_name(row: dict[str, str], source: Path) -> str:
+    """Return the LabelImg file name that states this image's correction.
+
+    The name is the only place LabelImg can carry the required action, so both
+    the workspace builder and the sidecar reconciler derive it here to stay in
+    sync. The sample identity is preserved so the file remains traceable.
+    """
+    prefix = ANNOTATION_TASK_PREFIXES.get(
+        str(row.get("reason") or "").strip().lower(),
+        DEFAULT_ANNOTATION_TASK_PREFIX,
+    )
+    return f"{prefix}-{source.name}"
 
 
 def reconcile_pending_label_sidecars(
@@ -249,8 +292,16 @@ def reconcile_pending_label_sidecars(
             )
             if image_path is None:
                 continue
-            sidecar = workspace / f"{image_path.stem}.txt"
-            if not sidecar.is_file():
+            # Accept the legacy un-prefixed name too, so a job that was already
+            # open when this naming changed does not lose saved work.
+            candidates = [
+                workspace / f"{Path(workspace_image_name(row, image_path)).stem}.txt",
+                workspace / f"{image_path.stem}.txt",
+            ]
+            sidecar = next(
+                (candidate for candidate in candidates if candidate.is_file()), None
+            )
+            if sidecar is None:
                 continue
             resolved_sidecar = sidecar.resolve()
             if resolved_sidecar.parent != workspace:
@@ -370,8 +421,11 @@ def promote_completed_pending(
             if str(row.get("sample_id") or row.get("image_sha256") or "")
         }
         remaining: list[dict[str, str]] = []
-        promoted = 0
 
+        # Phase 1: validate and resolve every row before touching any file. A
+        # rejected label must not leave earlier rows half-moved, because a
+        # pending image that was already deleted can never be promoted again.
+        planned: list[_PlannedPromotion] = []
         for row in pending_rows:
             row_sample_id = str(
                 row.get("sample_id") or row.get("image_sha256") or ""
@@ -393,11 +447,13 @@ def promote_completed_pending(
             if inspection.status == "invalid_label":
                 label_name = label_path.name if label_path is not None else "unknown.txt"
                 raise PendingAnnotationError(
-                    f"Invalid annotation {label_name}: {inspection.detail}"
+                    f"標註內容不正確，這次沒有加入任何資料：{label_name}\n"
+                    f"{inspection.detail}\n"
+                    "請重新開啟標註工具修正這張後再試一次。"
                 )
             if inspection.status == "missing_required_box":
                 raise PendingAnnotationError(
-                    f"漏檢影像 {image_path.name} 尚未框出目標。"
+                    f"漏檢影像 {image_path.name} 尚未框出目標，這次沒有加入任何資料。\n"
                     "請在標註工具至少畫一個正確框並儲存；"
                     "若影像中其實沒有目標，請回到檢測複核畫面改選「影像中沒有目標」。"
                 )
@@ -416,46 +472,61 @@ def promote_completed_pending(
                 image_path
             )
             sample_id = str(row.get("sample_id") or "") or image_sha256[:24]
-            raw_images = root / "raw" / "images"
-            raw_labels = root / "raw" / "labels"
-            raw_images.mkdir(parents=True, exist_ok=True)
-            raw_labels.mkdir(parents=True, exist_ok=True)
-            output_image = raw_images / f"review_{sample_id}{image_path.suffix.lower()}"
-            output_label = raw_labels / f"review_{sample_id}.txt"
-            _copy_atomic(image_path, output_image)
-            _write_text_atomic(output_label, label_text)
-
+            output_image = (
+                root / "raw" / "images"
+                / f"review_{sample_id}{image_path.suffix.lower()}"
+            )
+            output_label = root / "raw" / "labels" / f"review_{sample_id}.txt"
             normalized_names = json.dumps(
                 [str(name) for name in class_names],
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-            ready_by_id[sample_id] = {
-                "source_manifest": str(row.get("config_snapshot_path") or ""),
-                "review_label": str(row.get("review_label") or ""),
-                "review_note": str(row.get("review_note") or ""),
-                "source_image": str(row.get("source_image") or image_path),
-                "output_image": str(output_image),
-                "output_label": str(output_label),
-                "annotation_status": (
-                    "verified_annotation" if label_text.strip() else "verified_empty"
-                ),
-                "sample_id": sample_id,
-                "image_sha256": image_sha256,
-                "product": str(row.get("product") or ""),
-                "area": str(row.get("area") or ""),
-                "timestamp": str(row.get("timestamp") or ""),
-                "status": str(row.get("status") or ""),
-                "decision_reasons": str(row.get("decision_reasons") or ""),
-                "model_version": str(row.get("model_version") or ""),
-                "class_names_json": normalized_names,
-                "class_map_json": str(row.get("class_map_json") or "{}"),
-                "class_schema_hash": _class_schema_hash(class_names),
-            }
-            image_path.unlink()
-            label_path.unlink()
-            _verification_receipt_path(label_path).unlink(missing_ok=True)
-            promoted += 1
+            planned.append(
+                _PlannedPromotion(
+                    sample_id=sample_id,
+                    pending_image=image_path,
+                    pending_label=label_path,
+                    output_image=output_image,
+                    output_label=output_label,
+                    label_text=label_text,
+                    ready_row={
+                        "source_manifest": str(row.get("config_snapshot_path") or ""),
+                        "review_label": str(row.get("review_label") or ""),
+                        "review_note": str(row.get("review_note") or ""),
+                        "source_image": str(row.get("source_image") or image_path),
+                        "output_image": str(output_image),
+                        "output_label": str(output_label),
+                        "annotation_status": (
+                            "verified_annotation"
+                            if label_text.strip()
+                            else "verified_empty"
+                        ),
+                        "sample_id": sample_id,
+                        "image_sha256": image_sha256,
+                        "product": str(row.get("product") or ""),
+                        "area": str(row.get("area") or ""),
+                        "timestamp": str(row.get("timestamp") or ""),
+                        "status": str(row.get("status") or ""),
+                        "decision_reasons": str(row.get("decision_reasons") or ""),
+                        "model_version": str(row.get("model_version") or ""),
+                        "class_names_json": normalized_names,
+                        "class_map_json": str(row.get("class_map_json") or "{}"),
+                        "class_schema_hash": _class_schema_hash(class_names),
+                    },
+                )
+            )
+
+        # Phase 2: publish the validated evidence. A failure here leaves the
+        # pending queue untouched, so the whole job is simply retried.
+        if planned:
+            (root / "raw" / "images").mkdir(parents=True, exist_ok=True)
+            (root / "raw" / "labels").mkdir(parents=True, exist_ok=True)
+        for promotion in planned:
+            _copy_atomic(promotion.pending_image, promotion.output_image)
+            _write_text_atomic(promotion.output_label, promotion.label_text)
+            ready_by_id[promotion.sample_id] = promotion.ready_row
+        promoted = len(planned)
 
         ready_rows = sorted(
             ready_by_id.values(), key=lambda row: str(row.get("sample_id") or "")
@@ -479,6 +550,25 @@ def promote_completed_pending(
             total_ready_count=len(ready_rows),
             remaining_count=job_remaining_count,
         )
+
+        # Phase 3: retire the pending evidence only after the manifests own it.
+        # A failure before this point leaves a retryable queue; a failure here
+        # leaves harmless orphans that the job workspace rebuild removes.
+        for promotion in planned:
+            for path in (
+                promotion.pending_image,
+                promotion.pending_label,
+                _verification_receipt_path(promotion.pending_label),
+            ):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "Promoted sample %s but could not remove its pending "
+                        "evidence: %s",
+                        promotion.sample_id,
+                        path,
+                    )
 
     return PendingPromotionReport(
         promoted_count=promoted,

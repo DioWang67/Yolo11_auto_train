@@ -34,6 +34,10 @@ class OperatorWorkflowPresentation:
     progress: int
     is_terminal: bool = False
     is_success: bool = False
+    # Outcome and transition states describe where a job stopped rather than a
+    # new beginning. The panel keeps the progress already reached so the bar
+    # never travels backwards and imply the work restarted.
+    keeps_reached_progress: bool = False
 
 
 _STATE_PRESENTATIONS = {
@@ -63,13 +67,45 @@ _STATE_PRESENTATIONS = {
         is_terminal=True,
         is_success=True,
     ),
+    "cancelling": OperatorWorkflowPresentation(
+        0,
+        "正在安全停止",
+        "系統會在安全點停止；產線模型不會變更。",
+        0,
+        keeps_reached_progress=True,
+    ),
+    "waiting_feedback": OperatorWorkflowPresentation(
+        0,
+        "資料量不足，這次不更新模型",
+        "補標資料已安全保存，產線模型不會變更。"
+        "請回到複核畫面繼續累積案例，數量足夠後重新送出。",
+        0,
+        is_terminal=True,
+        keeps_reached_progress=True,
+    ),
     "failed": OperatorWorkflowPresentation(
-        0, "模型更新未完成", "舊模型保持不變，請依畫面訊息處理。", 0, is_terminal=True
+        0,
+        "模型更新未完成",
+        "舊模型保持不變，請依畫面訊息處理。",
+        0,
+        is_terminal=True,
+        keeps_reached_progress=True,
     ),
     "cancelled": OperatorWorkflowPresentation(
-        0, "模型更新已停止", "舊模型保持不變。", 0, is_terminal=True
+        0,
+        "模型更新已停止",
+        "舊模型保持不變。",
+        0,
+        is_terminal=True,
+        keeps_reached_progress=True,
     ),
 }
+
+# Every lifecycle state the training GUI publishes through
+# ``_publish_operator_status``. Adding a state without a presentation makes the
+# panel silently fall back to ``queued``, which reports a stopped job as one
+# that is still starting. ``test_operator_workflow_panel`` enforces this.
+PUBLISHED_JOB_STATES = frozenset(_STATE_PRESENTATIONS)
 
 
 def build_operator_workflow_presentation(
@@ -196,8 +232,7 @@ class OperatorWorkflowPanel(QFrame):
             pending_count=self._pending_count,
             progress=progress,
         )
-        normalized_state = str(state or "queued").strip().lower()
-        if normalized_state in {"failed", "cancelled"}:
+        if presentation.keeps_reached_progress:
             presentation = replace(
                 presentation,
                 step_index=self._last_active_step,
