@@ -14,6 +14,7 @@ from picture_tool.pending_annotations import (
     promote_completed_pending,
     reconcile_pending_label_sidecars,
     record_label_verification,
+    workspace_image_name,
 )
 
 
@@ -270,6 +271,167 @@ def test_promote_pending_rejects_non_finite_coordinates(tmp_path):
     assert (dataset / "review_pending" / "images" / "review_sample1.jpg").is_file()
 
 
+def _two_pending_cases(
+    tmp_path: Path, first_label: str, second_label: str
+) -> tuple[Path, Path]:
+    """Build a two-row pending queue so partial-failure behavior is observable."""
+    dataset = tmp_path / "data" / "Cable1" / "A"
+    images, labels, _classes = configure_pending_workspace(dataset, ["Black", "Red"])
+    rows = []
+    for sample_id, text in (("sample1", first_label), ("sample2", second_label)):
+        image = images / f"review_{sample_id}.jpg"
+        image.write_bytes(f"image-{sample_id}".encode())
+        label = labels / f"review_{sample_id}.txt"
+        label.write_text(text, encoding="utf-8", newline="")
+        rows.append(
+            {
+                "sample_id": sample_id,
+                "image_sha256": "",
+                "product": "Cable1",
+                "area": "A",
+                "review_label": "false_negative",
+                "reason": "missed_detection_requires_box_annotation",
+                "annotation_status": "pending",
+                "source_image": str(image),
+                "output_image": str(image),
+                "output_label": str(label),
+                "label_baseline_sha256": "",
+                "config_snapshot_path": "case.json",
+            }
+        )
+    manifest = dataset / "review_pending" / "manifest.csv"
+    with manifest.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PENDING_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    handoff = tmp_path / "data" / ".operator_handoff" / "latest.json"
+    handoff.parent.mkdir(parents=True)
+    handoff.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "ready_count": 0,
+                "pending_count": 2,
+                "targets": [
+                    {
+                        "product": "Cable1",
+                        "area": "A",
+                        "dataset_root": str(dataset.resolve()),
+                        "ready_count": 0,
+                        "total_ready_count": 0,
+                        "pending_count": 2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return dataset, handoff
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_prefix"),
+    [
+        ("missed_detection_requires_box_annotation", "1-補框"),
+        ("false_detection_requires_correction", "2-刪錯框"),
+        ("wrong_class_requires_correction", "3-改類別"),
+        ("box_geometry_requires_correction", "4-調整框"),
+        ("operator_uncertain_requires_review", "5-待確認"),
+        ("something_new", "9-確認"),
+    ],
+)
+def test_workspace_name_states_the_required_correction(reason, expected_prefix):
+    name = workspace_image_name({"reason": reason}, Path("review_abc.jpg"))
+
+    assert name == f"{expected_prefix}-review_abc.jpg"
+    # Sorting groups identical work together in the LabelImg file list.
+    assert name.startswith(expected_prefix[0])
+
+
+def test_sidecar_written_under_the_task_name_is_still_reconciled(tmp_path):
+    """LabelImg saves beside the renamed image; that label must still import."""
+    dataset, handoff = _pending_case(tmp_path, None)
+    scoped = _scoped_handoff(tmp_path, dataset)
+    workspace, labels, _classes = configure_pending_job_workspace(
+        dataset, ["Black", "Red"], scoped
+    )
+    assert [path.name for path in workspace.glob("*.jpg")] == [
+        "1-補框-review_sample1.jpg"
+    ]
+    (workspace / "1-補框-review_sample1.txt").write_text(
+        "1 0.5 0.5 0.2 0.2\n", encoding="utf-8", newline=""
+    )
+
+    reconciled = reconcile_pending_label_sidecars(
+        dataset, ["Black", "Red"], scoped
+    )
+
+    assert reconciled == 1
+    assert (labels / "review_sample1.txt").read_text(encoding="utf-8") == (
+        "1 0.5 0.5 0.2 0.2\n"
+    )
+
+
+def test_sidecar_saved_under_the_legacy_name_is_not_lost(tmp_path):
+    """A job already open when the naming changed must keep its saved work."""
+    dataset, handoff = _pending_case(tmp_path, None)
+    scoped = _scoped_handoff(tmp_path, dataset)
+    workspace, labels, _classes = configure_pending_job_workspace(
+        dataset, ["Black", "Red"], scoped
+    )
+    (workspace / "review_sample1.txt").write_text(
+        "0 0.4 0.4 0.2 0.2\n", encoding="utf-8", newline=""
+    )
+
+    reconciled = reconcile_pending_label_sidecars(
+        dataset, ["Black", "Red"], scoped
+    )
+
+    assert reconciled == 1
+    assert (labels / "review_sample1.txt").read_text(encoding="utf-8") == (
+        "0 0.4 0.4 0.2 0.2\n"
+    )
+
+
+def test_one_invalid_label_leaves_every_other_sample_untouched(tmp_path):
+    """A rejected label must not half-move the rows validated before it."""
+    dataset, handoff = _two_pending_cases(
+        tmp_path, "0 0.5 0.5 0.2 0.2\n", "7 0.5 0.5 0.2 0.2\n"
+    )
+
+    with pytest.raises(PendingAnnotationError, match="沒有加入任何資料"):
+        promote_completed_pending(dataset, ["Black", "Red"], handoff)
+
+    pending_images = dataset / "review_pending" / "images"
+    assert (pending_images / "review_sample1.jpg").is_file()
+    assert (pending_images / "review_sample2.jpg").is_file()
+    assert not (dataset / "raw" / "images" / "review_sample1.jpg").exists()
+    assert not (dataset / "metadata" / "review_dataset_manifest.csv").exists()
+
+
+def test_retry_after_correction_promotes_every_sample(tmp_path):
+    """After the operator fixes the rejected label, nothing is left stranded."""
+    dataset, handoff = _two_pending_cases(
+        tmp_path, "0 0.5 0.5 0.2 0.2\n", "7 0.5 0.5 0.2 0.2\n"
+    )
+    with pytest.raises(PendingAnnotationError):
+        promote_completed_pending(dataset, ["Black", "Red"], handoff)
+
+    (dataset / "review_pending" / "labels" / "review_sample2.txt").write_text(
+        "1 0.5 0.5 0.2 0.2\n", encoding="utf-8", newline=""
+    )
+    report = promote_completed_pending(dataset, ["Black", "Red"], handoff)
+
+    assert report.promoted_count == 2
+    assert report.remaining_count == 0
+    with (dataset / "review_pending" / "manifest.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        assert list(csv.DictReader(handle)) == []
+    assert (dataset / "raw" / "images" / "review_sample1.jpg").is_file()
+    assert (dataset / "raw" / "images" / "review_sample2.jpg").is_file()
+
+
 @pytest.mark.parametrize(
     "reason",
     ["false_detection_requires_correction", "box_geometry_requires_correction"],
@@ -478,7 +640,11 @@ def test_schema3_annotation_workspace_contains_only_job_owned_images(tmp_path):
         dataset, ["Black", "Red"], handoff
     )
 
-    assert [path.name for path in workspace.glob("*.jpg")] == ["review_sample1.jpg"]
+    # The workspace holds only this job's image, and its name states the
+    # correction the operator has to perform while keeping sample traceability.
+    assert [path.name for path in workspace.glob("*.jpg")] == [
+        "1-補框-review_sample1.jpg"
+    ]
     assert labels == dataset / "review_pending" / "labels"
     progress = inspect_pending_annotation_progress(
         dataset, ["Black", "Red"], handoff
@@ -491,4 +657,6 @@ def test_schema3_annotation_workspace_contains_only_job_owned_images(tmp_path):
     workspace, _labels, _classes = configure_pending_job_workspace(
         dataset, ["Black", "Red"], handoff
     )
-    assert [path.name for path in workspace.glob("*.jpg")] == ["review_sample2.jpg"]
+    assert [path.name for path in workspace.glob("*.jpg")] == [
+        "1-補框-review_sample2.jpg"
+    ]
