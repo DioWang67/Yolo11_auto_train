@@ -25,6 +25,7 @@ from picture_tool.dataset_manifest_lock import (
     dataset_manifest_lock,
     portable_import_lock,
 )
+from picture_tool.exception_notes import add_exception_note
 from picture_tool.gui.operator_handoff import (
     OperatorHandoffError,
     _class_schema_hash,
@@ -441,21 +442,18 @@ def import_portable_training_package(
                         try:
                             journal.rollback()
                         except PortableTrainingImportError as rollback_error:
-                            add_note = getattr(import_error, "add_note", None)
-                            if callable(add_note):
-                                add_note(str(rollback_error))
+                            add_exception_note(import_error, str(rollback_error))
                         if not prepared_receipt_persisted:
                             try:
                                 shutil.rmtree(job_dir)
                             except FileNotFoundError:
                                 pass
                             except OSError as cleanup_error:
-                                add_note = getattr(import_error, "add_note", None)
-                                if callable(add_note):
-                                    add_note(
-                                        "Portable job cleanup failed: "
-                                        f"{cleanup_error}"
-                                    )
+                                add_exception_note(
+                                    import_error,
+                                    "Portable job cleanup failed: "
+                                    f"{cleanup_error}",
+                                )
                         raise
                     else:
                         journal.commit()

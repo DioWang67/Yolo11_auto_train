@@ -25,6 +25,7 @@ from typing import Any, BinaryIO, List, Tuple
 
 import yaml
 
+from picture_tool.exception_notes import add_exception_note
 from picture_tool.pipeline.core import Task
 from picture_tool.pipeline.utils import detect_existing_weights
 from picture_tool.position.position_gate import (
@@ -1468,9 +1469,7 @@ def _run_model_acceptance_gate(
         evidence_note = (
             "Model acceptance diagnostics retained at " f"{invocation_dir}"
         )
-        add_note = getattr(exc, "add_note", None)
-        if callable(add_note):
-            add_note(evidence_note)
+        add_exception_note(exc, evidence_note)
         logger.warning("%s", evidence_note)
         raise
 
@@ -2192,7 +2191,7 @@ def run_deploy(config: dict, args: Any) -> None:
             try:
                 transaction.rollback()
             except DeploymentRollbackError as rollback_error:
-                deployment_error.add_note(str(rollback_error))
+                add_exception_note(deployment_error, str(rollback_error))
                 logger.critical("%s", rollback_error, exc_info=True)
         raise
     else:
