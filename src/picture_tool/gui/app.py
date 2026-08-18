@@ -25,7 +25,7 @@ def _apply_background_resource_policy() -> None:
     for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ.setdefault(variable, str(default_threads))
 
-    if os.name != "nt":
+    if sys.platform != "win32":
         return
     try:
         import ctypes

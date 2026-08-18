@@ -3,6 +3,9 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+
+import yaml
+
 from picture_tool.train.anomalib_trainer import (
     find_existing_anomalib_run,
     package_anomalib_run,
@@ -12,6 +15,7 @@ from picture_tool.train.yolo_trainer import train_yolo
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.position import load_position_config, run_position_validation
 from picture_tool.position.position_gate import (
+    PositionGateError,
     PositionGatePolicy,
     evaluate_position_gate,
     load_json_mapping,
@@ -21,6 +25,7 @@ from picture_tool.path_resolver import parse_project_area_override
 from picture_tool.pipeline.artifacts import find_anomalib_run_artifact
 from picture_tool.pipeline.utils import detect_existing_weights, mtime_latest
 from picture_tool.pipeline.core import Task
+from picture_tool.tasks.bundle import rewrite_detection_config
 from picture_tool.utils.onnx_exporter import OnnxExporter
 from picture_tool.position.position_config_gen import PositionConfigGenerator
 from picture_tool.utils.detection_config import DetectionConfigExporter
@@ -420,12 +425,23 @@ def _run_position_gate(
         calibration_manifest=calibration_manifest,
     )
     gate_path = (run_dir / "position_gate.json").resolve()
+    product = str(position_cfg.get("product") or "")
+    area = str(position_cfg.get("area") or "")
+    candidate_detection_config, candidate_position_config = (
+        _load_gate_candidate_configs(
+            run_dir,
+            product=product,
+            area=area,
+        )
+    )
     write_position_gate_report(
         gate_path,
         decision,
-        product=str(position_cfg.get("product") or ""),
-        area=str(position_cfg.get("area") or ""),
+        product=product,
+        area=area,
         candidate_report_path=report_path,
+        candidate_detection_config=candidate_detection_config,
+        candidate_position_config=candidate_position_config,
         baseline_report_path=baseline_path,
         calibration_manifest_path=calibration_path,
     )
@@ -435,6 +451,53 @@ def _run_position_gate(
             + "; ".join(decision.failures)
         )
     return gate_path
+
+
+def _load_gate_candidate_configs(
+    run_dir: Path,
+    *,
+    product: str,
+    area: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load the exact rewritten detection and target position contracts."""
+
+    if not product or not area:
+        raise PositionGateError(
+            "Position gate requires a non-empty product and area."
+        )
+    path = (run_dir / "detection_config.yaml").resolve()
+    if not path.is_file():
+        raise PositionGateError(
+            f"Candidate detection config was not found: {path}"
+        )
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise PositionGateError(
+            f"Unable to read candidate detection config: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise PositionGateError(
+            "Candidate detection config must contain a mapping."
+        )
+    rewritten = rewrite_detection_config(payload, product, area)
+    position_config = rewritten.get("position_config")
+    product_config = (
+        position_config.get(product)
+        if isinstance(position_config, dict)
+        else None
+    )
+    candidate = (
+        product_config.get(area)
+        if isinstance(product_config, dict)
+        else None
+    )
+    if not isinstance(candidate, dict):
+        raise PositionGateError(
+            "Candidate detection config has no position contract for "
+            f"{product}/{area}."
+        )
+    return rewritten, candidate
 
 
 def _position_config_has_target(source, product: str, area: str) -> bool:

@@ -10,6 +10,7 @@ from picture_tool.gui.operator_handoff import (
     find_deployed_runtime_weight,
     load_operator_handoff,
 )
+from picture_tool.operator_job import update_job_status
 from picture_tool.portable_training_package import (
     PortableTrainingImportError,
     import_portable_training_package,
@@ -203,12 +204,114 @@ def test_import_portable_package_rewrites_paths_and_is_idempotent(
             / "import.json"
         ).read_text(encoding="utf-8")
     )
-    assert receipt["schema_version"] == 2
+    assert receipt["schema_version"] == 3
     assert receipt["state"] == "committed"
+    assert "status_identity_sha256" in receipt
+    assert "status_sha256" not in receipt
     manifest = imported_target.dataset_root / "metadata" / "review_dataset_manifest.csv"
     manifest_text = manifest.read_text(encoding="utf-8")
     assert str(imported_target.dataset_root.resolve()) in manifest_text
     assert "D:/source/training/data/Cable1/A/raw/images" not in manifest_text
+
+
+def test_existing_portable_import_remains_idempotent_after_status_updates(tmp_path):
+    package = _portable_package(tmp_path, source_schema_version=6)
+    training_root = tmp_path / "training"
+    first = import_portable_training_package(package, training_root)
+    status_path = first.handoff_path.parent / "status.json"
+
+    update_job_status(
+        status_path,
+        state="running",
+        message="Training is active.",
+        progress=35,
+    )
+    second = import_portable_training_package(package, training_root)
+
+    assert second.reused_existing is True
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["state"] == "running"
+    assert status["progress"] == 35
+
+
+def test_existing_portable_import_rejects_changed_status_identity(tmp_path):
+    package = _portable_package(tmp_path, source_schema_version=6)
+    training_root = tmp_path / "training"
+    report = import_portable_training_package(package, training_root)
+    status_path = report.handoff_path.parent / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status["created_at"] = "2026-08-18T00:00:00+00:00"
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    with pytest.raises(PortableTrainingImportError, match="status identity"):
+        import_portable_training_package(package, training_root)
+
+
+def test_existing_portable_import_rejects_boolean_status_schema(tmp_path):
+    package = _portable_package(tmp_path, source_schema_version=6)
+    training_root = tmp_path / "training"
+    report = import_portable_training_package(package, training_root)
+    status_path = report.handoff_path.parent / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status["schema_version"] = True
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    with pytest.raises(PortableTrainingImportError, match="status"):
+        import_portable_training_package(package, training_root)
+
+
+def test_schema_two_receipt_migrates_after_legitimate_status_update(tmp_path):
+    package = _portable_package(tmp_path, source_schema_version=6)
+    training_root = tmp_path / "training"
+    report = import_portable_training_package(package, training_root)
+    status_path = report.handoff_path.parent / "status.json"
+    receipt_path = (
+        training_root
+        / "data"
+        / ".portable_imports"
+        / "source-job-abcdef123456"
+        / "import.json"
+    )
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["schema_version"] = 2
+    receipt["status_sha256"] = hashlib.sha256(status_path.read_bytes()).hexdigest()
+    receipt.pop("status_identity_sha256")
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    update_job_status(status_path, state="running", message="Training is active.")
+
+    reused = import_portable_training_package(package, training_root)
+
+    migrated = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert reused.reused_existing is True
+    assert migrated["schema_version"] == 3
+    assert "status_identity_sha256" in migrated
+    assert "status_sha256" not in migrated
+
+
+def test_portable_import_locks_the_target_manifest_transaction(
+    tmp_path,
+    monkeypatch,
+):
+    package = _portable_package(tmp_path, source_schema_version=6)
+    training_root = tmp_path / "training"
+    observed_roots: list[Path] = []
+    real_lock = portable_package_module.dataset_manifest_lock
+
+    def recording_lock(dataset_root, **kwargs):
+        observed_roots.append(Path(dataset_root).resolve())
+        return real_lock(dataset_root, **kwargs)
+
+    monkeypatch.setattr(
+        portable_package_module,
+        "dataset_manifest_lock",
+        recording_lock,
+    )
+
+    import_portable_training_package(package, training_root)
+
+    assert observed_roots == [
+        (training_root / "data" / "Cable1" / "A").resolve()
+    ]
 
 
 @pytest.mark.parametrize(
@@ -755,6 +858,7 @@ def test_legacy_schema_one_receipt_remains_committed_when_latest_is_superseded(
         "committed_at",
         "handoff_sha256",
         "status_sha256",
+        "status_identity_sha256",
     ):
         receipt.pop(schema_two_field, None)
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")

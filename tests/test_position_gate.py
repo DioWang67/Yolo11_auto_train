@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 
 import pytest
+import yaml
 
 from picture_tool.position.position_gate import (
     PositionGateError,
     PositionGatePolicy,
+    canonical_detection_config_sha256,
+    canonical_position_config_sha256,
     evaluate_position_gate,
     load_json_mapping,
     position_metrics_from_report,
@@ -20,7 +23,19 @@ def _report(
     hashes: list[str] | None = None,
 ) -> dict:
     records = []
+    ok_samples = 0
+    ok_false_rejects = 0
+    ng_samples = 0
+    ng_detected = 0
     for index, (expected, actual) in enumerate(statuses):
+        if expected == "PASS":
+            ok_samples += 1
+            if actual != "PASS":
+                ok_false_rejects += 1
+        elif expected == "FAIL":
+            ng_samples += 1
+            if actual == "FAIL":
+                ng_detected += 1
         records.append(
             {
                 "expected_status": expected,
@@ -30,7 +45,21 @@ def _report(
                 ),
             }
         )
-    return {"summary": {}, "records": records}
+    return {
+        "summary": {
+            "metrics": {
+                "ok_samples": ok_samples,
+                "ok_false_rejects": ok_false_rejects,
+                "ok_false_reject_rate": (
+                    ok_false_rejects / ok_samples if ok_samples else 0.0
+                ),
+                "ng_samples": ng_samples,
+                "ng_detected": ng_detected,
+                "ng_recall": ng_detected / ng_samples if ng_samples else None,
+            }
+        },
+        "records": records,
+    }
 
 
 def test_position_gate_passes_absolute_ok_and_ng_thresholds() -> None:
@@ -175,23 +204,46 @@ def test_position_gate_rejects_duplicate_schema_v2_golden_images() -> None:
 
 
 def test_position_metrics_accepts_materialized_summary() -> None:
-    metrics = position_metrics_from_report(
-        {
-            "summary": {
-                "metrics": {
-                    "ok_samples": 10,
-                    "ok_false_rejects": 1,
-                    "ok_false_reject_rate": 0.1,
-                    "ng_samples": 5,
-                    "ng_detected": 4,
-                    "ng_recall": 0.8,
-                }
-            }
-        }
+    report = _report(
+        [("PASS", "FAIL"), *[("PASS", "PASS")] * 9]
+        + [("FAIL", "FAIL")] * 4
+        + [("FAIL", "PASS")]
     )
+    metrics = position_metrics_from_report(report)
 
     assert metrics.ok_samples == 10
     assert metrics.ng_recall == pytest.approx(0.8)
+
+
+def test_position_metrics_rejects_summary_that_disagrees_with_records() -> None:
+    report = _report([("PASS", "PASS")])
+    report["summary"]["metrics"] = {
+        "ok_samples": 10,
+        "ok_false_rejects": 0,
+        "ok_false_reject_rate": 0.0,
+        "ng_samples": 0,
+        "ng_detected": 0,
+        "ng_recall": None,
+    }
+
+    with pytest.raises(PositionGateError, match="does not match records"):
+        position_metrics_from_report(report)
+
+
+def test_position_metrics_rejects_summary_without_records() -> None:
+    report = _report([("PASS", "PASS")])
+    report.pop("records")
+
+    with pytest.raises(PositionGateError, match="no records array"):
+        position_metrics_from_report(report)
+
+
+def test_position_metrics_rejects_record_without_expected_status() -> None:
+    report = _report([("PASS", "PASS")])
+    report["records"][0].pop("expected_status")
+
+    with pytest.raises(PositionGateError, match="expected_status"):
+        position_metrics_from_report(report)
 
 
 @pytest.mark.parametrize(
@@ -215,18 +267,12 @@ def test_position_metrics_rejects_malformed_reports(report: dict) -> None:
 
 
 def test_position_metrics_rejects_inconsistent_materialized_summary() -> None:
-    report = {
-        "summary": {
-            "metrics": {
-                "ok_samples": 10,
-                "ok_false_rejects": 1,
-                "ok_false_reject_rate": 0.2,
-                "ng_samples": 2,
-                "ng_detected": 2,
-                "ng_recall": 1.0,
-            }
-        }
-    }
+    report = _report(
+        [("PASS", "PASS")] * 9
+        + [("PASS", "FAIL")]
+        + [("FAIL", "FAIL")] * 2
+    )
+    report["summary"]["metrics"]["ok_false_reject_rate"] = 0.2
 
     with pytest.raises(PositionGateError, match="does not match"):
         position_metrics_from_report(report)
@@ -240,6 +286,19 @@ def test_position_gate_report_is_atomic_and_reloadable(tmp_path) -> None:
         policy=PositionGatePolicy(require_disjoint_calibration=False),
     )
     output = tmp_path / "position_gate.json"
+    candidate_position_config = {
+        "enabled": True,
+        "mode": "center",
+        "tolerance": 8,
+        "expected_boxes": {
+            "Red": {"x1": 10, "y1": 20, "x2": 30, "y2": 40}
+        },
+    }
+    candidate_detection_config = {
+        "weights": "weights/best.pt",
+        "conf_thres": 0.25,
+        "position_config": {"Cable1": {"A": candidate_position_config}},
+    }
 
     write_position_gate_report(
         output,
@@ -247,6 +306,8 @@ def test_position_gate_report_is_atomic_and_reloadable(tmp_path) -> None:
         product="Cable1",
         area="A",
         candidate_report_path=candidate_path,
+        candidate_detection_config=candidate_detection_config,
+        candidate_position_config=candidate_position_config,
         baseline_report_path=None,
         calibration_manifest_path=None,
     )
@@ -255,10 +316,77 @@ def test_position_gate_report_is_atomic_and_reloadable(tmp_path) -> None:
     assert loaded["passed"] is True
     assert loaded["product"] == "Cable1"
     assert len(loaded["candidate_report_sha256"]) == 64
+    assert loaded["candidate_detection_config_sha256"] == (
+        canonical_detection_config_sha256(candidate_detection_config)
+    )
+    assert loaded["candidate_position_config_sha256"] == (
+        canonical_position_config_sha256(candidate_position_config)
+    )
     assert loaded["baseline_report_sha256"] is None
     assert loaded["calibration_manifest_sha256"] is None
     assert not list(tmp_path.glob("*.tmp"))
-    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert json.loads(output.read_text(encoding="utf-8"))["schema_version"] == 2
+
+
+def test_training_gate_binds_rewritten_detection_and_position_configs(
+    tmp_path,
+) -> None:
+    from picture_tool.tasks.training import _run_position_gate
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    candidate_position_config = {
+        "enabled": True,
+        "mode": "center",
+        "tolerance": 8,
+        "expected_boxes": {
+            "Red": {"x1": 10, "y1": 20, "x2": 30, "y2": 40}
+        },
+    }
+    detection_config = {
+        "weights": "best.pt",
+        "conf_thres": 0.25,
+        "position_config": {
+            "Cable1": {"A": candidate_position_config}
+        },
+    }
+    (run_dir / "detection_config.yaml").write_text(
+        yaml.safe_dump(detection_config, sort_keys=False),
+        encoding="utf-8",
+    )
+    report = _report([("PASS", "PASS")], hashes=["a" * 64])
+    report["schema_version"] = 2
+    report_path = run_dir / "position_validation.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    config = {
+        "yolo_training": {
+            "position_validation": {
+                "product": "Cable1",
+                "area": "A",
+                "gate": {
+                    "enabled": True,
+                    "require_disjoint_calibration": False,
+                },
+            }
+        }
+    }
+
+    gate_path = _run_position_gate(config, run_dir, report_path)
+
+    assert gate_path is not None
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    rewritten_detection_config = {
+        **detection_config,
+        "weights": "weights/best.pt",
+        "current_product": "Cable1",
+        "current_area": "A",
+    }
+    assert gate["candidate_detection_config_sha256"] == (
+        canonical_detection_config_sha256(rewritten_detection_config)
+    )
+    assert gate["candidate_position_config_sha256"] == (
+        canonical_position_config_sha256(candidate_position_config)
+    )
 
 
 def test_position_gate_policy_rejects_invalid_rate() -> None:
