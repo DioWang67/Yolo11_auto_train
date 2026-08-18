@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import math
-import os
 import shutil
 import time
 from contextlib import contextmanager
@@ -15,6 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from picture_tool.dataset_manifest_lock import (
+    DatasetManifestLockTimeoutError,
+    dataset_manifest_lock,
+    master_manifest_lock,
+)
 from picture_tool.operator_job import OperatorJobError, update_job_status
 
 
@@ -793,34 +797,46 @@ def _write_csv_atomic(
 
 
 def _rebuild_master_manifests(data_root: Path) -> None:
-    ready: dict[tuple[str, str, str], dict[str, str]] = {}
-    pending: dict[tuple[str, str, str], dict[str, str]] = {}
-    for path in sorted(data_root.glob("*/*/metadata/review_dataset_manifest.csv")):
-        for row in _read_csv(path):
-            key = (
-                str(row.get("product") or ""),
-                str(row.get("area") or ""),
-                str(row.get("sample_id") or row.get("image_sha256") or ""),
+    try:
+        with master_manifest_lock(data_root):
+            ready: dict[tuple[str, str, str], dict[str, str]] = {}
+            pending: dict[tuple[str, str, str], dict[str, str]] = {}
+            for path in sorted(
+                data_root.glob("*/*/metadata/review_dataset_manifest.csv")
+            ):
+                for row in _read_csv(path):
+                    key = (
+                        str(row.get("product") or ""),
+                        str(row.get("area") or ""),
+                        str(row.get("sample_id") or row.get("image_sha256") or ""),
+                    )
+                    ready[key] = row
+            for path in sorted(data_root.glob("*/*/review_pending/manifest.csv")):
+                for row in _read_csv(path):
+                    key = (
+                        str(row.get("product") or ""),
+                        str(row.get("area") or ""),
+                        str(
+                            row.get("sample_id")
+                            or row.get("config_snapshot_path")
+                            or ""
+                        ),
+                    )
+                    pending[key] = row
+            _write_csv_atomic(
+                data_root / "metadata" / "review_dataset_manifest.csv",
+                READY_FIELDS,
+                list(ready.values()),
             )
-            ready[key] = row
-    for path in sorted(data_root.glob("*/*/review_pending/manifest.csv")):
-        for row in _read_csv(path):
-            key = (
-                str(row.get("product") or ""),
-                str(row.get("area") or ""),
-                str(row.get("sample_id") or row.get("config_snapshot_path") or ""),
+            _write_csv_atomic(
+                data_root / ".operator_handoff" / "pending.csv",
+                PENDING_FIELDS,
+                list(pending.values()),
             )
-            pending[key] = row
-    _write_csv_atomic(
-        data_root / "metadata" / "review_dataset_manifest.csv",
-        READY_FIELDS,
-        list(ready.values()),
-    )
-    _write_csv_atomic(
-        data_root / ".operator_handoff" / "pending.csv",
-        PENDING_FIELDS,
-        list(pending.values()),
-    )
+    except DatasetManifestLockTimeoutError as exc:
+        raise PendingAnnotationError(
+            "The dataset-wide annotation manifest is already being rebuilt."
+        ) from exc
 
 
 def _update_handoff_counts(
@@ -946,34 +962,13 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 @contextmanager
 def _target_lock(dataset_root: Path, timeout_seconds: float = 10.0) -> Iterator[None]:
-    lock_path = dataset_root / ".annotation.lock"
-    deadline = time.monotonic() + timeout_seconds
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(descriptor, str(os.getpid()).encode("ascii"))
-        except FileExistsError:
-            try:
-                stale = time.time() - lock_path.stat().st_mtime > 300.0
-            except FileNotFoundError:
-                continue
-            if stale:
-                try:
-                    lock_path.unlink()
-                except FileNotFoundError:
-                    pass
-                continue
-            if time.monotonic() >= deadline:
-                raise PendingAnnotationError(
-                    "This product/station annotation queue is already in use."
-                )
-            time.sleep(0.1)
     try:
-        yield
-    finally:
-        os.close(descriptor)
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
+        with dataset_manifest_lock(
+            dataset_root,
+            timeout_seconds=timeout_seconds,
+        ):
+            yield
+    except DatasetManifestLockTimeoutError as exc:
+        raise PendingAnnotationError(
+            "This product/station annotation queue is already in use."
+        ) from exc

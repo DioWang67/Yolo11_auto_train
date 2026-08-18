@@ -10,6 +10,18 @@ import yaml
 from picture_tool.tasks.deploy import run_deploy
 
 
+def _canonical_sha256(value: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _prepare_position_deployment(tmp_path, *, position_activation: str = "preserve"):
     run_dir = tmp_path / "runs" / "train"
     weights = run_dir / "weights"
@@ -29,24 +41,23 @@ def _prepare_position_deployment(tmp_path, *, position_activation: str = "preser
             }
         }
     }
+    detection_config = {
+        "weights": "best.pt",
+        "enable_color_check": False,
+        "position_config": position_config,
+    }
     (run_dir / "detection_config.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "weights": "best.pt",
-                "enable_color_check": False,
-                "position_config": position_config,
-            },
-            sort_keys=False,
-        ),
+        yaml.safe_dump(detection_config, sort_keys=False),
         encoding="utf-8",
     )
     report = run_dir / "position_validation.json"
     report.write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "summary": {
                     "metrics": {
-                        "ok_samples": 10,
+                        "ok_samples": 1,
                         "ok_false_rejects": 0,
                         "ok_false_reject_rate": 0.0,
                         "ng_samples": 0,
@@ -54,23 +65,41 @@ def _prepare_position_deployment(tmp_path, *, position_activation: str = "preser
                         "ng_recall": None,
                     }
                 },
-                "records": [],
+                "records": [
+                    {
+                        "expected_status": "PASS",
+                        "image_sha256": "a" * 64,
+                        "validation": {"status": "PASS"},
+                    }
+                ],
             }
         ),
         encoding="utf-8",
     )
     gate = run_dir / "position_gate.json"
     report_sha256 = hashlib.sha256(report.read_bytes()).hexdigest()
+    rewritten_detection_config = dict(detection_config)
+    rewritten_detection_config.update(
+        {
+            "weights": "weights/best.pt",
+            "current_product": "Cable1",
+            "current_area": "A",
+        }
+    )
+    detection_config_sha256 = _canonical_sha256(rewritten_detection_config)
+    position_config_sha256 = _canonical_sha256(
+        position_config["Cable1"]["A"]
+    )
     gate.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "product": "Cable1",
                 "area": "A",
                 "passed": True,
                 "failures": [],
                 "metrics": {
-                    "ok_samples": 10,
+                    "ok_samples": 1,
                     "ok_false_rejects": 0,
                     "ok_false_reject_rate": 0.0,
                     "ng_samples": 0,
@@ -80,6 +109,8 @@ def _prepare_position_deployment(tmp_path, *, position_activation: str = "preser
                 "baseline_metrics": None,
                 "candidate_report": str(report.resolve()),
                 "candidate_report_sha256": report_sha256,
+                "candidate_detection_config_sha256": detection_config_sha256,
+                "candidate_position_config_sha256": position_config_sha256,
             }
         ),
         encoding="utf-8",
@@ -226,6 +257,45 @@ def test_deploy_blocks_position_report_changed_after_gate(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="checksum changed after gate"):
+        run_deploy(config, SimpleNamespace())
+
+
+def test_deploy_blocks_position_config_changed_after_gate(tmp_path) -> None:
+    config, run_dir, _station = _prepare_position_deployment(tmp_path)
+    detection_path = run_dir / "detection_config.yaml"
+    detection = yaml.safe_load(detection_path.read_text(encoding="utf-8"))
+    detection["position_config"]["Cable1"]["A"]["tolerance"] = 99
+    detection_path.write_text(
+        yaml.safe_dump(detection, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="position config checksum"):
+        run_deploy(config, SimpleNamespace())
+
+
+def test_deploy_blocks_detection_config_changed_after_gate(tmp_path) -> None:
+    config, run_dir, _station = _prepare_position_deployment(tmp_path)
+    detection_path = run_dir / "detection_config.yaml"
+    detection = yaml.safe_load(detection_path.read_text(encoding="utf-8"))
+    detection["conf_thres"] = 0.99
+    detection_path.write_text(
+        yaml.safe_dump(detection, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="detection config checksum"):
+        run_deploy(config, SimpleNamespace())
+
+
+def test_deploy_rejects_legacy_position_gate_schema(tmp_path) -> None:
+    config, run_dir, _station = _prepare_position_deployment(tmp_path)
+    gate_path = run_dir / "position_gate.json"
+    gate = json.loads(gate_path.read_text(encoding="utf-8"))
+    gate["schema_version"] = 1
+    gate_path.write_text(json.dumps(gate), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="schema is unsupported"):
         run_deploy(config, SimpleNamespace())
 
 

@@ -10,17 +10,21 @@ import logging
 import os
 import shutil
 import tempfile
-import time
 import uuid
 import zipfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Mapping
 
 import yaml
 
+from picture_tool.dataset_manifest_lock import (
+    DatasetManifestLockTimeoutError,
+    dataset_manifest_lock,
+    portable_import_lock,
+)
 from picture_tool.gui.operator_handoff import (
     OperatorHandoffError,
     _class_schema_hash,
@@ -33,7 +37,8 @@ PACKAGE_METADATA_NAME = "package.json"
 MAX_PACKAGE_FILES = 100_000
 MAX_PACKAGE_BYTES = 100 * 1024 * 1024 * 1024
 SUPPORTED_SOURCE_HANDOFF_SCHEMAS = frozenset({3, 4, 5, 6})
-PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION = 2
+PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION = 3
+SUPPORTED_PORTABLE_IMPORT_RECEIPT_SCHEMAS = frozenset({1, 2, 3})
 _RECEIPT_PREPARED = "prepared"
 _RECEIPT_COMMITTED = "committed"
 _LOGGER = logging.getLogger(__name__)
@@ -190,7 +195,7 @@ def import_portable_training_package(
     data_root = (root / "data").resolve()
     data_root.mkdir(parents=True, exist_ok=True)
 
-    with _portable_import_lock(data_root):
+    with _portable_import_lock(data_root), ExitStack() as manifest_locks:
         try:
             package_handle = package.open("rb")
         except OSError as exc:
@@ -284,6 +289,14 @@ def import_portable_training_package(
                     )
 
                     dataset_destination = data_root / product / area
+                    try:
+                        manifest_locks.enter_context(
+                            dataset_manifest_lock(dataset_destination)
+                        )
+                    except DatasetManifestLockTimeoutError as exc:
+                        raise PortableTrainingImportError(
+                            "This product/station dataset is already being updated."
+                        ) from exc
                     portable_models = (
                         data_root / ".portable_models" / package_id / "models"
                     )
@@ -409,7 +422,9 @@ def import_portable_training_package(
                             "portable_runtime_weight": portable_runtime_weight,
                             "handoff_path": str(handoff_path.resolve()),
                             "handoff_sha256": _sha256_file(handoff_path),
-                            "status_sha256": _sha256_file(status_path),
+                            "status_identity_sha256": _status_identity_sha256(
+                                status_payload
+                            ),
                             "product": product,
                             "area": area,
                             "ready_count": total_ready_count,
@@ -478,10 +493,10 @@ def _validate_existing_portable_import(
         )
     receipt = _read_json_mapping(receipt_path)
     receipt_schema = receipt.get("schema_version")
-    if type(receipt_schema) is not int or receipt_schema not in {
-        1,
-        PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION,
-    }:
+    if (
+        type(receipt_schema) is not int
+        or receipt_schema not in SUPPORTED_PORTABLE_IMPORT_RECEIPT_SCHEMAS
+    ):
         raise PortableTrainingImportError(
             "The existing portable import receipt schema is unsupported."
         )
@@ -555,7 +570,8 @@ def _validate_existing_portable_import(
         )
     status = _read_json_mapping(expected_status_path)
     if (
-        status.get("schema_version") != 1
+        type(status.get("schema_version")) is not int
+        or status.get("schema_version") != 1
         or status.get("job_id") != loaded.job_id
         or status.get("product") != product
         or status.get("area") != area
@@ -563,6 +579,7 @@ def _validate_existing_portable_import(
         raise PortableTrainingImportError(
             "The existing portable job status does not match its handoff."
         )
+    status_identity_sha256 = _status_identity_sha256(status)
     ready_count = target.total_ready_count
     pending_count = target.pending_count
     if (
@@ -574,15 +591,33 @@ def _validate_existing_portable_import(
         raise PortableTrainingImportError(
             "The existing portable import counts do not match its handoff."
         )
-    if receipt_schema == PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION:
+    if receipt_schema in {2, PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION}:
         if receipt.get("handoff_sha256") != _sha256_file(expected_handoff_path):
             raise PortableTrainingImportError(
                 "The existing portable handoff checksum does not match its receipt."
             )
-        if receipt.get("status_sha256") != _sha256_file(expected_status_path):
-            raise PortableTrainingImportError(
-                "The existing portable status checksum does not match its receipt."
+    if (
+        receipt_schema == PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION
+        and receipt.get("status_identity_sha256") != status_identity_sha256
+    ):
+        raise PortableTrainingImportError(
+            "The existing portable status identity does not match its receipt."
+        )
+    if receipt_schema == 2:
+        receipt = dict(receipt)
+        receipt["schema_version"] = PORTABLE_IMPORT_RECEIPT_SCHEMA_VERSION
+        receipt["status_identity_sha256"] = status_identity_sha256
+        receipt.pop("status_sha256", None)
+        try:
+            _write_json_atomic_verified(
+                receipt_path,
+                receipt,
+                description="migrated portable import receipt",
             )
+        except (OSError, TypeError, ValueError) as exc:
+            raise PortableTrainingImportError(
+                "The existing portable import receipt could not be migrated."
+            ) from exc
     if (
         latest is not None
         and str(latest.get("job_id") or "").strip() == loaded.job_id
@@ -615,6 +650,35 @@ def _publish_latest_handoff(path: Path, payload: dict[str, Any]) -> None:
             committed = False
         if not committed:
             raise
+
+
+def _status_identity_sha256(status: Mapping[str, Any]) -> str:
+    """Hash only immutable status identity fields, never lifecycle progress."""
+    identity = {
+        "schema_version": status.get("schema_version"),
+        "job_id": status.get("job_id"),
+        "created_at": status.get("created_at"),
+        "product": status.get("product"),
+        "area": status.get("area"),
+    }
+    if (
+        type(identity["schema_version"]) is not int
+        or identity["schema_version"] != 1
+        or not all(
+            isinstance(identity[field], str) and str(identity[field]).strip()
+            for field in ("job_id", "created_at", "product", "area")
+        )
+    ):
+        raise PortableTrainingImportError(
+            "The portable job status has an invalid immutable identity."
+        )
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _write_json_atomic_verified(
@@ -1508,25 +1572,16 @@ def _remove_empty_parents(path: Path, *, stop: Path) -> None:
 
 @contextmanager
 def _portable_import_lock(data_root: Path, timeout_seconds: float = 15.0):
-    lock_path = data_root / ".operator_handoff" / "portable_import.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + timeout_seconds
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise PortableTrainingImportError(
-                    "Another portable training package is being imported."
-                ) from None
-            time.sleep(0.05)
     try:
-        os.write(descriptor, str(os.getpid()).encode("ascii"))
-        yield
-    finally:
-        os.close(descriptor)
-        lock_path.unlink(missing_ok=True)
+        with portable_import_lock(
+            data_root,
+            timeout_seconds=timeout_seconds,
+        ):
+            yield
+    except DatasetManifestLockTimeoutError as exc:
+        raise PortableTrainingImportError(
+            "Another portable training package is being imported."
+        ) from exc
 
 
 def main() -> None:

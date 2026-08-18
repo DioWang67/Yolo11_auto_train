@@ -27,6 +27,12 @@ import yaml
 
 from picture_tool.pipeline.core import Task
 from picture_tool.pipeline.utils import detect_existing_weights
+from picture_tool.position.position_gate import (
+    POSITION_GATE_REPORT_SCHEMA_VERSION,
+    PositionGateError,
+    canonical_detection_config_sha256,
+    canonical_position_config_sha256,
+)
 from picture_tool.runtime_pair_deployment import PairVerification, verify_runtime_pair
 from picture_tool.tasks.bundle import (
     find_color_model_source,
@@ -313,7 +319,7 @@ def _acquire_color_revision_publication_lock(
 
 
 def _lock_color_revision_publication_byte(handle: BinaryIO) -> None:
-    if os.name == "nt":
+    if sys.platform == "win32":
         import msvcrt
 
         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -324,7 +330,7 @@ def _lock_color_revision_publication_byte(handle: BinaryIO) -> None:
 
 
 def _unlock_color_revision_publication_byte(handle: BinaryIO) -> None:
-    if os.name == "nt":
+    if sys.platform == "win32":
         import msvcrt
 
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
@@ -540,7 +546,7 @@ class _DeploymentTransaction:
         backup = self._backup_root / f"{len(self._entries):04d}"
         if target.is_dir():
             shutil.copytree(target, backup)
-            entry = ("directory", backup)
+            entry: tuple[str, Path | None] = ("directory", backup)
         elif target.exists():
             shutil.copy2(target, backup)
             entry = ("file", backup)
@@ -750,6 +756,58 @@ def _load_position_gate(
             + "; ".join(str(item) for item in failures)
         )
     return payload, path
+
+
+def _verify_position_gate_candidate_config(
+    gate: dict[str, Any],
+    candidate_detection_config: dict[str, Any],
+    candidate_position_config: dict[str, Any] | None,
+    *,
+    required: bool,
+) -> None:
+    """Bind a passed gate to exact detection and target-position contracts."""
+
+    if not required:
+        return
+    if gate.get("schema_version") != POSITION_GATE_REPORT_SCHEMA_VERSION:
+        raise ValueError(
+            "Position gate schema is unsupported; rerun position validation."
+        )
+    if candidate_position_config is None:
+        raise ValueError("Candidate position config is missing during deployment.")
+    try:
+        actual_detection_hash = canonical_detection_config_sha256(
+            candidate_detection_config
+        )
+        actual_position_hash = canonical_position_config_sha256(
+            candidate_position_config
+        )
+    except PositionGateError as exc:
+        raise ValueError(str(exc)) from exc
+    for field_name, label, actual_hash in (
+        (
+            "candidate_position_config_sha256",
+            "position config",
+            actual_position_hash,
+        ),
+        (
+            "candidate_detection_config_sha256",
+            "detection config",
+            actual_detection_hash,
+        ),
+    ):
+        expected_hash = str(gate.get(field_name) or "").strip().lower()
+        if len(expected_hash) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in expected_hash
+        ):
+            raise ValueError(
+                f"Position gate has no valid candidate {label} checksum."
+            )
+        if actual_hash != expected_hash:
+            raise ValueError(
+                f"Candidate {label} checksum changed after gate evaluation."
+            )
 
 
 def _sha256_json(value: Any) -> str:
@@ -1629,6 +1687,12 @@ def run_deploy(config: dict, args: Any) -> None:
             raise ValueError("Position gate product does not match deploy target.")
         if str(position_gate.get("area") or "") != area:
             raise ValueError("Position gate area does not match deploy target.")
+    _verify_position_gate_candidate_config(
+        position_gate,
+        det_cfg_data,
+        candidate_position_area,
+        required=position_gate_required,
+    )
     position_report_path, position_report_sha256 = _verified_position_evidence(
         position_gate,
         path_field="candidate_report",

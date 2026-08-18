@@ -19,6 +19,9 @@ class PositionGateError(RuntimeError):
     """Raised when required position evidence is missing or malformed."""
 
 
+POSITION_GATE_REPORT_SCHEMA_VERSION = 2
+
+
 @dataclass(frozen=True)
 class PositionGatePolicy:
     """Validated thresholds used to promote one position configuration."""
@@ -88,7 +91,7 @@ class PositionGateDecision:
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        payload["schema_version"] = 1
+        payload["schema_version"] = POSITION_GATE_REPORT_SCHEMA_VERSION
         payload["failures"] = list(self.failures)
         payload["warnings"] = list(self.warnings)
         return payload
@@ -207,33 +210,43 @@ def evaluate_position_gate(
 
 
 def position_metrics_from_report(report: Mapping[str, Any]) -> PositionMetrics:
-    """Extract metrics from schema-v1 or legacy position reports."""
+    """Recompute metrics from records and verify any materialized summary."""
 
     summary = report.get("summary")
     if not isinstance(summary, Mapping):
         raise PositionGateError("Position validation report has no summary object.")
-    metrics = summary.get("metrics")
-    if isinstance(metrics, Mapping):
-        normalized = PositionMetrics(
-            ok_samples=_non_negative_int(metrics.get("ok_samples"), "ok_samples"),
-            ok_false_rejects=_non_negative_int(
-                metrics.get("ok_false_rejects"),
-                "ok_false_rejects",
-            ),
-            ok_false_reject_rate=_rate(
-                metrics.get("ok_false_reject_rate"),
-                "ok_false_reject_rate",
-            ),
-            ng_samples=_non_negative_int(metrics.get("ng_samples"), "ng_samples"),
-            ng_detected=_non_negative_int(metrics.get("ng_detected"), "ng_detected"),
-            ng_recall=_optional_rate(metrics.get("ng_recall"), "ng_recall"),
-        )
-        _validate_metric_consistency(normalized)
-        return normalized
-
     records = report.get("records")
     if not isinstance(records, list):
         raise PositionGateError("Position validation report has no records array.")
+    recomputed = _position_metrics_from_records(records)
+
+    if "metrics" not in summary:
+        return recomputed
+    metrics = summary.get("metrics")
+    if not isinstance(metrics, Mapping):
+        raise PositionGateError("Position validation summary metrics must be an object.")
+    materialized = PositionMetrics(
+        ok_samples=_non_negative_int(metrics.get("ok_samples"), "ok_samples"),
+        ok_false_rejects=_non_negative_int(
+            metrics.get("ok_false_rejects"),
+            "ok_false_rejects",
+        ),
+        ok_false_reject_rate=_rate(
+            metrics.get("ok_false_reject_rate"),
+            "ok_false_reject_rate",
+        ),
+        ng_samples=_non_negative_int(metrics.get("ng_samples"), "ng_samples"),
+        ng_detected=_non_negative_int(metrics.get("ng_detected"), "ng_detected"),
+        ng_recall=_optional_rate(metrics.get("ng_recall"), "ng_recall"),
+    )
+    _validate_metric_consistency(materialized)
+    _validate_summary_matches_records(materialized, recomputed)
+    return recomputed
+
+
+def _position_metrics_from_records(records: list[Any]) -> PositionMetrics:
+    """Derive gate metrics solely from per-sample validation records."""
+
     ok_samples = 0
     ok_false_rejects = 0
     ng_samples = 0
@@ -241,7 +254,12 @@ def position_metrics_from_report(report: Mapping[str, Any]) -> PositionMetrics:
     for raw_record in records:
         if not isinstance(raw_record, Mapping):
             raise PositionGateError("Position validation record must be an object.")
-        expected_status = str(raw_record.get("expected_status") or "PASS").upper()
+        raw_expected_status = raw_record.get("expected_status")
+        if not isinstance(raw_expected_status, str):
+            raise PositionGateError(
+                "Position validation record has no expected_status string."
+            )
+        expected_status = raw_expected_status.strip().upper()
         validation = raw_record.get("validation")
         if not isinstance(validation, Mapping):
             raise PositionGateError(
@@ -276,6 +294,27 @@ def position_metrics_from_report(report: Mapping[str, Any]) -> PositionMetrics:
     )
 
 
+def _validate_summary_matches_records(
+    materialized: PositionMetrics,
+    recomputed: PositionMetrics,
+) -> None:
+    for field_name in (
+        "ok_samples",
+        "ok_false_rejects",
+        "ok_false_reject_rate",
+        "ng_samples",
+        "ng_detected",
+        "ng_recall",
+    ):
+        supplied = getattr(materialized, field_name)
+        actual = getattr(recomputed, field_name)
+        if supplied != actual:
+            raise PositionGateError(
+                "Position validation summary does not match records: "
+                f"{field_name} supplied={supplied!r}, recomputed={actual!r}."
+            )
+
+
 def load_json_mapping(path: Path, label: str) -> dict[str, Any]:
     """Load one required JSON object with a domain-specific error."""
 
@@ -297,6 +336,8 @@ def write_position_gate_report(
     product: str,
     area: str,
     candidate_report_path: Path,
+    candidate_detection_config: Mapping[str, Any],
+    candidate_position_config: Mapping[str, Any],
     baseline_report_path: Path | None,
     calibration_manifest_path: Path | None,
 ) -> Path:
@@ -309,6 +350,12 @@ def write_position_gate_report(
             "area": area,
             "candidate_report": str(candidate_report_path.resolve()),
             "candidate_report_sha256": _sha256_file(candidate_report_path),
+            "candidate_detection_config_sha256": (
+                canonical_detection_config_sha256(candidate_detection_config)
+            ),
+            "candidate_position_config_sha256": (
+                canonical_position_config_sha256(candidate_position_config)
+            ),
             "baseline_report": (
                 str(baseline_report_path.resolve())
                 if baseline_report_path is not None
@@ -339,6 +386,50 @@ def write_position_gate_report(
     )
     temporary.replace(path)
     return path
+
+
+def canonical_position_config_sha256(
+    candidate_position_config: Mapping[str, Any],
+) -> str:
+    """Return a stable identity for the exact target position contract."""
+
+    return _canonical_config_sha256(
+        candidate_position_config,
+        label="Candidate position config",
+    )
+
+
+def canonical_detection_config_sha256(
+    candidate_detection_config: Mapping[str, Any],
+) -> str:
+    """Return a stable identity for the rewritten candidate detection config."""
+
+    return _canonical_config_sha256(
+        candidate_detection_config,
+        label="Candidate detection config",
+    )
+
+
+def _canonical_config_sha256(
+    candidate_config: Mapping[str, Any],
+    *,
+    label: str,
+) -> str:
+    """Hash one JSON-compatible mapping independent of key order."""
+
+    try:
+        encoded = json.dumps(
+            dict(candidate_config),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise PositionGateError(
+            f"{label} is not canonical JSON data: {exc}"
+        ) from exc
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _calibration_overlap_count(
