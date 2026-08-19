@@ -30,6 +30,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of calibrating from candidate predictions.
 
 ### Fixed
+- Promotion and deployment now publish artifacts atomically, verify portable
+  package receipts, and bind position-gate evidence to the canonical target
+  configuration and recomputed metrics.
+- Python 3.10 exception notes and cross-platform lock handling now preserve the
+  original failure context without breaking Linux or Windows type checks.
+- Pytest now runs in an isolated workspace and rejects dynamic attempts to
+  redirect tests into live station data.
 - `yolo_train` skip logic now checks the **latest versioned run directory** (`train`, `train2`, …) instead of always checking the base `train/` directory. This prevented the skip message from correctly reflecting which run was current after force-runs.
 - Changed `exist_ok=False` in YOLO trainer so each forced retrain creates a new versioned run directory instead of overwriting the previous one.
 
