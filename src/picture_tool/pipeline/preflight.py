@@ -19,7 +19,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import List
 
 
 class Severity(Enum):
@@ -55,7 +54,11 @@ class PreflightChecker:
 
         # ── Task-specific checks ──────────────────────────────────────
         if task_set & {"dataset_splitter", "yolo_train"}:
-            self._check_split_input_paths(config, issues)
+            self._check_split_input_paths(
+                config,
+                issues,
+                augmentation_planned="yolo_augmentation" in task_set,
+            )
 
         if "yolo_train" in task_set:
             self._check_class_names_defined(ycfg, issues)
@@ -128,13 +131,50 @@ class PreflightChecker:
             )
 
     def _check_split_input_paths(
-        self, config: dict, issues: list[PreflightIssue]
+        self,
+        config: dict,
+        issues: list[PreflightIssue],
+        *,
+        augmentation_planned: bool,
     ) -> None:
-        """ERROR if dataset_splitter input directories are missing."""
+        """Validate current split inputs or the raw inputs that will create them."""
         split_cfg: dict = config.get("train_test_split", {}) or {}
         inp: dict = split_cfg.get("input", {}) or {}
+        try:
+            from picture_tool.tasks.quality import (
+                OperatorAugmentationMissingError,
+                resolve_split_input_dirs,
+            )
+
+            image_dir, label_dir, _ = resolve_split_input_dirs(config)
+            resolved_paths = {
+                "image_dir": str(image_dir),
+                "label_dir": str(label_dir),
+            }
+        except OperatorAugmentationMissingError as exc:
+            if not augmentation_planned:
+                issues.append(
+                    PreflightIssue(
+                        severity=Severity.ERROR,
+                        task="dataset_splitter",
+                        message=str(exc),
+                    )
+                )
+                return
+            augmentation_input = (
+                (config.get("yolo_augmentation", {}) or {}).get("input", {}) or {}
+            )
+            resolved_paths = {
+                "image_dir": str(augmentation_input.get("image_dir") or ""),
+                "label_dir": str(augmentation_input.get("label_dir") or ""),
+            }
+        except (KeyError, TypeError, ValueError):
+            resolved_paths = {
+                "image_dir": inp.get("image_dir", ""),
+                "label_dir": inp.get("label_dir", ""),
+            }
         for key, label in [("image_dir", "圖片目錄"), ("label_dir", "標籤目錄")]:
-            path_str = inp.get(key, "")
+            path_str = resolved_paths.get(key, "")
             if path_str and not Path(path_str).exists():
                 issues.append(
                     PreflightIssue(

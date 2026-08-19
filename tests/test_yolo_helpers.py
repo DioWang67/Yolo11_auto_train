@@ -1,7 +1,3 @@
-import os
-import time
-
-
 from picture_tool.eval.yolo_evaluator import (
     _resolve_weights,
 )

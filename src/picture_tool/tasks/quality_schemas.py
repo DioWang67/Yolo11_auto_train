@@ -50,7 +50,9 @@ class ColorVerificationConfig(BaseModel):
     debug_plot: bool = Field(False)
     debug_dir: Optional[Path] = Field(None)
     mask_strategy: str = Field("auto")
-    strip_sampling: StripSamplingConfig = Field(default_factory=StripSamplingConfig)
+    strip_sampling: StripSamplingConfig = Field(
+        default_factory=StripSamplingConfig  # type: ignore[arg-type]
+    )
     
     # Optional overrides from root of config
     segments: Optional[int] = Field(None)

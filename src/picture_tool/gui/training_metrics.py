@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,

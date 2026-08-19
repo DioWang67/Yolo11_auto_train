@@ -1,6 +1,12 @@
 from .conversion import run_format_conversion
 from .augmentation import run_yolo_augmentation, run_image_augmentation, run_aug_preview
-from .training import run_yolo_train, run_yolo_evaluation, run_position_validation_task
+from .training import (
+    run_anomalib_train,
+    run_anomalib_package,
+    run_yolo_train,
+    run_yolo_evaluation,
+    run_position_validation_task,
+)
 from .quality import (
     run_dataset_lint,
     run_dataset_splitter,
@@ -18,6 +24,8 @@ __all__ = [
     "run_image_augmentation",
     "run_aug_preview",
     "run_yolo_train",
+    "run_anomalib_train",
+    "run_anomalib_package",
     "run_yolo_evaluation",
     "run_position_validation_task",
     "run_dataset_lint",

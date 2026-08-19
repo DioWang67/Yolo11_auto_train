@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, MutableMapping
@@ -17,6 +19,54 @@ SUPPORTED_RUNTIME_FORMATS = {"onnx", "openvino", "engine", "torchscript"}
 
 
 class OnnxExporter:
+    @staticmethod
+    def is_enabled(config: MutableMapping[str, Any]) -> bool:
+        """Return whether the pipeline requires a runtime export."""
+        ycfg = config.get("yolo_training", {})
+        if not isinstance(ycfg, dict):
+            return False
+        export_cfg, _ = _select_export_config(ycfg)
+        return bool(
+            isinstance(export_cfg, dict)
+            and export_cfg.get("enabled", True) is not False
+        )
+
+    @staticmethod
+    def ensure(
+        config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger
+    ) -> Optional[Path]:
+        """Return a current validated export, rebuilding stale artifacts.
+
+        A training task may be skipped when its dataset/config hash is unchanged.
+        Deployment still calls this method so a missing or stale ONNX lineage
+        contract cannot silently fall back to the PT checkpoint.
+        """
+        ycfg = config.get("yolo_training", {})
+        if not isinstance(ycfg, dict):
+            return None
+        export_cfg, legacy_onnx_cfg = _select_export_config(ycfg)
+        if not isinstance(export_cfg, dict) or export_cfg.get("enabled", True) is False:
+            return None
+
+        export_format = str(export_cfg.get("format") or "onnx").lower()
+        if legacy_onnx_cfg:
+            export_format = "onnx"
+        weights_name = str(export_cfg.get("weights_name") or "best.pt")
+        current = _resolve_current_export(
+            run_dir,
+            runtime_format=export_format,
+            training_weight_name=weights_name,
+        )
+        if current is not None:
+            logger.info("Reusing validated YOLO %s export: %s", export_format, current)
+            return current
+        logger.info(
+            "YOLO %s export is missing or stale; rebuilding from %s.",
+            export_format,
+            weights_name,
+        )
+        return OnnxExporter.export(config, run_dir, logger)
+
     @staticmethod
     def export(
         config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger
@@ -46,7 +96,9 @@ class OnnxExporter:
                 f"Use one of: {supported}"
             )
         if bool(export_cfg.get("half", False)) and bool(export_cfg.get("int8", False)):
-            raise ValueError("Use either half precision or int8 quantization, not both.")
+            raise ValueError(
+                "Use either half precision or int8 quantization, not both."
+            )
 
         cwd = Path.cwd()
 
@@ -187,6 +239,12 @@ class OnnxExporter:
 
             # 5. Validation using helper
             if export_format != "onnx":
+                _write_export_contract(
+                    run_dir,
+                    runtime_path=export_path,
+                    training_weight_path=weights_path,
+                    runtime_format=export_format,
+                )
                 return export_path
 
             try:
@@ -208,6 +266,12 @@ class OnnxExporter:
                     f"ONNX validation failed for {export_path}"
                 ) from val_err
 
+            _write_export_contract(
+                run_dir,
+                runtime_path=export_path,
+                training_weight_path=weights_path,
+                runtime_format=export_format,
+            )
             return export_path
 
         except (ImportError, FileNotFoundError, RuntimeError, OSError) as e:
@@ -215,7 +279,74 @@ class OnnxExporter:
             return None
 
 
-def _select_export_config(ycfg: dict[str, Any]) -> tuple[Optional[dict[str, Any]], bool]:
+def _write_export_contract(
+    run_dir: Path,
+    *,
+    runtime_path: Path,
+    training_weight_path: Path,
+    runtime_format: str,
+) -> Path:
+    """Record the exact PT-to-runtime lineage used by safe deployment."""
+    resolved_run_dir = run_dir.resolve()
+    resolved_runtime = runtime_path.resolve()
+    resolved_training_weight = training_weight_path.resolve()
+    if not resolved_runtime.is_relative_to(resolved_run_dir):
+        raise RuntimeError("Exported runtime artifact is outside the training run.")
+    if not resolved_training_weight.is_relative_to(resolved_run_dir):
+        raise RuntimeError("Export source training weight is outside the training run.")
+    if resolved_training_weight.suffix.lower() != ".pt":
+        raise RuntimeError("Export source training weight must be a .pt checkpoint.")
+
+    payload = {
+        "schema_version": 1,
+        "runtime_format": runtime_format,
+        "runtime_file": resolved_runtime.relative_to(resolved_run_dir).as_posix(),
+        "runtime_sha256": _sha256_artifact(resolved_runtime),
+        "training_weight_file": resolved_training_weight.relative_to(
+            resolved_run_dir
+        ).as_posix(),
+        "training_weight_sha256": _sha256_artifact(resolved_training_weight),
+    }
+    contract_path = resolved_run_dir / "runtime_export_manifest.json"
+    temporary = contract_path.with_name(f".{contract_path.name}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(contract_path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    return contract_path
+
+
+def _sha256_artifact(path: Path) -> str:
+    """Hash a file or directory export deterministically."""
+    digest = hashlib.sha256()
+    if path.is_file():
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    if not path.is_dir():
+        raise FileNotFoundError(path)
+    files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+    if not files:
+        raise RuntimeError(f"Runtime export directory is empty: {path}")
+    for candidate in files:
+        digest.update(candidate.relative_to(path).as_posix().encode("utf-8"))
+        with candidate.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _select_export_config(
+    ycfg: dict[str, Any],
+) -> tuple[Optional[dict[str, Any]], bool]:
     """Select the runtime export configuration to apply.
 
     Args:
@@ -235,6 +366,59 @@ def _select_export_config(ycfg: dict[str, Any]) -> tuple[Optional[dict[str, Any]
         return onnx_cfg, True
 
     return None, False
+
+
+def _resolve_current_export(
+    run_dir: Path,
+    *,
+    runtime_format: str,
+    training_weight_name: str,
+) -> Optional[Path]:
+    """Resolve an export only when its immutable lineage contract is current."""
+    resolved_run_dir = run_dir.resolve()
+    contract_path = resolved_run_dir / "runtime_export_manifest.json"
+    if not contract_path.is_file():
+        return None
+    try:
+        payload = json.loads(contract_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+            return None
+        if str(payload.get("runtime_format") or "").lower() != runtime_format:
+            return None
+        runtime_path = (
+            resolved_run_dir / str(payload.get("runtime_file") or "")
+        ).resolve()
+        training_weight = (
+            resolved_run_dir / str(payload.get("training_weight_file") or "")
+        ).resolve()
+        expected_training_weight = (
+            resolved_run_dir / "weights" / Path(training_weight_name).name
+        ).resolve()
+        if not runtime_path.is_relative_to(resolved_run_dir):
+            return None
+        if not training_weight.is_relative_to(resolved_run_dir):
+            return None
+        if training_weight != expected_training_weight:
+            return None
+        if not _artifact_exists(runtime_path) or not training_weight.is_file():
+            return None
+        if _sha256_artifact(runtime_path) != str(
+            payload.get("runtime_sha256") or ""
+        ).lower():
+            return None
+        if _sha256_artifact(training_weight) != str(
+            payload.get("training_weight_sha256") or ""
+        ).lower():
+            return None
+        return runtime_path
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+    ):
+        return None
 
 
 def _derived_export_candidates(weights_path: Path, export_format: str) -> list[Path]:

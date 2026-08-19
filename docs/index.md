@@ -1,6 +1,11 @@
 # Picture Tool Documentation
 
-Picture Tool 是一個工業視覺訓練工具包，自動化從資料準備到模型部署的完整流程。訓練完成的模型可直接部署到 [yolo11_inference](../yolo11_inference) 進行生產推論。
+Picture Tool 是一個工業視覺訓練工具包，自動化從資料準備到模型部署的完整流程。訓練完成的模型可直接部署到 [yolo11_inference](../../yolo11_inference) 進行生產推論。
+
+現場角色文件：
+
+- [產線操作者／班組長手冊](../../yolo11_inference/docs/manuals/OPERATOR_MANUAL.md)
+- [工程維運與部署手冊](../../yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md)
 
 ## 文件導覽
 
@@ -56,3 +61,8 @@ picture-tool-gui --config configs/my_project.yaml
 | Guide | Description |
 |------|-------------|
 | [PCBA1 YOLO Pipeline](guides/pcba1_pipeline.md) | PCBA1 LabelImg data layout, ONNX deployment config, disabled color/sequence checks, rerun rules, and deployment checklist. |
+
+## 歷史封存
+
+- [2026-01-07 環境套件快照](archive/environment/requirements_snapshot_20260107.txt)：
+  僅供歷史追溯，包含機器特定 Conda 路徑，不可作為現行安裝清單。

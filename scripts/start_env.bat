@@ -10,7 +10,7 @@ call %CONDA_PATH%\Scripts\activate.bat
 call conda activate anomalib_env
 
 REM 切換到指定目錄
-cd /d D:\Git\robotlearning\Yolo11_auto_train
+cd /d "%~dp0.."
 
 REM 確認 Python 環境和 torch 模組
 python --version

@@ -2,6 +2,10 @@ import pytest
 from unittest.mock import MagicMock
 from PyQt5.QtWidgets import QMessageBox
 from picture_tool.gui.annotation_panel import AnnotationPanel
+from picture_tool.pending_annotations import (
+    PendingAnnotationProgress,
+    PendingProgressItem,
+)
 
 # Ensure we skip if no display (standard pattern in this repo)
 pytest.importorskip("pytestqt")
@@ -33,6 +37,59 @@ def test_initial_state(panel):
     assert panel.annotation_classes == []
     assert panel.annotation_input_dir is None
     assert panel.annotation_output_dir is None
+
+
+def test_operator_mode_hides_engineering_controls(panel):
+    panel.set_operator_mode(True)
+
+    assert panel.class_management_panel.isHidden()
+    assert panel.annotation_input_edit.isHidden()
+    assert panel.annotation_output_edit.isHidden()
+    assert panel.validate_annotations_btn.isHidden()
+    assert panel.operator_instruction_label.isHidden() is False
+    assert panel.annotation_unannotated_list.isHidden() is False
+    assert panel.annotation_unannotated_label.text() == "尚待修正圖片："
+
+
+def test_operator_pending_schedules_annotation_tool_once(
+    panel, monkeypatch, tmp_path
+):
+    callbacks = []
+    monkeypatch.setattr(panel, "_scan_annotation_progress", MagicMock())
+    monkeypatch.setattr(
+        "picture_tool.gui.annotation_panel.QtCore.QTimer.singleShot",
+        lambda _delay, callback: callbacks.append(callback),
+    )
+
+    panel.configure_operator_pending(
+        tmp_path / "Cable1" / "A",
+        ["defect"],
+        tmp_path / "handoff.json",
+    )
+    panel.configure_operator_pending(
+        tmp_path / "Cable1" / "A",
+        ["defect"],
+        tmp_path / "handoff.json",
+    )
+
+    assert panel.operator_mode_enabled is True
+    assert callbacks == [panel._launch_labelimg]
+
+
+def test_operator_annotation_close_triggers_automatic_validation(
+    panel, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(panel.labelimg_launcher, "is_running", lambda: False)
+    monkeypatch.setattr(
+        panel.labelimg_launcher, "completed_label_paths", lambda: []
+    )
+    panel.annotation_output_dir = tmp_path / "labels"
+    complete = MagicMock()
+    monkeypatch.setattr(panel, "_complete_operator_pending", complete)
+
+    panel._poll_operator_labelimg()
+
+    complete.assert_called_once_with(automatic=True)
 
 def test_add_class_success(panel, monkeypatch, qtbot):
     # Mock QInputDialog.getText
@@ -199,6 +256,54 @@ def test_on_scan_completed(panel, qtbot):
     text = panel.annotation_stats_label.text()
     assert "總圖片：100" in text
     assert "已標註：50" in text
+
+
+def test_operator_scan_uses_promotion_aware_progress(
+    panel, qtbot, monkeypatch, tmp_path
+):
+    panel.set_operator_mode(True)
+    panel.operator_dataset_root = tmp_path / "data" / "Cable1" / "A"
+    panel.operator_handoff_path = tmp_path / "handoff.json"
+    panel.annotation_classes = ["Black", "Red"]
+    progress = PendingAnnotationProgress(
+        total_count=3,
+        completed_count=1,
+        pending_items=(
+            PendingProgressItem(
+                "review_first.jpg",
+                "unchanged_draft",
+                "預填框尚未修改或按 Ctrl+S 確認",
+            ),
+            PendingProgressItem(
+                "review_second.jpg",
+                "missing_label",
+                "尚未建立或儲存標籤檔",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "picture_tool.gui.annotation_panel.inspect_pending_annotation_progress",
+        lambda *_args: progress,
+    )
+
+    with qtbot.waitSignal(panel.message_logged):
+        panel._on_scan_completed(
+            {
+                "total_images": 6,
+                "annotated_images": 6,
+                "unannotated_images": [],
+                "annotated_images_list": [],
+                "progress_percent": 100.0,
+            }
+        )
+
+    text = panel.annotation_stats_label.text()
+    assert "本次待處理：3" in text
+    assert "已完成修正：1" in text
+    assert "尚待修正：2" in text
+    assert panel.annotation_progress_bar.value() == 33
+    assert "review_first.jpg" in panel.annotation_unannotated_list.item(0).text()
+    assert "Ctrl+S" in panel.annotation_unannotated_list.item(0).text()
 
 def test_on_scan_error(panel, qtbot, monkeypatch):
     # Mock QMessageBox to avoid blocking

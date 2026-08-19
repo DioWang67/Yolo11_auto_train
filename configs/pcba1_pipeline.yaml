@@ -14,6 +14,9 @@ pipeline:
     - position_validation
     - yolo_evaluation
     - generate_report
+    anomalib:
+    - anomalib_train
+    - anomalib_package
     inference:
     - batch_inference
     quality:
@@ -58,6 +61,12 @@ pipeline:
   - name: yolo_train
     enabled: true
     dependencies: []
+  - name: anomalib_train
+    enabled: false
+    dependencies: []
+  - name: anomalib_package
+    enabled: false
+    dependencies: []
   - name: position_validation
     enabled: true
     dependencies: []
@@ -95,6 +104,43 @@ anomaly_detection:
   reference_folder: ./data/project/raw/good
   test_folder: ./data/project/raw/test
   threshold: 50
+anomalib_training:
+  root: ./data/anomaly
+  normal_dir: train/good
+  abnormal_dir: null
+  normal_test_dir: null
+  mask_dir: null
+  project: ./runs/anomalib
+  name: pcba1_anomaly
+  model: padim
+  task: segmentation
+  image_size: 256
+  train_batch_size: 8
+  eval_batch_size: 8
+  num_workers: 0
+  accelerator: auto
+  devices: auto
+  max_epochs: 1
+  seed: 42
+  normal_split_ratio: 0.2
+  val_split_mode: from_train
+  val_split_ratio: 0.2
+  test_split_mode: none
+  test_split_ratio: 0.2
+  pre_trained: false
+  backbone: resnet18
+  layers:
+  - layer1
+  n_features: 16
+  patch_anomalib_symlink: true
+  require_anomalous_validation: false
+anomalib_package:
+  run_dir: null
+  output_dir: ./runs/anomalib_packages
+  product: PCBA1
+  area: B
+  threshold: 0.5
+  force: true
 yolo_augmentation:
   input:
     image_dir: ./data/project/raw/images
@@ -228,7 +274,17 @@ yolo_training:
     product: project
     area: A
     imgsz: 640
-    sample_dir: ./data/project/split/val/images
+    sample_dir: ./data/project/split/test/images
+    golden_ok_dir: ./data/project/split/test/images
+    golden_ng_dir: null
+    golden_manifest_path: null
+    golden_manifest_image_dir: null
+    calibration_source: labels
+    calibration_image_dir: ./data/project/split/train/images
+    calibration_label_dir: ./data/project/split/train/labels
+    calibration_min_samples: 3
+    calibration_require_all_classes: true
+    calibration_exclude_augmented: true
     config_path: ./models/yolo/position_config.yaml
     config: {}
     output_dir: ./runs/project/quality/position
@@ -237,6 +293,16 @@ yolo_training:
     conf: 0.1
     tolerance_override: null
     auto_generate: true
+    gate:
+      enabled: true
+      min_ok_samples: 1
+      max_ok_false_reject_rate: 0.0
+      min_ng_samples: 0
+      min_ng_recall: 0.0
+      require_baseline: false
+      max_ok_false_reject_regression: 0.0
+      max_ng_recall_regression: 0.0
+      require_disjoint_calibration: true
   export_detection_config:
     enabled: true
     output_path: null
@@ -301,18 +367,39 @@ yolo_training:
     include_detection_config: true
     include_position_config: true
     include_onnx: true
-    include_results_csv: true
-    include_args_yaml: true
+    include_results_csv: false
+    include_args_yaml: false
   deploy:
     enabled: false                        # set true to auto-deploy after yolo_train
     inference_models_dir: ../yolo11_inference/models  # path to inference models dir
     product: ~                            # null = use yolo_training.name
     area: ~                               # null = use yolo_training.position_validation.area
     version: auto                         # "auto" = patch-increment from existing files, or e.g. "1.2.0"
+    preserve_station_settings: true
+    acceptance_gate:
+      enabled: false
+      dataset_root: null
+      snapshot_manifest: null
+      min_confirmed: 1
+      max_false_positives: 0
+      max_false_negatives: 0
+      max_regressions: 0
+      require_all_confirmed: true
+      require_no_errors: true
+      timeout_seconds: 1800
+    force: false
 yolo_evaluation:
   weights: null
   imgsz: 640
   device: cpu
+  gate:
+    enabled: false
+    require_metrics: true
+    min_precision: 0.50
+    min_recall: 0.50
+    min_map50: 0.50
+    min_map50_95: 0.25
+    max_regression: 0.05
 batch_inference:
   input_dir: ./data/project/split/test/images
   output_dir: ./runs/project/infer
@@ -323,6 +410,10 @@ batch_inference:
 report:
   output_dir: ./runs/project/reports
   include_artifacts: true
+dataset_readiness:
+  enabled: true
+  review_manifest: null
+  require_review_manifest: false
 dataset_lint:
   image_dir: ./data/project/processed/images
   label_dir: ./data/project/processed/labels

@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "picture-tool"
-version = "0.2.0"
+version = "0.4.0"
 description = "Production-ready image pipeline toolkit: augmentation, splitting, YOLO training, CLI and GUI orchestration."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10,<3.12"
 authors = [{ name = "VisionSuite Team" }]
 license = "LicenseRef-Proprietary"
 keywords = ["yolo", "augmentation", "computer-vision", "training", "tooling"]
@@ -17,22 +17,26 @@ classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Image Processing",
   "Topic :: Multimedia :: Graphics :: Graphics Conversion",
 ]
 dependencies = [
   "albumentations>=1.3",
   "matplotlib>=3.5",
-  "numpy>=1.21",
-  "opencv-python>=4.5",
+  "numpy==1.26.4",
+  "opencv-python==4.9.0.80",
+  "opencv-python-headless==4.9.0.80",
   "PyYAML>=6.0",
   "scikit-learn>=1.0",
   "tqdm>=4.60",
-  "ultralytics>=8.0",
+  "torch==2.4.1",
+  "torchvision==0.19.1",
+  "ultralytics==8.3.156",
+  "anomalib==1.2.0",
+  "onnxruntime==1.23.2",
+  "jsonargparse[signatures,typing-extensions]==4.34.0",
   "typer>=0.9",
   "mlflow>=2.0",
   "fastapi>=0.88",
@@ -43,11 +47,12 @@ dependencies = [
 license-files = ["LICENSE"]
 
 [project.optional-dependencies]
-gui = ["PyQt5>=5.15"]
+gui = ["PyQt5==5.15.11"]
 dev = [
   "pytest>=8.3",
   "pytest-cov>=5.0",
   "pytest-qt>=4.4",
+  "pytest-timeout>=2.4",
   "ruff>=0.6",
   "mypy>=1.11",
   "types-PyYAML>=6.0.12",
@@ -58,6 +63,8 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--strict-markers"
 filterwarnings = ["error"]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
@@ -76,13 +83,17 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-fail_under = 15
+fail_under = 80
 
 [project.scripts]
 picture-tool-pipeline = "picture_tool.main_pipeline:main"
 picture-tool-gui = "picture_tool.gui.app:main"
 picture-tool-color-verify = "picture_tool.color.color_verifier:main"
 picture-tool-doctor = "picture_tool.doctor:main"
+picture-tool-anomalib = "picture_tool.anomalib_cli:main"
+picture-tool-dataset-inventory = "picture_tool.dataset_inventory:main"
+picture-tool-color-calibrate = "picture_tool.color.threshold_calibration:main"
+picture-tool-runtime-pair = "picture_tool.runtime_pair_deployment:main"
 
 [project.urls]
 Homepage = "https://github.com/robotlearning/Yolo11_auto_train"

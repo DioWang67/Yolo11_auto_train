@@ -4,12 +4,43 @@
 """
 
 import logging
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 
 class TestYoloTrainingFunctionality:
     """测试YOLO训练功能"""
+
+    def test_finetuning_profile_is_passed_to_ultralytics(self, tmp_path):
+        from picture_tool.train.yolo_trainer import _parse_yolo_config
+
+        params = _parse_yolo_config(
+            {
+                "yolo_training": {
+                    "dataset_dir": str(tmp_path),
+                    "epochs": 20,
+                    "optimizer": "AdamW",
+                    "lr0": 0.0005,
+                    "lrf": 0.1,
+                    "patience": 10,
+                    "freeze": 10,
+                    "mosaic": 0.0,
+                    "fliplr": 0.0,
+                    "close_mosaic": 0,
+                    "cos_lr": True,
+                    "warmup_epochs": 1.0,
+                }
+            }
+        )
+
+        assert params["optimizer"] == "AdamW"
+        assert params["lr0"] == 0.0005
+        assert params["freeze"] == 10
+        assert params["mosaic"] == 0.0
+        assert params["warmup_epochs"] == 1.0
 
     def test_training_workflow_executes(self, tmp_path, monkeypatch):
         """功能：执行完整的训练工作流"""
@@ -71,6 +102,117 @@ names:
         assert mock_model.train.called
         assert run_dir is not None
 
+    def test_training_continues_from_stripped_checkpoint_weights(
+        self, tmp_path, monkeypatch
+    ):
+        from picture_tool.train.yolo_trainer import train_yolo
+
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train" / "images").mkdir(parents=True)
+        (dataset_dir / "val" / "images").mkdir(parents=True)
+        checkpoint = tmp_path / "runs" / "train3" / "weights" / "last.pt"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b"checkpoint")
+        (checkpoint.parent / "best.pt").write_bytes(b"best")
+
+        mock_model = MagicMock()
+        mock_model.train.return_value = SimpleNamespace(
+            save_dir=checkpoint.parent.parent
+        )
+        model_factory = MagicMock(return_value=mock_model)
+        args = SimpleNamespace(model_factory=model_factory)
+        config = {
+            "yolo_training": {
+                "dataset_dir": str(dataset_dir),
+                "class_names": ["item"],
+                "epochs": 20,
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+                "resume_checkpoint": str(checkpoint),
+                "resume_completed_epochs": 2,
+                "resume_native": False,
+            }
+        }
+
+        run_dir = train_yolo(config, args=args)
+
+        model_factory.assert_called_once_with(str(checkpoint.resolve()))
+        assert "resume" not in mock_model.train.call_args.kwargs
+        assert mock_model.train.call_args.kwargs["epochs"] == 18
+        assert run_dir == checkpoint.parent.parent.resolve()
+
+    def test_training_uses_native_resume_checkpoint_when_preserved(
+        self, tmp_path, monkeypatch
+    ):
+        from picture_tool.train.yolo_trainer import train_yolo
+
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train" / "images").mkdir(parents=True)
+        (dataset_dir / "val" / "images").mkdir(parents=True)
+        checkpoint = tmp_path / "runs" / "train3" / "weights" / "last.resume.pt"
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b"checkpoint")
+        (checkpoint.parent / "best.pt").write_bytes(b"best")
+
+        mock_model = MagicMock()
+        mock_model.train.return_value = SimpleNamespace(
+            save_dir=checkpoint.parent.parent
+        )
+        model_factory = MagicMock(return_value=mock_model)
+        config = {
+            "yolo_training": {
+                "dataset_dir": str(dataset_dir),
+                "class_names": ["item"],
+                "epochs": 20,
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+                "resume_checkpoint": str(checkpoint),
+                "resume_completed_epochs": 2,
+                "resume_completed_before_run": 0,
+                "resume_native": True,
+            }
+        }
+
+        train_yolo(
+            config,
+            args=SimpleNamespace(model_factory=model_factory),
+        )
+
+        assert mock_model.train.call_args.kwargs["resume"] is True
+        assert mock_model.train.call_args.kwargs["epochs"] == 20
+
+    def test_safe_stop_raises_with_the_actual_resume_checkpoint(
+        self, tmp_path, monkeypatch
+    ):
+        from picture_tool.train.yolo_trainer import TrainingInterrupted, train_yolo
+
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train" / "images").mkdir(parents=True)
+        (dataset_dir / "val" / "images").mkdir(parents=True)
+        run_dir = tmp_path / "runs" / "train7"
+        (run_dir / "weights").mkdir(parents=True)
+        (run_dir / "weights" / "last.pt").write_bytes(b"checkpoint")
+
+        mock_model = MagicMock()
+        mock_model.train.return_value = SimpleNamespace(save_dir=run_dir)
+        args = SimpleNamespace(
+            model_factory=MagicMock(return_value=mock_model),
+            stop_event=threading.Event(),
+        )
+        args.stop_event.set()
+        config = {
+            "yolo_training": {
+                "dataset_dir": str(dataset_dir),
+                "class_names": ["item"],
+                "epochs": 20,
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+            }
+        }
+
+        with pytest.raises(TrainingInterrupted, match="last.pt"):
+            train_yolo(config, args=args)
+
     def test_training_saves_weights(self, tmp_path, monkeypatch):
         """功能：训练后保存权重文件"""
 
@@ -98,6 +240,89 @@ names:
         # 验证权重文件
         assert (weights_dir / "best.pt").exists()
         assert (weights_dir / "last.pt").exists()
+
+    def test_position_validation_prefers_auto_config_when_target_area_missing(
+        self, tmp_path, monkeypatch
+    ):
+        """Should use run-local auto_position_config when default config lacks area."""
+        import yaml
+
+        from picture_tool.tasks import training
+
+        run_dir = tmp_path / "runs" / "PCBA1" / "B" / "train2"
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        weights_path = weights_dir / "best.pt"
+        weights_path.write_bytes(b"weights")
+        auto_config = run_dir / "auto_position_config.yaml"
+        auto_config.write_text(
+            yaml.safe_dump(
+                {"PCBA1": {"B": {"enabled": True, "expected_boxes": {"J2-1": {}}}}}
+            ),
+            encoding="utf-8",
+        )
+
+        default_config = tmp_path / "position_config.yaml"
+        default_config.write_text(
+            yaml.safe_dump(
+                {"PCBA1": {"A": {"enabled": True, "expected_boxes": {"J5-1": {}}}}}
+            ),
+            encoding="utf-8",
+        )
+
+        config = {
+            "yolo_training": {
+                "project": str(run_dir.parent),
+                "name": "train",
+                "position_validation": {
+                    "enabled": True,
+                    "product": "PCBA1",
+                    "area": "B",
+                    "config": {},
+                    "config_path": str(default_config),
+                },
+            }
+        }
+        captured = {}
+
+        def fake_run_position_validation(updated_config, detected_run_dir, logger=None):
+            captured["config"] = updated_config
+            captured["run_dir"] = detected_run_dir
+            return tmp_path / "position_validation.json"
+
+        monkeypatch.setattr(
+            training,
+            "detect_existing_weights",
+            lambda *_args, **_kwargs: (weights_path, run_dir),
+        )
+        monkeypatch.setattr(
+            training, "run_position_validation", fake_run_position_validation
+        )
+
+        result = training.run_position_validation_task(config, MagicMock())
+
+        assert result == tmp_path / "position_validation.json"
+        pv_cfg = captured["config"]["yolo_training"]["position_validation"]
+        assert pv_cfg["config"] == str(auto_config)
+        assert captured["run_dir"] == run_dir
+
+    def test_disabled_position_validation_is_an_explicit_noop(self, monkeypatch):
+        from picture_tool.tasks import training
+
+        run_validation = MagicMock()
+        monkeypatch.setattr(training, "run_position_validation", run_validation)
+
+        result = training.run_position_validation_task(
+            {
+                "yolo_training": {
+                    "position_validation": {"enabled": False},
+                }
+            },
+            MagicMock(),
+        )
+
+        assert result is None
+        run_validation.assert_not_called()
 
 
 class TestYoloEvaluationFunctionality:

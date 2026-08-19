@@ -269,20 +269,28 @@ class PipelineManager(QObject):
             timeout_ms: Max milliseconds to wait for graceful shutdown.
                         If exceeded, the thread is terminated forcefully.
         """
-        if not self.is_running() or not self.worker_thread:
+        if not self.request_pipeline_stop():
             self.status_message.emit("Pipeline is not running.", "info")
             return
 
-        self.worker_thread.request_stop()
-        self.log_message.emit("Stop requested; waiting for current task...")
-
-        if not self.worker_thread.wait(timeout_ms):
+        worker_thread = self.worker_thread
+        if worker_thread is None:
+            return
+        if not worker_thread.wait(timeout_ms):
             self._logger.warning(
                 "Worker thread did not finish within %d ms — terminating", timeout_ms
             )
-            self.worker_thread.terminate()
-            self.worker_thread.wait(2000)
+            worker_thread.terminate()
+            worker_thread.wait(2000)
             self.error_occurred.emit("Pipeline forcefully terminated (timeout)")
+
+    def request_pipeline_stop(self) -> bool:
+        """Request cooperative cancellation without blocking the GUI thread."""
+        if not self.is_running() or not self.worker_thread:
+            return False
+        self.worker_thread.request_stop()
+        self.log_message.emit("Stop requested; waiting for the current safe point...")
+        return True
 
     def _on_worker_finished(self) -> None:
         """Handler for worker thread completion."""
@@ -299,7 +307,7 @@ class PipelineManager(QObject):
     def _on_worker_error(self, message: str) -> None:
         """Handler for worker thread errors."""
         self.error_occurred.emit(message)
-        # Worker thread usually emits finished_signal after error, but we clean up to be safe
+        # Native QThread.finished performs the actual reference cleanup.
         if self.worker_thread:
             # We don't force kill, just ensure reference is ready to be cleared
             pass

@@ -10,16 +10,56 @@ from __future__ import annotations
 import copy
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
+
+
+class ProjectArea(NamedTuple):
+    """Parsed product and optional area override from user input."""
+
+    project: str
+    area: str | None
+
+
+def parse_project_area_override(value: str) -> ProjectArea:
+    """Parse a GUI/CLI product override into product and optional area.
+
+    Args:
+        value: Product override. Supports ``"PCBA1"`` and ``"PCBA1,B"``.
+
+    Returns:
+        A ``ProjectArea`` tuple. ``area`` is ``None`` when not provided.
+
+    Raises:
+        ValueError: If the product is empty or contains path separators.
+    """
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        raise ValueError("Product name cannot be empty.")
+
+    product, separator, area = raw_value.partition(",")
+    product = product.strip()
+    area = area.strip() if separator else ""
+
+    if not product:
+        raise ValueError("Product name cannot be empty before ','.")
+    if any(sep in product for sep in ("/", "\\")):
+        raise ValueError("Product name cannot contain path separators.")
+    if area and "," in area:
+        raise ValueError("Use only one comma: '<product>,<area>'.")
+    if area and any(sep in area for sep in ("/", "\\")):
+        raise ValueError("Area cannot contain path separators.")
+
+    return ProjectArea(project=product, area=area or None)
 
 
 def _load_project_class_names(raw_root: Path) -> list[str]:
     """Load LabelImg/YOLO class names for a project when available.
 
     Args:
-        raw_root: Project raw data root, usually ``data/<project>/raw``.
+        raw_root: Project raw data root, usually ``data/<project>/raw`` or
+            ``data/<project>/<area>/raw`` when an area override is provided.
 
     Returns:
         Class names in label-index order, or an empty list when unavailable.
@@ -50,27 +90,71 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
 
     The function follows the 'Project-Centric' directory layout::
 
-        data/<project>/raw/          ← original images & labels
-        data/<project>/processed/    ← converted / augmented
-        data/<project>/split/        ← train / val / test
-        data/<project>/qc/           ← quality-control samples
-        runs/<project>/              ← training outputs, logs, reports
+        data/<project>/raw/             ← original images & labels
+        data/<project>/processed/       ← converted / augmented
+        data/<project>/split/           ← train / val / test
+        data/<project>/qc/              ← quality-control samples
+        runs/<project>/                 ← training outputs, logs, reports
+
+    With an area suffix such as ``"PCBA1,B"``, paths use the area level::
+
+        data/PCBA1/B/raw/
+        data/PCBA1/B/processed/
+        data/PCBA1/B/split/
+        runs/PCBA1/B/
 
     Args:
         config: The current pipeline configuration (not mutated).
-        project: Project identifier (e.g. ``"Cable1"``).
+        project: Project identifier (e.g. ``"Cable1"``). A comma suffix may
+            specify an area override, e.g. ``"PCBA1,B"``.
 
     Returns:
         A deep copy of *config* with resolved paths.
     """
+    parsed = parse_project_area_override(project)
+    project = parsed.project
+    area_override = parsed.area
     cfg = copy.deepcopy(config)
 
-    raw_root = Path("data") / project / "raw"
-    processed_root = Path("data") / project / "processed"
-    split_root = Path("data") / project / "split"
-    qc_root = Path("data") / project / "qc"
-
+    data_root = Path("data") / project
     runs_root = Path("runs") / project
+    if area_override:
+        data_root = data_root / area_override
+        runs_root = runs_root / area_override
+
+    handoff_cfg = cfg.get("operator_handoff", {}) or {}
+    handoff_source_stage = "processed"
+    handoff_split_source_stage = "processed"
+    if handoff_cfg.get("enabled", False):
+        handoff_dataset_value = str(handoff_cfg.get("dataset_root") or "").strip()
+        if not handoff_dataset_value:
+            raise ValueError("operator_handoff.dataset_root is required")
+        handoff_dataset_root = Path(handoff_dataset_value).expanduser().resolve()
+        allowed_data_root = (Path.cwd() / "data").resolve()
+        if not handoff_dataset_root.is_relative_to(allowed_data_root):
+            raise ValueError(
+                "operator_handoff.dataset_root must stay under the training data directory"
+            )
+        data_root = handoff_dataset_root
+        handoff_source_stage = str(
+            handoff_cfg.get("source_stage") or "raw"
+        ).lower()
+        if handoff_source_stage not in {"raw", "processed"}:
+            raise ValueError(
+                "operator_handoff.source_stage must be 'raw' or 'processed'"
+            )
+        handoff_split_source_stage = str(
+            handoff_cfg.get("split_source_stage") or handoff_source_stage
+        ).lower()
+        if handoff_split_source_stage not in {"raw", "processed"}:
+            raise ValueError(
+                "operator_handoff.split_source_stage must be 'raw' or 'processed'"
+            )
+
+    raw_root = data_root / "raw"
+    processed_root = data_root / "processed"
+    split_root = data_root / "split"
+    qc_root = data_root / "qc"
     infer_root = runs_root / "infer"
     quality_root = runs_root / "quality"
     reports_root = runs_root / "reports"
@@ -92,6 +176,24 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     # --- Pipeline Logs ---
     if "pipeline" in cfg:
         cfg["pipeline"]["log_file"] = str(runs_root / "logs" / "pipeline.log")
+
+    # --- Anomalib Training / Package ---
+    if "anomalib_training" in cfg:
+        at = cfg["anomalib_training"]
+        at["root"] = str(data_root)
+        at["product"] = project
+        if area_override:
+            at["area"] = area_override
+        at["name"] = f"{project}_{area_override}" if area_override else project
+        at["project"] = str(Path("runs") / "anomalib" / project / (area_override or "A"))
+        cfg["anomalib_training"] = at
+
+    if "anomalib_package" in cfg:
+        apkg = cfg["anomalib_package"]
+        apkg["product"] = project
+        if area_override:
+            apkg["area"] = area_override
+        cfg["anomalib_package"] = apkg
 
     # --- YOLO Augmentation ---
     if "yolo_augmentation" in cfg:
@@ -115,8 +217,13 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     # --- Dataset Splitter ---
     if "train_test_split" in cfg:
         tts = cfg["train_test_split"]
-        tts.setdefault("input", {})["image_dir"] = str(processed_root / "images")
-        tts.setdefault("input", {})["label_dir"] = str(processed_root / "labels")
+        split_input_root = (
+            raw_root
+            if handoff_split_source_stage == "raw"
+            else processed_root
+        )
+        tts.setdefault("input", {})["image_dir"] = str(split_input_root / "images")
+        tts.setdefault("input", {})["label_dir"] = str(split_input_root / "labels")
         tts.setdefault("output", {})["output_dir"] = str(split_root)
 
     # --- YOLO Training ---
@@ -130,12 +237,29 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
 
         pv = yt.get("position_validation", {})
         pv["output_dir"] = str(quality_root / "position")
-        pv["sample_dir"] = str(split_root / "val" / "images")
+        pv["sample_dir"] = str(split_root / "test" / "images")
+        if handoff_cfg.get("enabled", False):
+            pv["golden_ok_dir"] = None
+            pv["golden_ng_dir"] = None
+            pv["golden_manifest_path"] = str(
+                data_root / "metadata" / "review_dataset_manifest.csv"
+            )
+            pv["golden_manifest_image_dir"] = str(
+                split_root / "test" / "images"
+            )
+        else:
+            pv["golden_ok_dir"] = str(split_root / "test" / "images")
+        pv["calibration_image_dir"] = str(split_root / "train" / "images")
+        pv["calibration_label_dir"] = str(split_root / "train" / "labels")
         pv["product"] = project
+        if area_override:
+            pv["area"] = area_override
         yt["position_validation"] = pv
 
         edc = yt.get("export_detection_config", {})
         edc["current_product"] = project
+        if area_override:
+            edc["area"] = area_override
         if project_class_names:
             area = str(edc.get("area") or pv.get("area") or "A")
             edc["expected_items"] = {project: {area: project_class_names}}
@@ -145,6 +269,18 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
                 if isinstance(sequence_check, dict):
                     sequence_check["expected"] = project_class_names
         yt["export_detection_config"] = edc
+
+        deploy_cfg = yt.get("deploy", {})
+        if isinstance(deploy_cfg, dict):
+            deploy_cfg["product"] = project
+            if area_override:
+                deploy_cfg["area"] = area_override
+            yt["deploy"] = deploy_cfg
+
+        bundle_cfg = yt.get("artifact_bundle", {})
+        if isinstance(bundle_cfg, dict) and area_override:
+            bundle_cfg["area"] = area_override
+            yt["artifact_bundle"] = bundle_cfg
 
     # --- Batch Inference ---
     if "batch_inference" in cfg:
@@ -185,6 +321,12 @@ def resolve_project_paths(config: dict[str, Any], project: str) -> dict[str, Any
     # --- Reports ---
     if "report" in cfg:
         cfg["report"]["output_dir"] = str(reports_root)
+
+    # --- QC Summary ---
+    if "qc_summary" in cfg:
+        cfg["qc_summary"]["output_path"] = str(
+            quality_root / "qc_summary.json"
+        )
 
     _check_for_placeholders(cfg)
     return cfg

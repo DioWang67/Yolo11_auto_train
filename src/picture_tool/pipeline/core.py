@@ -118,17 +118,17 @@ class Pipeline:
         total = len(ordered)
 
         for index, task in enumerate(ordered):
-            if before_task:
-                try:
-                    config = before_task(task, config)
-                except Exception as exc:  # pragma: no cover - defensive
-                    self.logger.warning(f"Pre-task hook for {task.name} failed: {exc}")
             if (
                 hasattr(args, "stop_event")
                 and getattr(args.stop_event, "is_set", lambda: False)()
             ):
                 self.logger.info("Stop requested; aborting remaining tasks.")
                 break
+            if before_task:
+                try:
+                    config = before_task(task, config)
+                except Exception as exc:  # pragma: no cover - defensive
+                    self.logger.warning(f"Pre-task hook for {task.name} failed: {exc}")
             skip_reason: Optional[str] = None
             if not force and task.skip_fn:
                 try:

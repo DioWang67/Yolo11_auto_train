@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import IO, List, Optional
 
@@ -22,6 +21,8 @@ class LabelImgLauncher:
         self.labelimg_executable = self._find_labelimg()
         self.last_error: Optional[str] = None
         self.last_log_path: Optional[Path] = None
+        self._label_snapshot: dict[Path, tuple[int, int]] = {}
+        self._output_dir: Optional[Path] = None
 
     def _find_labelimg(self) -> Optional[str]:
         """Find LabelImg executable in the system."""
@@ -80,17 +81,30 @@ class LabelImgLauncher:
             True if preparation successful, False otherwise
         """
         try:
+            normalized_classes = [str(class_name).strip() for class_name in classes]
+            if (
+                not normalized_classes
+                or any(not class_name for class_name in normalized_classes)
+                or len(set(normalized_classes)) != len(normalized_classes)
+            ):
+                raise ValueError("LabelImg classes must be non-empty and unique")
             # Create output directory if it doesn't exist
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # Create predefined_classes.txt for LabelImg
+            class_text = "\n".join(normalized_classes) + "\n"
             classes_file = output_dir.parent / "predefined_classes.txt"
-            with open(classes_file, "w", encoding="utf-8") as f:
-                for class_name in classes:
-                    f.write(f"{class_name}\n")
+            _write_text_atomic(classes_file, class_text)
+            # YoloReader opens classes.txt beside the .txt annotation when it
+            # loads an existing draft label.
+            yolo_classes_file = output_dir / "classes.txt"
+            _write_text_atomic(yolo_classes_file, class_text)
 
-            logger.info(f"Created predefined_classes.txt at {classes_file}")
-            logger.info(f"Classes: {classes}")
+            logger.info(
+                "Created LabelImg class files at %s and %s",
+                classes_file,
+                yolo_classes_file,
+            )
+            logger.info("Classes: %s", normalized_classes)
 
             return True
         except (OSError, ValueError, KeyError) as e:
@@ -115,6 +129,8 @@ class LabelImgLauncher:
         """
         self.last_error = None
         self.last_log_path = None
+        self._output_dir = output_dir.expanduser().resolve()
+        self._label_snapshot = self._snapshot_labels(self._output_dir)
 
         if not self.is_installed():
             self.last_error = "LabelImg is not installed"
@@ -123,6 +139,15 @@ class LabelImgLauncher:
 
         if not input_dir.exists():
             self.last_error = f"Input directory does not exist: {input_dir}"
+            logger.error(self.last_error)
+            return False
+
+        yolo_classes_file = output_dir / "classes.txt"
+        if not yolo_classes_file.is_file():
+            self.last_error = (
+                "YOLO class file is missing: "
+                f"{yolo_classes_file}. Prepare the annotation environment first."
+            )
             logger.error(self.last_error)
             return False
 
@@ -143,6 +168,8 @@ class LabelImgLauncher:
                 cmd.append(str(predefined_classes_file))
 
             cmd.append(str(output_dir))
+            if str(self.labelimg_executable).endswith(".py"):
+                cmd.extend(["--format", "yolo"])
 
             logger.info(f"Launching LabelImg with command: {' '.join(cmd)}")
 
@@ -150,7 +177,9 @@ class LabelImgLauncher:
             stdout_log, stderr_log = self._open_launch_logs(log_path)
             creationflags = 0
             if os.name == "nt":
-                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+                creationflags = int(
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                )
 
             self.process = subprocess.Popen(
                 cmd,
@@ -166,19 +195,6 @@ class LabelImgLauncher:
             self.last_log_path = log_path
 
             logger.info(f"LabelImg launched with PID: {self.process.pid}")
-            time.sleep(1.5)
-            exit_code = self.process.poll()
-            if exit_code is not None:
-                detail = self._read_launch_log(log_path)
-                self.last_error = (
-                    f"LabelImg exited immediately with code {exit_code}."
-                    f" See log: {log_path}"
-                )
-                if detail:
-                    self.last_error = f"{self.last_error}\n{detail}"
-                logger.error(self.last_error)
-                return False
-
             return True
 
         except (OSError, RuntimeError, FileNotFoundError) as e:
@@ -229,6 +245,49 @@ class LabelImgLauncher:
             return False
         return self.process.poll() is None
 
+    def process_exit_error(self) -> Optional[str]:
+        """Return a diagnostic when the launched process exited abnormally."""
+        if self.process is None:
+            return None
+        exit_code = self.process.poll()
+        if exit_code is None or exit_code == 0:
+            return None
+        log_path = self.last_log_path
+        detail = self._read_launch_log(log_path) if log_path else ""
+        location = f" See log: {log_path}" if log_path else ""
+        self.last_error = f"LabelImg exited with code {exit_code}.{location}"
+        if detail:
+            self.last_error = f"{self.last_error}\n{detail}"
+        return self.last_error
+
+    def completed_label_paths(self) -> tuple[Path, ...]:
+        """Return YOLO label files written since the current launch."""
+        if self.is_running() or self._output_dir is None:
+            return ()
+        current = self._snapshot_labels(self._output_dir)
+        return tuple(
+            sorted(
+                path
+                for path, state in current.items()
+                if self._label_snapshot.get(path) != state
+            )
+        )
+
+    @staticmethod
+    def _snapshot_labels(output_dir: Path) -> dict[Path, tuple[int, int]]:
+        """Capture cheap file metadata without reading label contents."""
+        snapshot: dict[Path, tuple[int, int]] = {}
+        try:
+            candidates = output_dir.glob("*.txt")
+            for path in candidates:
+                if path.name.lower() == "classes.txt" or not path.is_file():
+                    continue
+                stat = path.stat()
+                snapshot[path.resolve()] = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            logger.exception("Unable to snapshot LabelImg output directory: %s", output_dir)
+        return snapshot
+
     def wait_for_completion(self, timeout: Optional[float] = None) -> int:
         """Wait for LabelImg to close.
 
@@ -257,3 +316,14 @@ class LabelImgLauncher:
             except subprocess.TimeoutExpired:
                 logger.warning("Process didn't terminate, killing it")
                 self.process.kill()
+
+
+def _write_text_atomic(path: Path, content: str) -> None:
+    """Write one LabelImg contract file without exposing partial content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)

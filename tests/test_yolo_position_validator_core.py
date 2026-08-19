@@ -6,6 +6,7 @@ from picture_tool.position.yolo_position_validator import (
     PositionValidationResult,
     _base_class_name,
     _imgsz_value,
+    _resolve_validation_samples,
     validate_detections_against_area,
 )
 
@@ -18,6 +19,56 @@ def test_imgsz_value_prefers_first_numeric_entry():
 def test_imgsz_value_rejects_missing_entries():
     with pytest.raises(ValueError):
         _imgsz_value(["bad", None])
+
+
+def test_manifest_golden_set_excludes_unrelated_yolo_failures(tmp_path):
+    image_dir = tmp_path / "test" / "images"
+    image_dir.mkdir(parents=True)
+    for name in ("position_ok.jpg", "position_ng.jpg", "missing_part.jpg"):
+        (image_dir / name).write_bytes(name.encode())
+    manifest = tmp_path / "review_dataset_manifest.csv"
+    manifest.write_text(
+        "output_image,review_label,decision_reasons\n"
+        f"{image_dir / 'position_ok.jpg'},position_false_reject,POSITION_SHIFT\n"
+        f"{image_dir / 'position_ng.jpg'},confirmed_ng,POSITION_SHIFT\n"
+        f"{image_dir / 'missing_part.jpg'},confirmed_ng,MISSING\n",
+        encoding="utf-8",
+    )
+
+    samples = _resolve_validation_samples(
+        {
+            "golden_manifest_path": str(manifest),
+            "golden_manifest_image_dir": str(image_dir),
+        },
+        image_dir,
+    )
+
+    assert [(path.name, status) for path, status in samples] == [
+        ("position_ng.jpg", "FAIL"),
+        ("position_ok.jpg", "PASS"),
+    ]
+
+
+def test_manifest_golden_set_fails_when_no_position_evidence(tmp_path):
+    image_dir = tmp_path / "test" / "images"
+    image_dir.mkdir(parents=True)
+    image = image_dir / "missing_part.jpg"
+    image.write_bytes(b"image")
+    manifest = tmp_path / "review_dataset_manifest.csv"
+    manifest.write_text(
+        "output_image,review_label,decision_reasons\n"
+        f"{image},confirmed_ng,MISSING\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no eligible samples"):
+        _resolve_validation_samples(
+            {
+                "golden_manifest_path": str(manifest),
+                "golden_manifest_image_dir": str(image_dir),
+            },
+            image_dir,
+        )
 
 
 def _make_config(tolerance: float = 5.0) -> PositionAreaConfig:
@@ -86,6 +137,69 @@ def test_validate_detections_passes_within_allowed_region():
     assert result.status == "PASS"
     assert result.wrong == []
     assert result.missing == []
+
+
+def test_center_mode_uses_runtime_center_distance_not_box_containment():
+    cfg = PositionAreaConfig(
+        enabled=True,
+        mode="center",
+        tolerance=5.0,
+        tolerance_unit="pixel",
+        expected_boxes={"widget": ExpectedBox(100.0, 100.0, 200.0, 200.0)},
+    )
+    # Inside the expected rectangle, but 56.6 px away from its center.
+    detections = [_sample_detection(190.0, 190.0)]
+
+    result = validate_detections_against_area(
+        detections,
+        cfg,
+        640,
+        "prod",
+        "area",
+    )
+
+    assert result.status == "FAIL"
+    assert result.wrong == ["widget"]
+
+
+def test_region_mode_keeps_rectangle_edge_semantics():
+    cfg = PositionAreaConfig(
+        enabled=True,
+        mode="region",
+        tolerance=5.0,
+        tolerance_unit="pixel",
+        expected_boxes={"widget": ExpectedBox(100.0, 100.0, 200.0, 200.0)},
+    )
+
+    result = validate_detections_against_area(
+        [_sample_detection(190.0, 190.0)],
+        cfg,
+        640,
+        "prod",
+        "area",
+    )
+
+    assert result.status == "PASS"
+
+
+def test_iou_mode_matches_runtime_minimum_iou_semantics():
+    cfg = PositionAreaConfig(
+        enabled=True,
+        mode="iou",
+        tolerance=0.5,
+        tolerance_unit="pixel",
+        expected_boxes={"widget": ExpectedBox(0.0, 0.0, 10.0, 10.0)},
+    )
+
+    result = validate_detections_against_area(
+        [_sample_detection(5.0, 5.0)],
+        cfg,
+        640,
+        "prod",
+        "area",
+    )
+
+    assert result.status == "PASS"
 
 
 # -----------------------------------------------------------------------

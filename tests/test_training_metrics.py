@@ -1,7 +1,5 @@
 """Tests for TrainingMetricsParser."""
 
-import pytest
-
 from picture_tool.gui.training_metrics import TrainingMetricsParser
 
 

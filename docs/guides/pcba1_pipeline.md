@@ -158,12 +158,12 @@ The expected PCBA1/A items are:
 ```yaml
 expected_items:
   PCBA1:
-    A:
-      - J5-1
-      - J5-2
-      - C22B
-      - J6
-      - J7
+    B:
+      - J2-1
+      - J2-2
+      - C22A
+      - J3
+      - J4
 ```
 
 ### Position Check

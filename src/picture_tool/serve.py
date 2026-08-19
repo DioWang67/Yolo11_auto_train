@@ -1,18 +1,28 @@
+from __future__ import annotations
+
 import io
 import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 
 try:
-    from fastapi import FastAPI, File, UploadFile, HTTPException  # type: ignore
+    from fastapi import FastAPI, File, HTTPException, UploadFile  # type: ignore
     from fastapi.concurrency import run_in_threadpool
     import uvicorn
-    from PIL import Image
 except ImportError:
     FastAPI = None  # type: ignore
+    File = None  # type: ignore
+    HTTPException = RuntimeError  # type: ignore
+    UploadFile = object  # type: ignore
+    run_in_threadpool = None  # type: ignore
+    uvicorn = None  # type: ignore
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None  # type: ignore
 
 import os
 try:
@@ -22,9 +32,7 @@ try:
 except ImportError:
     YOLO = None  # type: ignore
 
-app = FastAPI(title="YOLO11 Inference Service") if FastAPI is not None else None
 MODEL_INSTANCE = None
-STARTUP_MODEL_PATH: Optional[str] = None
 _MODEL_LOCK = threading.Lock()  # Thread-safe model loading
 
 
@@ -64,7 +72,9 @@ def load_model(model_path: str):
 async def lifespan(app: FastAPI):
     # Startup logic
     default_model = Path("runs/detect/train/weights/best.pt")
-    if default_model.exists():
+    if MODEL_INSTANCE is not None:
+        logging.info("Using the model loaded by the service entrypoint.")
+    elif default_model.exists():
         try:
             load_model(str(default_model))
         except (RuntimeError, FileNotFoundError, OSError) as e:
@@ -78,7 +88,6 @@ async def lifespan(app: FastAPI):
     # Shutdown logic (if any)
 
 
-# Re-create app with lifespan if supported
 app = (
     FastAPI(title="YOLO11 Inference Service", lifespan=lifespan)
     if FastAPI is not None
@@ -86,12 +95,10 @@ app = (
 )
 
 
-@app.get("/health")
 def health_check():
     return {"status": "ok", "model_loaded": MODEL_INSTANCE is not None}
 
 
-@app.post("/load_model")
 def api_load_model(path: str):
     """Load a YOLO model from specified path.
     
@@ -114,8 +121,7 @@ def api_load_model(path: str):
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
 
 
-@app.post("/predict")
-async def predict(file: UploadFile = File(...), conf: float = 0.25):
+async def predict(file: UploadFile, conf: float = 0.25):
     """Run YOLO inference on uploaded image.
     
     Args:
@@ -137,6 +143,10 @@ async def predict(file: UploadFile = File(...), conf: float = 0.25):
     
     if MODEL_INSTANCE is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
+    if Image is None:
+        raise HTTPException(status_code=500, detail="Pillow not installed")
+    if run_in_threadpool is None:
+        raise HTTPException(status_code=500, detail="FastAPI threadpool unavailable")
 
     try:
         contents = await file.read()
@@ -167,6 +177,16 @@ async def predict(file: UploadFile = File(...), conf: float = 0.25):
         raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
 
 
+if app is not None:
+    app.get("/health")(health_check)
+    app.post("/load_model")(api_load_model)
+
+    async def predict_endpoint(file: UploadFile = File(...), conf: float = 0.25):
+        return await predict(file=file, conf=conf)
+
+    app.post("/predict")(predict_endpoint)
+
+
 def main():
     if FastAPI is None:
         print(
@@ -182,16 +202,10 @@ def main():
     args = parser.parse_args()
 
     if args.model:
-        # Pre-set for startup load
-        # Hacky global set for simplicity in this script scope
-        global STARTUP_MODEL_PATH
-        STARTUP_MODEL_PATH = args.model
-
-        # Better way: startup event checks this var, or we load it here but app state is cleaner
-        if Path(args.model).exists():
-            # We can't easily pass args to startup_event without closures or env vars
-            # So let's just attempt load if we are in main block context logic
-            pass
+        try:
+            load_model(args.model)
+        except (FileNotFoundError, RuntimeError, OSError) as exc:
+            parser.error(f"Unable to load initial model: {exc}")
 
     uvicorn.run(app, host=args.host, port=args.port)
 

@@ -285,6 +285,36 @@ class TestPipelineRun:
         assert "task1" in execution_log
         assert "task2" not in execution_log
 
+    def test_stop_event_does_not_announce_a_task_that_will_not_run(self):
+        execution_log = []
+        hook_calls = []
+
+        class StopAfterFirstTask:
+            def __init__(self):
+                self.checks = 0
+
+            def is_set(self):
+                self.checks += 1
+                return self.checks > 1
+
+        tasks = {
+            "task1": Task("task1", lambda _config, _args: execution_log.append("task1")),
+            "task2": Task(
+                "task2",
+                lambda _config, _args: execution_log.append("task2"),
+                dependencies=["task1"],
+            ),
+        }
+        Pipeline(tasks).run(
+            ["task2"],
+            {},
+            SimpleNamespace(stop_event=StopAfterFirstTask()),
+            before_task=lambda task, config: hook_calls.append(task.name) or config,
+        )
+
+        assert execution_log == ["task1"]
+        assert hook_calls == ["task1"]
+
     def test_run_executes_before_task_hook(self):
         """Should execute before_task hook before each task."""
         hook_calls = []

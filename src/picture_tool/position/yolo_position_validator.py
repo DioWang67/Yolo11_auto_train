@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import logging
+import math
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -21,7 +25,6 @@ from typing import (
 )
 
 import yaml
-import os
 
 try:
     if os.environ.get("PYTEST_IS_RUNNING") == "1":
@@ -86,6 +89,7 @@ class PositionAreaConfig:
     mode: str = "center"
     tolerance: float = 0.0
     expected_boxes: Mapping[str, ExpectedBox] = field(default_factory=dict)
+    tolerance_unit: str = "percent"
 
 
 PositionConfig = Dict[str, Dict[str, PositionAreaConfig]]
@@ -174,6 +178,7 @@ def load_position_config(
                 mode=mode,
                 tolerance=float(cfg.get("tolerance", 0.0)),
                 expected_boxes=boxes,
+                tolerance_unit=str(cfg.get("tolerance_unit", "percent")).lower(),
             )
         if product_map:
             parsed[str(product)] = product_map
@@ -230,6 +235,101 @@ def _resolve_class_name(names: Any, class_id: int) -> str:
     if isinstance(names, Sequence) and 0 <= class_id < len(names):
         return str(names[class_id])
     return str(class_id)
+
+
+def _tolerance_px(
+    class_tolerance: float | None,
+    *,
+    default_tolerance_px: float,
+    tolerance_unit: str,
+    imgsz: int,
+) -> float:
+    if class_tolerance is None:
+        return default_tolerance_px
+    if tolerance_unit == "pixel":
+        return float(class_tolerance)
+    return float(imgsz) * (float(class_tolerance) / 100.0)
+
+
+def _position_is_correct(
+    expected: ExpectedBox,
+    detection: Mapping[str, Any],
+    *,
+    mode: str,
+    tolerance: float,
+) -> bool:
+    """Mirror the production runtime's center, region, and IoU semantics."""
+
+    cx = detection.get("cx")
+    cy = detection.get("cy")
+    if cx is None or cy is None:
+        return False
+    actual_cx = float(cx)
+    actual_cy = float(cy)
+    if mode in {"region", "bbox_region"}:
+        dx = max(expected.x1 - actual_cx, 0.0, actual_cx - expected.x2)
+        dy = max(expected.y1 - actual_cy, 0.0, actual_cy - expected.y2)
+        return math.hypot(dx, dy) <= tolerance
+    if mode == "iou":
+        bbox = detection.get("bbox")
+        if not isinstance(bbox, Sequence) or len(bbox) < 4:
+            return False
+        minimum_iou = tolerance / 100.0 if tolerance > 1.0 else tolerance
+        return _bbox_iou(expected.as_tuple(), bbox) >= minimum_iou
+    expected_cx, expected_cy = expected.center()
+    return (
+        math.hypot(actual_cx - expected_cx, actual_cy - expected_cy)
+        <= tolerance
+    )
+
+
+def _bbox_iou(expected: BBox, actual: Sequence[Any]) -> float:
+    actual_x1, actual_y1, actual_x2, actual_y2 = (
+        float(actual[0]),
+        float(actual[1]),
+        float(actual[2]),
+        float(actual[3]),
+    )
+    intersection_x1 = max(expected[0], actual_x1)
+    intersection_y1 = max(expected[1], actual_y1)
+    intersection_x2 = min(expected[2], actual_x2)
+    intersection_y2 = min(expected[3], actual_y2)
+    intersection = max(0.0, intersection_x2 - intersection_x1) * max(
+        0.0,
+        intersection_y2 - intersection_y1,
+    )
+    expected_area = max(0.0, expected[2] - expected[0]) * max(
+        0.0,
+        expected[3] - expected[1],
+    )
+    actual_area = max(0.0, actual_x2 - actual_x1) * max(
+        0.0,
+        actual_y2 - actual_y1,
+    )
+    union = expected_area + actual_area - intersection
+    return intersection / union if union > 0.0 else 0.0
+
+
+def _effective_tolerance(
+    expected: ExpectedBox,
+    *,
+    area_cfg: PositionAreaConfig,
+    configured_tolerance: float,
+    default_tolerance_px: float,
+    imgsz: int,
+) -> float:
+    if area_cfg.mode == "iou":
+        return (
+            float(expected.tolerance)
+            if expected.tolerance is not None
+            else configured_tolerance
+        )
+    return _tolerance_px(
+        expected.tolerance,
+        default_tolerance_px=default_tolerance_px,
+        tolerance_unit=area_cfg.tolerance_unit,
+        imgsz=imgsz,
+    )
 
 
 def convert_results_to_detections(
@@ -366,7 +466,14 @@ def validate_detections_against_area(
             wrong=[],
             unknown=[],
         )
-    if area_cfg.mode not in {"bbox", "box", "center"}:
+    if area_cfg.mode not in {
+        "bbox",
+        "box",
+        "center",
+        "region",
+        "bbox_region",
+        "iou",
+    }:
         raise ValueError(f"Unsupported position validation mode: {area_cfg.mode}")
     imgsz_int = _imgsz_value(imgsz)
     tol_percent = (
@@ -374,7 +481,14 @@ def validate_detections_against_area(
         if tolerance_override is not None
         else float(area_cfg.tolerance)
     )
-    default_tolerance_px = imgsz_int * (tol_percent / 100.0)
+    if area_cfg.tolerance_unit == "pixel":
+        default_tolerance_px = tol_percent
+    elif area_cfg.tolerance_unit == "percent":
+        default_tolerance_px = imgsz_int * (tol_percent / 100.0)
+    else:
+        raise ValueError(
+            f"Unsupported position tolerance unit: {area_cfg.tolerance_unit}"
+        )
 
     # Group expected boxes by base class name for multi-instance matching
     from collections import defaultdict
@@ -402,8 +516,10 @@ def validate_detections_against_area(
         if len(expected_entries) == 1 and not any("#" in k for k, _ in expected_entries):
             # Single-instance path: keep backward-compatible behavior
             key, ebox = expected_entries[0]
-            det = _select_best_detection(candidates, base_class) if candidates else None
-            if det is None:
+            selected_det = (
+                _select_best_detection(candidates, base_class) if candidates else None
+            )
+            if selected_det is None:
                 missing.append(key)
                 results.append({
                     "class": key, "status": "MISSING",
@@ -412,22 +528,29 @@ def validate_detections_against_area(
                 continue
             entry = {
                 "class": key,
-                "class_id": det.get("class_id"),
-                "confidence": det.get("confidence"),
-                "bbox": det.get("bbox"),
-                "cx": det.get("cx"), "cy": det.get("cy"),
+                "class_id": selected_det.get("class_id"),
+                "confidence": selected_det.get("confidence"),
+                "bbox": selected_det.get("bbox"),
+                "cx": selected_det.get("cx"), "cy": selected_det.get("cy"),
             }
-            cx, cy = det.get("cx"), det.get("cy")
+            cx, cy = selected_det.get("cx"), selected_det.get("cy")
             if cx is None or cy is None:
                 entry["status"] = "UNKNOWN"
                 unknown.append(key)
             else:
-                class_tol_px = (
-                    imgsz_int * (ebox.tolerance / 100.0)
-                    if ebox.tolerance is not None
-                    else default_tolerance_px
+                class_tol_px = _effective_tolerance(
+                    ebox,
+                    area_cfg=area_cfg,
+                    configured_tolerance=tol_percent,
+                    default_tolerance_px=default_tolerance_px,
+                    imgsz=imgsz_int,
                 )
-                if ebox.contains(float(cx), float(cy), class_tol_px, float(imgsz_int)):
+                if _position_is_correct(
+                    ebox,
+                    selected_det,
+                    mode=area_cfg.mode,
+                    tolerance=class_tol_px,
+                ):
                     entry["status"] = "CORRECT"
                 else:
                     entry["status"] = "WRONG"
@@ -461,12 +584,19 @@ def validate_detections_against_area(
                     entry["status"] = "UNKNOWN"
                     unknown.append(key)
                 else:
-                    class_tol_px = (
-                        imgsz_int * (ebox.tolerance / 100.0)
-                        if ebox.tolerance is not None
-                        else default_tolerance_px
+                    class_tol_px = _effective_tolerance(
+                        ebox,
+                        area_cfg=area_cfg,
+                        configured_tolerance=tol_percent,
+                        default_tolerance_px=default_tolerance_px,
+                        imgsz=imgsz_int,
                     )
-                    if ebox.contains(float(cx), float(cy), class_tol_px, float(imgsz_int)):
+                    if _position_is_correct(
+                        ebox,
+                        det,
+                        mode=area_cfg.mode,
+                        tolerance=class_tol_px,
+                    ):
                         entry["status"] = "CORRECT"
                     else:
                         entry["status"] = "WRONG"
@@ -554,6 +684,135 @@ def _resolve_weights(run_dir: Path, override: Optional[Union[str, Path]]) -> Pat
     raise FileNotFoundError(f"Unable to locate trained weights under {weights_dir}")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_validation_samples(
+    pv_cfg: Mapping[str, Any],
+    default_sample_dir: Path,
+) -> List[Tuple[Path, str]]:
+    """Resolve disjoint OK/NG golden sets with a legacy OK-only fallback."""
+
+    golden_manifest_value = pv_cfg.get("golden_manifest_path")
+    if golden_manifest_value:
+        manifest_image_dir = Path(
+            str(
+                pv_cfg.get("golden_manifest_image_dir")
+                or default_sample_dir
+            )
+        )
+        samples = _resolve_manifest_validation_samples(
+            Path(str(golden_manifest_value)),
+            manifest_image_dir,
+        )
+    else:
+        samples = _resolve_directory_validation_samples(
+            pv_cfg,
+            default_sample_dir,
+        )
+
+    resolved_status: Dict[Path, str] = {}
+    for path, expected_status in samples:
+        resolved = path.resolve()
+        previous = resolved_status.get(resolved)
+        if previous is not None and previous != expected_status:
+            raise ValueError(
+                f"Position golden sample appears in both OK and NG sets: {resolved}"
+            )
+        resolved_status[resolved] = expected_status
+    return sorted(resolved_status.items(), key=lambda item: str(item[0]))
+
+
+def _resolve_directory_validation_samples(
+    pv_cfg: Mapping[str, Any],
+    default_sample_dir: Path,
+) -> List[Tuple[Path, str]]:
+    golden_ok_value = pv_cfg.get("golden_ok_dir")
+    golden_ng_value = pv_cfg.get("golden_ng_dir")
+    if golden_ok_value or golden_ng_value:
+        samples: List[Tuple[Path, str]] = []
+        if golden_ok_value:
+            samples.extend(
+                (path, "PASS")
+                for path in _resolve_sample_images(Path(str(golden_ok_value)))
+            )
+        if golden_ng_value:
+            samples.extend(
+                (path, "FAIL")
+                for path in _resolve_sample_images(Path(str(golden_ng_value)))
+            )
+    else:
+        sample_dir_value = pv_cfg.get("sample_dir") or default_sample_dir
+        samples = [
+            (path, "PASS")
+            for path in _resolve_sample_images(Path(str(sample_dir_value)))
+        ]
+    return samples
+
+
+def _resolve_manifest_validation_samples(
+    manifest_path: Path,
+    image_dir: Path,
+) -> List[Tuple[Path, str]]:
+    """Select only position-specific operator outcomes from a review manifest."""
+
+    available_images = {
+        path.name: path
+        for path in _resolve_sample_images(image_dir)
+    }
+    try:
+        with manifest_path.open(
+            "r",
+            encoding="utf-8-sig",
+            newline="",
+        ) as handle:
+            rows = list(csv.DictReader(handle))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Position golden manifest was not found: {manifest_path}"
+        ) from exc
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise ValueError(
+            f"Unable to read position golden manifest: {exc}"
+        ) from exc
+
+    selected: List[Tuple[Path, str]] = []
+    for row in rows:
+        output_name = Path(str(row.get("output_image") or "")).name
+        image_path = available_images.get(output_name)
+        if image_path is None:
+            continue
+        explicit_status = str(
+            row.get("position_golden_status") or ""
+        ).strip().upper()
+        if explicit_status in {"PASS", "FAIL"}:
+            selected.append((image_path, explicit_status))
+            continue
+        review_label = str(row.get("review_label") or "").strip().lower()
+        reasons = {
+            reason.strip().upper()
+            for reason in str(row.get("decision_reasons") or "").split("|")
+            if reason.strip()
+        }
+        if review_label == "position_false_reject":
+            selected.append((image_path, "PASS"))
+        elif review_label == "confirmed_ng" and reasons == {"POSITION_SHIFT"}:
+            selected.append((image_path, "FAIL"))
+
+    if not selected:
+        raise ValueError(
+            "Position golden manifest has no eligible samples in the holdout "
+            "image directory. Collect position_false_reject OK cases or pure "
+            "POSITION_SHIFT confirmed-NG cases."
+        )
+    return selected
+
+
 def run_position_validation(
     config: MutableMapping[str, Any],
     run_dir: Path,
@@ -582,11 +841,7 @@ def run_position_validation(
     imgsz_int = _imgsz_value(imgsz_value)
     dataset_dir = Path(str(ycfg.get("dataset_dir", "./data/split")))
     default_sample_dir = dataset_dir / "val" / "images"
-    sample_dir_value = pv_cfg.get("sample_dir")
-    if not sample_dir_value:
-        sample_dir_value = default_sample_dir
-    sample_dir = Path(str(sample_dir_value))
-    images = _resolve_sample_images(sample_dir)
+    validation_samples = _resolve_validation_samples(pv_cfg, default_sample_dir)
     config_source: Optional[Union[str, Path, Mapping[str, Any]]] = pv_cfg.get("config")
     if not config_source:
         config_source = pv_cfg.get("config_path")
@@ -621,18 +876,23 @@ def run_position_validation(
         conf_value = 0.25
     conf = float(conf_value)
     logger.info(
-        "Running position validation | product=%s area=%s imgsz=%s device=%s conf=%.3f samples=%s",
+        "Running position validation | product=%s area=%s imgsz=%s "
+        "device=%s conf=%.3f samples=%d",
         product,
         area,
         imgsz_int,
         device,
         conf,
-        sample_dir,
+        len(validation_samples),
     )
     model = YOLO(str(weights_path))
     records: List[Dict[str, Any]] = []
     status_counter: Dict[str, int] = {"PASS": 0, "FAIL": 0, "SKIPPED": 0}
-    for img_path in images:
+    ok_samples = 0
+    ok_false_rejects = 0
+    ng_samples = 0
+    ng_detected = 0
+    for img_path, expected_status in validation_samples:
         results = model(str(img_path), imgsz=imgsz_int, device=device, conf=conf)
         detections: List[Dict[str, Any]] = []
         for res in results:
@@ -646,10 +906,20 @@ def run_position_validation(
             tolerance_override=tolerance_override,
         )
         status_counter[validation.status] = status_counter.get(validation.status, 0) + 1
+        if expected_status == "PASS":
+            ok_samples += 1
+            if validation.status != "PASS":
+                ok_false_rejects += 1
+        else:
+            ng_samples += 1
+            if validation.status == "FAIL":
+                ng_detected += 1
         records.append(
             {
                 "image": img_path.name,
                 "path": str(img_path),
+                "image_sha256": _sha256_file(img_path),
+                "expected_status": expected_status,
                 "detections": detections,
                 "validation": validation.as_dict(),
             }
@@ -658,8 +928,18 @@ def run_position_validation(
         "product": str(product),
         "area": str(area),
         "imgsz": imgsz_int,
-        "samples": len(images),
+        "samples": len(validation_samples),
         "status_counts": status_counter,
+        "metrics": {
+            "ok_samples": ok_samples,
+            "ok_false_rejects": ok_false_rejects,
+            "ok_false_reject_rate": (
+                ok_false_rejects / ok_samples if ok_samples else 0.0
+            ),
+            "ng_samples": ng_samples,
+            "ng_detected": ng_detected,
+            "ng_recall": ng_detected / ng_samples if ng_samples else None,
+        },
     }
     out_path = output_dir / "position_validation.json"
     with open(out_path, "w", encoding="utf-8") as f:
@@ -669,6 +949,7 @@ def run_position_validation(
                 "records": records,
                 "config_source": str(config_source),
                 "tolerance_override": tolerance_override,
+                "schema_version": 2,
             },
             f,
             indent=2,

@@ -8,10 +8,11 @@ and auto-computes a sensible tolerance from calibration σ when not explicitly s
 import logging
 import math
 import os
+import hashlib
 import yaml
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, MutableMapping, Tuple
+from typing import Any, Callable, Dict, List, Optional, MutableMapping, Tuple
 
 try:
     if os.environ.get("PYTEST_IS_RUNNING") == "1":
@@ -22,6 +23,11 @@ except ImportError:
 
 from picture_tool.utils.normalization import normalize_imgsz
 from picture_tool.position.yolo_position_validator import _resolve_sample_images
+from picture_tool.position.position_calibration import (
+    PositionCalibrationError,
+    collect_yolo_calibration_dataset,
+    write_calibration_manifest,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +43,31 @@ def _stdev(values: List[float]) -> float:
         return 0.0
     m = _mean(values)
     return math.sqrt(sum((v - m) ** 2 for v in values) / (len(values) - 1))
+
+
+def _median(values: List[float]) -> float:
+    if not values:
+        raise ValueError("Cannot compute a median from an empty list.")
+    ordered = sorted(float(value) for value in values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _quantile(values: List[float], quantile: float) -> float:
+    if not values:
+        raise ValueError("Cannot compute a quantile from an empty list.")
+    if not 0.0 <= quantile <= 1.0:
+        raise ValueError("quantile must be between 0 and 1.")
+    ordered = sorted(float(value) for value in values)
+    position = (len(ordered) - 1) * quantile
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _statistical_aggregate(boxes: List[List[int]]) -> Dict[str, Any]:
@@ -70,6 +101,39 @@ def _statistical_aggregate(boxes: List[List[int]]) -> Dict[str, Any]:
         "cy": round(mean_cy, 2),
         "sigma_cx": round(sigma_cx, 2),
         "sigma_cy": round(sigma_cy, 2),
+        "count": len(boxes),
+    }
+
+
+def _robust_statistical_aggregate(boxes: List[List[int]]) -> Dict[str, Any]:
+    """Use medians and P99 center distance to resist calibration outliers."""
+
+    centers_x = [(box[0] + box[2]) / 2.0 for box in boxes]
+    centers_y = [(box[1] + box[3]) / 2.0 for box in boxes]
+    widths = [float(box[2] - box[0]) for box in boxes]
+    heights = [float(box[3] - box[1]) for box in boxes]
+    median_cx = _median(centers_x)
+    median_cy = _median(centers_y)
+    median_width = _median(widths)
+    median_height = _median(heights)
+    distances = [
+        math.hypot(cx - median_cx, cy - median_cy)
+        for cx, cy in zip(centers_x, centers_y)
+    ]
+    mad_cx = _median([abs(value - median_cx) for value in centers_x])
+    mad_cy = _median([abs(value - median_cy) for value in centers_y])
+    return {
+        "x1": int(round(median_cx - median_width / 2.0)),
+        "y1": int(round(median_cy - median_height / 2.0)),
+        "x2": int(round(median_cx + median_width / 2.0)),
+        "y2": int(round(median_cy + median_height / 2.0)),
+        "cx": round(median_cx, 2),
+        "cy": round(median_cy, 2),
+        "sigma_cx": round(_stdev(centers_x), 2),
+        "sigma_cy": round(_stdev(centers_y), 2),
+        "mad_cx": round(mad_cx, 2),
+        "mad_cy": round(mad_cy, 2),
+        "p99_center_distance": round(_quantile(distances, 0.99), 2),
         "count": len(boxes),
     }
 
@@ -138,6 +202,7 @@ def _cluster_multi_instance(
     per_image_counts: List[int],
     logger: logging.Logger,
     class_name: str,
+    aggregate: Callable[[List[List[int]]], Dict[str, Any]] = _statistical_aggregate,
 ) -> Dict[str, Dict[str, Any]]:
     """Cluster detections for a class with multiple instances per image.
 
@@ -146,7 +211,7 @@ def _cluster_multi_instance(
     """
     k = _mode_count(per_image_counts)
     if k <= 1:
-        return {class_name: _statistical_aggregate(boxes)}
+        return {class_name: aggregate(boxes)}
 
     centers = [((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) for b in boxes]
     groups = _simple_kmeans(centers, k)
@@ -177,7 +242,7 @@ def _cluster_multi_instance(
     result: Dict[str, Dict[str, Any]] = {}
     for idx, (_, _, group_boxes) in enumerate(cluster_data):
         key = f"{class_name}#{idx}"
-        result[key] = _statistical_aggregate(group_boxes)
+        result[key] = aggregate(group_boxes)
 
     logger.info(
         "Class '%s': detected %d instances per image, "
@@ -186,6 +251,93 @@ def _cluster_multi_instance(
         list(result.keys()),
     )
     return result
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _collect_prediction_calibration(
+    *,
+    pos_cfg: MutableMapping[str, Any],
+    ycfg: MutableMapping[str, Any],
+    dataset_dir: Path,
+    run_dir: Path,
+    imgsz: int,
+    logger: logging.Logger,
+) -> tuple[
+    Dict[str, List[List[int]]],
+    Dict[str, List[int]],
+    Dict[str, Any],
+]:
+    """Legacy adapter retained for explicitly configured prediction baselines."""
+
+    if YOLO is None:
+        raise RuntimeError(
+            "Prediction-based position calibration requires ultralytics."
+        )
+    sample_dir = Path(
+        str(pos_cfg.get("sample_dir") or dataset_dir / "val" / "images")
+    ).resolve()
+    images = _resolve_sample_images(sample_dir)
+    weights_path = run_dir / "weights" / "best.pt"
+    if not weights_path.exists():
+        weights_path = run_dir / "weights" / "last.pt"
+    if not weights_path.exists():
+        raise FileNotFoundError(
+            f"Unable to locate prediction calibration weights under {run_dir}"
+        )
+    from picture_tool.position.yolo_position_validator import (
+        convert_results_to_detections,
+    )
+
+    device = str(pos_cfg.get("device") or ycfg.get("device") or "cpu")
+    conf = float(pos_cfg.get("conf") or 0.25)
+    model = YOLO(str(weights_path))
+    boxes_by_class: Dict[str, List[List[int]]] = {}
+    per_image_class_counts: Dict[str, List[int]] = {}
+    for image_path in images:
+        results = model(
+            str(image_path),
+            imgsz=imgsz,
+            device=device,
+            conf=conf,
+            verbose=False,
+        )
+        image_counts: Dict[str, int] = {}
+        for result in results:
+            for detection in convert_results_to_detections(result, imgsz):
+                class_name = str(detection.get("class"))
+                bbox = detection.get("bbox")
+                if not isinstance(bbox, list) or len(bbox) != 4:
+                    continue
+                values = [int(round(float(value))) for value in bbox]
+                boxes_by_class.setdefault(class_name, []).append(values)
+                image_counts[class_name] = image_counts.get(class_name, 0) + 1
+        for class_name, count in image_counts.items():
+            per_image_class_counts.setdefault(class_name, []).append(count)
+    if not boxes_by_class:
+        raise RuntimeError(
+            "Prediction-based position calibration produced no detections."
+        )
+    logger.warning(
+        "Using legacy prediction-based position calibration for %s images. "
+        "Human-verified labels are required for production promotion.",
+        len(images),
+    )
+    return (
+        boxes_by_class,
+        per_image_class_counts,
+        {
+            "source": "challenger_predictions_legacy",
+            "sample_count": len(images),
+            "weights_sha256": _sha256_file(weights_path),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -197,21 +349,11 @@ class PositionConfigGenerator:
     def generate(
         config: MutableMapping[str, Any], run_dir: Path, logger: logging.Logger
     ) -> Optional[Path]:
-        """Automatically derive a position config from latest training results.
+        """Derive a position config from human labels or legacy predictions.
 
-        Improvements over the legacy min/max approach:
-        - **Statistical aggregation**: expected boxes use mean center ± mean size
-        - **Multi-instance support**: same-class objects are clustered and emitted
-          as ``ClassName#0``, ``ClassName#1``, etc.
-        - **Auto-tolerance**: when tolerance is not explicitly set, it is computed
-          from the calibration σ (3σ rule → 99.7% of good samples pass).
+        Human-verified YOLO labels are the default source. The prediction source
+        remains available only for explicit legacy configurations.
         """
-        if YOLO is None:
-            logger.info(
-                "Skipping auto position config generation: ultralytics not available."
-            )
-            return None
-
         ycfg = config.get("yolo_training")
         if not isinstance(ycfg, MutableMapping):
             return None
@@ -237,129 +379,130 @@ class PositionConfigGenerator:
         imgsz_value = pos_cfg.get("imgsz") or ycfg.get("imgsz") or 640
         imgsz_norm = normalize_imgsz(imgsz_value) or [640, 640]
         imgsz_int = imgsz_norm[0]
+        dataset_dir = Path(str(ycfg.get("dataset_dir") or "data/split"))
+        calibration_source = str(
+            pos_cfg.get("calibration_source") or "labels"
+        ).strip().lower()
+        calibration_manifest_path: Path | None = None
+        calibration_summary: Dict[str, Any]
+        aggregate = _statistical_aggregate
 
-        dataset_dir_val = ycfg.get("dataset_dir")
-        if dataset_dir_val:
-            dataset_dir = Path(str(dataset_dir_val))
+        if calibration_source == "labels":
+            calibration_image_dir = Path(
+                str(
+                    pos_cfg.get("calibration_image_dir")
+                    or dataset_dir / "train" / "images"
+                )
+            ).resolve()
+            calibration_label_dir = Path(
+                str(
+                    pos_cfg.get("calibration_label_dir")
+                    or dataset_dir / "train" / "labels"
+                )
+            ).resolve()
+            class_names = ycfg.get("class_names")
+            if not isinstance(class_names, list) or not class_names:
+                raise PositionCalibrationError(
+                    "Human position calibration requires yolo_training.class_names."
+                )
+            calibration = collect_yolo_calibration_dataset(
+                image_dir=calibration_image_dir,
+                label_dir=calibration_label_dir,
+                class_names=class_names,
+                imgsz=imgsz_int,
+                require_all_classes=bool(
+                    pos_cfg.get("calibration_require_all_classes", True)
+                ),
+                exclude_augmented=bool(
+                    pos_cfg.get("calibration_exclude_augmented", True)
+                ),
+            )
+            minimum_samples = int(pos_cfg.get("calibration_min_samples", 3))
+            if len(calibration.samples) < minimum_samples:
+                raise PositionCalibrationError(
+                    "Insufficient complete position calibration samples: "
+                    f"required={minimum_samples}, actual={len(calibration.samples)}"
+                )
+            boxes_by_class = {
+                name: [list(box) for box in boxes]
+                for name, boxes in calibration.boxes_by_class.items()
+            }
+            per_image_class_counts = {
+                name: list(counts)
+                for name, counts in calibration.per_image_class_counts.items()
+            }
+            calibration_manifest_path = (
+                run_dir / "position_calibration_manifest.json"
+            ).resolve()
+            manifest_payload = calibration.manifest_payload(
+                product=str(product),
+                area=str(area),
+                imgsz=imgsz_int,
+            )
+            write_calibration_manifest(
+                calibration_manifest_path,
+                manifest_payload,
+            )
+            calibration_summary = {
+                "source": "human_verified_yolo_labels",
+                "sample_count": len(calibration.samples),
+                "dataset_sha256": calibration.dataset_sha256,
+                "manifest_sha256": _sha256_file(calibration_manifest_path),
+            }
+            aggregate = _robust_statistical_aggregate
+        elif calibration_source == "predictions":
+            (
+                boxes_by_class,
+                per_image_class_counts,
+                calibration_summary,
+            ) = _collect_prediction_calibration(
+                pos_cfg=pos_cfg,
+                ycfg=ycfg,
+                dataset_dir=dataset_dir,
+                run_dir=run_dir,
+                imgsz=imgsz_int,
+                logger=logger,
+            )
         else:
-            dataset_dir = Path("data/split")
-
-        sample_dir_value = pos_cfg.get("sample_dir") or (dataset_dir / "val" / "images")
-        sample_dir = Path(str(sample_dir_value)).resolve()
-
-        ImageSuffixes = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-
-        try:
-            images = _resolve_sample_images(sample_dir, ImageSuffixes)
-        except (FileNotFoundError, OSError) as exc:
-            logger.warning("Auto position config generation skipped: %s", exc)
-            return None
-
-        weights_path = run_dir / "weights" / "best.pt"
-        if not weights_path.exists():
-            weights_path = run_dir / "weights" / "last.pt"
-        if not weights_path.exists():
-            logger.warning(
-                "Auto position config generation skipped: "
-                "unable to locate weights under %s",
-                run_dir,
+            raise ValueError(
+                "position_validation.calibration_source must be "
+                "'labels' or 'predictions'."
             )
-            return None
-
-        try:
-            from picture_tool.position.yolo_position_validator import (
-                convert_results_to_detections,
-            )
-        except (ImportError, AttributeError) as exc:  # pragma: no cover
-            logger.warning("Auto position config generation skipped: %s", exc)
-            return None
-
-        device_value = pos_cfg.get("device") or ycfg.get("device") or "cpu"
-        conf_value = pos_cfg.get("conf")
-        if conf_value is None:
-            conf_value = 0.25
-        try:
-            model = YOLO(str(weights_path))
-        except (FileNotFoundError, RuntimeError, OSError) as exc:  # pragma: no cover
-            logger.warning(
-                "Auto position config generation skipped: "
-                "failed to load weights (%s)",
-                exc,
-            )
-            return None
-
-        # ------------------------------------------------------------------
-        # Collect detections — track per-image counts for multi-instance
-        # ------------------------------------------------------------------
-        boxes_by_class: Dict[str, List[List[int]]] = {}
-        per_image_class_counts: Dict[str, List[int]] = {}
-
-        for img_path in images:
-            try:
-                results = model(
-                    str(img_path),
-                    imgsz=imgsz_norm[0],
-                    device=str(device_value),
-                    conf=float(conf_value),
-                    verbose=False,
-                )
-            except (RuntimeError, OSError, AttributeError) as exc:  # pragma: no cover
-                logger.warning(
-                    "Auto position config: inference failed for %s (%s)",
-                    img_path.name, exc,
-                )
-                continue
-
-            # Count detections per class in this image
-            image_class_counter: Dict[str, int] = {}
-
-            for res in results:
-                detections = convert_results_to_detections(res, imgsz_int)
-                for det in detections:
-                    cls = det.get("class")
-                    bbox = det.get("bbox")
-                    if not isinstance(cls, str):
-                        cls = str(cls)
-                    if not isinstance(bbox, list) or len(bbox) != 4:
-                        continue
-                    try:
-                        box_vals = [int(round(float(v))) for v in bbox]
-                    except (TypeError, ValueError):
-                        continue
-                    boxes_by_class.setdefault(cls, []).append(box_vals)
-                    image_class_counter[cls] = image_class_counter.get(cls, 0) + 1
-
-            for cls, count in image_class_counter.items():
-                per_image_class_counts.setdefault(cls, []).append(count)
-
-        if not boxes_by_class:
-            logger.warning(
-                "Auto position config generation skipped: "
-                "no detections collected from sample images."
-            )
-            return None
 
         # ------------------------------------------------------------------
         # Build expected_boxes with statistical aggregation + clustering
         # ------------------------------------------------------------------
         expected_boxes: Dict[str, Dict[str, Any]] = {}
         all_sigmas: List[float] = []
+        all_p99_distances: List[float] = []
 
         for cls, bxs in boxes_by_class.items():
             counts = per_image_class_counts.get(cls, [1])
             k = _mode_count(counts)
 
             if k > 1 and len(bxs) >= k:
-                clustered = _cluster_multi_instance(bxs, counts, logger, cls)
+                clustered = _cluster_multi_instance(
+                    bxs,
+                    counts,
+                    logger,
+                    cls,
+                    aggregate=aggregate,
+                )
                 for key, stats in clustered.items():
                     expected_boxes[key] = stats
                     all_sigmas.append(stats["sigma_cx"])
                     all_sigmas.append(stats["sigma_cy"])
+                    if "p99_center_distance" in stats:
+                        all_p99_distances.append(
+                            float(stats["p99_center_distance"])
+                        )
             else:
-                stats = _statistical_aggregate(bxs)
+                stats = aggregate(bxs)
                 expected_boxes[cls] = stats
                 all_sigmas.append(stats["sigma_cx"])
                 all_sigmas.append(stats["sigma_cy"])
+                if "p99_center_distance" in stats:
+                    all_p99_distances.append(float(stats["p99_center_distance"]))
 
         if not expected_boxes:
             logger.warning(
@@ -371,28 +514,57 @@ class PositionConfigGenerator:
         # ------------------------------------------------------------------
         # Resolve tolerance: auto-compute from σ if not explicitly set
         # ------------------------------------------------------------------
+        mode = str(pos_cfg.get("mode") or "center").strip().lower()
         explicit_tolerance = pos_cfg.get("tolerance_override")
+        configured_unit = str(
+            pos_cfg.get("tolerance_unit") or "percent"
+        ).lower()
         if explicit_tolerance is not None:
             tolerance_value = float(explicit_tolerance)
+            tolerance_unit = configured_unit
         elif "tolerance" in pos_cfg and float(pos_cfg.get("tolerance", 0.0)) > 0:
             tolerance_value = float(pos_cfg["tolerance"])
-        else:
-            # Auto-compute: 3σ rule with minimum floor of 5px
-            max_sigma = max(all_sigmas) if all_sigmas else 0.0
-            auto_tolerance_px = max(max_sigma * 3.0, 5.0)
-            tolerance_value = round((auto_tolerance_px / imgsz_int) * 100.0, 2)
-            logger.info(
-                "Auto-computed tolerance: %.2f%% (%.1fpx) from max σ=%.2fpx "
-                "(3σ rule, min 5px floor, imgsz=%d)",
-                tolerance_value, auto_tolerance_px, max_sigma, imgsz_int,
+            tolerance_unit = configured_unit
+        elif mode == "iou":
+            raise ValueError(
+                "IoU position mode requires an explicit positive tolerance "
+                "(minimum IoU as 0-1 or percent)."
             )
+        else:
+            max_sigma = max(all_sigmas) if all_sigmas else 0.0
+            robust_distance = (
+                max(all_p99_distances) if all_p99_distances else max_sigma * 3.0
+            )
+            auto_tolerance_px = max(robust_distance, 5.0)
+            tolerance_value = round(auto_tolerance_px, 2)
+            tolerance_unit = "pixel"
+            logger.info(
+                "Auto-computed position tolerance: %.2fpx "
+                "(P99/3σ, min 5px floor, imgsz=%d)",
+                tolerance_value,
+                imgsz_int,
+            )
+        if not math.isfinite(tolerance_value) or tolerance_value <= 0.0:
+            raise ValueError("Position tolerance must be a finite positive number.")
+        if mode == "iou":
+            normalized_iou = (
+                tolerance_value / 100.0
+                if tolerance_value > 1.0
+                else tolerance_value
+            )
+            if normalized_iou > 1.0:
+                raise ValueError(
+                    "IoU position tolerance must be between 0-1 or 0-100%."
+                )
 
         area_block: Dict[str, Any] = {
             "enabled": True,
-            "mode": str(pos_cfg.get("mode", "center")),
+            "mode": mode,
             "tolerance": float(tolerance_value),
+            "tolerance_unit": tolerance_unit,
             "expected_boxes": expected_boxes,
             "imgsz": imgsz_norm[0],
+            "calibration": calibration_summary,
         }
 
         position_config = {str(product): {str(area): area_block}}
@@ -410,11 +582,11 @@ class PositionConfigGenerator:
         if previous_path and previous_path != str(out_path):
             pos_cfg["previous_config_path"] = previous_path
         pos_cfg["config_path"] = str(out_path)
+        if calibration_manifest_path is not None:
+            pos_cfg["calibration_manifest_path"] = str(
+                calibration_manifest_path
+            )
         if pos_cfg.get("config"):
             pos_cfg.pop("config", None)
-        if not pos_cfg.get("sample_dir"):
-            pos_cfg["sample_dir"] = str(sample_dir)
-        if not pos_cfg.get("weights"):
-            pos_cfg["weights"] = str(weights_path)
         logger.info("Auto-generated position config at %s", out_path)
         return out_path

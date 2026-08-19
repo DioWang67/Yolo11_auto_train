@@ -1,5 +1,12 @@
 # picture-tool
 
+完整推論回訓與安全部署流程請見 [docs/SEAMLESS_WORKFLOW.md](docs/SEAMLESS_WORKFLOW.md)。
+
+現場日常操作請見
+[`yolo11_inference/docs/manuals/OPERATOR_MANUAL.md`](../yolo11_inference/docs/manuals/OPERATOR_MANUAL.md)；
+工程設定、位置 Gate、資料庫與部署請見
+[`yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md`](../yolo11_inference/docs/manuals/ENGINEERING_MANUAL.md)。
+
 影像處理與 YOLO 自動化訓練/驗證工具，提供 CLI 與 PyQt GUI。涵蓋：格式轉換、資料增強、資料分割、資料檢查、YOLO 訓練/評估、批次推論、顏色檢測、位置驗證、報告產生等。
 
 ## 功能總覽（任務 key）
@@ -167,7 +174,7 @@ picture-tool-color-verify \
     device: auto             # 選填
     tolerance_override: null # 選填，百分比
 ```
-> Note: class names must match the model; with `auto_generate: true`, training will infer expected_boxes from sample images, save to `runs/detect/<name>/auto_position_config.yaml`, and detection_config export will include that position config.
+> Note: class names must match the model; with `auto_generate: true`, training derives expected boxes from human-verified YOLO labels, saves `runs/detect/<name>/auto_position_config.yaml`, and includes the gated position config in the exported detection config. See [位置檢測補訓與部署](docs/POSITION_RETRAINING_DEPLOYMENT.md).
 2. 確認 `yolo_training.project/name` 指向已有訓練結果（預設 `runs/detect/train`）。
 3. 執行：GUI 勾選「Position Validation」，或 CLI `--tasks position_validation`。
 4. 輸出：`runs/detect/<name>/position_validation/position_validation.json`（或自訂 `output_dir`）。
@@ -183,6 +190,13 @@ picture-tool-color-verify \
 
 ```bash
 picture-tool-pipeline --config configs/Cable1.yaml --tasks deploy
+```
+
+外部／遠端訓練的 ONNX 不可單獨複製進產線。請連同來源 PT 與 export contract 執行成對驗證部署：
+
+```bash
+picture-tool-runtime-pair --weights best.onnx --training-weights best.pt \
+  --contract runtime_export_manifest.json --product Cable1 --area A --deploy
 ```
 
 完整的訓練→推論整合流程請參考 **[docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)**。

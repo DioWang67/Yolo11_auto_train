@@ -5,11 +5,65 @@ Coverage target: 0% → 70%+
 Note: Using monkeypatch instead of mocker for compatibility.
 """
 
+import json
 import logging
 from unittest.mock import MagicMock
 import pytest
 
-from picture_tool.utils.onnx_exporter import OnnxExporter
+from picture_tool.utils.onnx_exporter import OnnxExporter, _write_export_contract
+
+
+def test_export_contract_records_exact_runtime_training_lineage(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    weights = run_dir / "weights"
+    weights.mkdir(parents=True)
+    training_weight = weights / "last.pt"
+    runtime = weights / "last.onnx"
+    training_weight.write_bytes(b"training")
+    runtime.write_bytes(b"runtime")
+
+    contract_path = _write_export_contract(
+        run_dir,
+        runtime_path=runtime,
+        training_weight_path=training_weight,
+        runtime_format="onnx",
+    )
+    payload = json.loads(contract_path.read_text(encoding="utf-8"))
+
+    assert payload["runtime_file"] == "weights/last.onnx"
+    assert payload["training_weight_file"] == "weights/last.pt"
+    assert len(payload["runtime_sha256"]) == 64
+    assert len(payload["training_weight_sha256"]) == 64
+
+
+def test_ensure_reuses_current_export_contract(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "run"
+    weights = run_dir / "weights"
+    weights.mkdir(parents=True)
+    training_weight = weights / "best.pt"
+    runtime = weights / "best.onnx"
+    training_weight.write_bytes(b"training")
+    runtime.write_bytes(b"runtime")
+    _write_export_contract(
+        run_dir,
+        runtime_path=runtime,
+        training_weight_path=training_weight,
+        runtime_format="onnx",
+    )
+    config = {
+        "yolo_training": {
+            "export_onnx": {"enabled": True, "weights_name": "best.pt"}
+        }
+    }
+    monkeypatch.setattr(
+        OnnxExporter,
+        "export",
+        staticmethod(lambda *_args, **_kwargs: pytest.fail("unexpected re-export")),
+    )
+
+    selected = OnnxExporter.ensure(config, run_dir, logging.getLogger("test"))
+
+    assert selected == runtime.resolve()
 
 
 class TestOnnxExporterExport:
@@ -409,7 +463,8 @@ class TestOnnxExporterExport:
             raise RuntimeError("Validation failed")
 
         monkeypatch.setattr(
-            "picture_tool.utils.onnx_validation.validate_onnx_structure", fail_validation
+            "picture_tool.utils.onnx_validation.validate_onnx_structure",
+            fail_validation,
         )
 
         logger = logging.getLogger("test")

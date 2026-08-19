@@ -63,7 +63,8 @@ def _load_metrics_csv(path: Path) -> Dict[str, Any]:
     try:
         import csv
 
-        rows = list(csv.DictReader(path.open("r", encoding="utf-8")))
+        with path.open("r", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
         return rows[-1] if rows else {}
     except (FileNotFoundError, ValueError, KeyError, OSError, TypeError):
         return {}
