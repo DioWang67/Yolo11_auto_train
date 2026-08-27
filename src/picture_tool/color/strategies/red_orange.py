@@ -1,7 +1,11 @@
 import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
-from picture_tool.color.strategies.base import ColorRange
+from picture_tool.color.strategies.base import (
+    ColorRange,
+    safe_ratio,
+    weighted_score,
+)
 from picture_tool.color.strategies.generic import GenericStrategy
 
 ORANGE_RED_TIE_MARGIN = 0.15
@@ -40,7 +44,7 @@ class RedOrangeStrategy(GenericStrategy):
                 & (v_vals >= max(color_range.hsv_min[2], 100))
             )
             
-        hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
+        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
         debug["hsv_ratio"] = hsv_ratio
 
         # Reuse generic LAB and Hue Similarity
@@ -48,8 +52,10 @@ class RedOrangeStrategy(GenericStrategy):
         debug.update(generic_debug)
         debug["hsv_ratio"] = hsv_ratio
 
-        # LAB Chroma similarity is specific to O/R
-        lab_chroma_similarity = 1.0
+        # LAB Chroma similarity is specific to O/R. None when the baseline
+        # carries no Lab statistic, so the term is dropped instead of scoring a
+        # perfect match against a baseline that does not exist.
+        lab_chroma_similarity = None
         if color_range.lab_mean is not None:
             mean_a = float(np.mean(lab_vals[:, 1]))
             mean_b = float(np.mean(lab_vals[:, 2]))
@@ -65,11 +71,14 @@ class RedOrangeStrategy(GenericStrategy):
             debug["lab_chroma_similarity"] = lab_chroma_similarity
 
         weights = {"hsv": 0.35, "lab": 0.25, "hue_sim": 0.25, "lab_chroma": 0.15}
-        final_score = (
-            hsv_ratio * weights["hsv"]
-            + debug.get("lab_ratio", 0.0) * weights["lab"]
-            + debug.get("hue_similarity", 1.0) * weights["hue_sim"]
-            + lab_chroma_similarity * weights["lab_chroma"]
+        final_score = weighted_score(
+            {
+                "hsv": hsv_ratio,
+                "lab": debug.get("lab_ratio", 0.0),
+                "hue_sim": debug.get("hue_similarity"),
+                "lab_chroma": lab_chroma_similarity,
+            },
+            weights,
         )
         debug["final_score"] = float(final_score)
         return float(final_score), debug
@@ -96,6 +105,7 @@ class RedOrangeStrategy(GenericStrategy):
 
         flat_hsv = center_hsv.reshape(-1, 3)
         flat_lab = center_lab.reshape(-1, 3)
+        pair_score = max(ratios["Orange"], ratios["Red"])
         
         # Constant from original code
         DEFAULT_SAT_THRESHOLD = 20.0
@@ -133,19 +143,20 @@ class RedOrangeStrategy(GenericStrategy):
             else "Unclear"
         )
 
+        # The tie-breaker decides *which* of Orange and Red the pair is; it
+        # measures nothing new about how strongly the region matches. The
+        # multipliers below used to be 1.3 / 1.1, which manufactured confidence
+        # out of a disambiguation step and let the winner overtake an unrelated
+        # color that had legitimately scored higher -- the Black-reported-as-
+        # Orange failure. The pair's own best score transfers to the winner and
+        # nothing is created.
         if hue_vote == lab_vote and hue_vote != "Unclear":
             predicted = hue_vote
-            confidence = max(ratios["Orange"], ratios["Red"]) * 1.3
         elif hue_vote != "Unclear":
             predicted = hue_vote
-            confidence = ratios["Orange"] if hue_vote == "Orange" else ratios["Red"]
-            confidence *= 1.1
         elif lab_vote != "Unclear":
             predicted = lab_vote
-            confidence = ratios["Orange"] if lab_vote == "Orange" else ratios["Red"]
-            confidence *= 1.1
         else:
             predicted = "Orange" if ratios["Orange"] > ratios["Red"] else "Red"
-            confidence = max(ratios["Orange"], ratios["Red"]) * 0.9
 
-        return predicted, float(confidence)
+        return predicted, float(pair_score)

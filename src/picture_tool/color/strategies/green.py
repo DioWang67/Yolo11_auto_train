@@ -1,7 +1,11 @@
 import numpy as np
 from typing import Any, Dict, Optional, Tuple
 
-from picture_tool.color.strategies.base import ColorRange
+from picture_tool.color.strategies.base import (
+    ColorRange,
+    safe_ratio,
+    weighted_score,
+)
 from picture_tool.color.strategies.generic import GenericStrategy
 
 GREEN_DOMINANCE_RATIO = 0.3
@@ -33,7 +37,7 @@ class GreenStrategy(GenericStrategy):
             & (v_vals >= 30)
             & (v_vals <= 100)
         )
-        hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
+        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
         debug["hsv_ratio"] = hsv_ratio
 
         # Delegate matching to generic
@@ -43,10 +47,13 @@ class GreenStrategy(GenericStrategy):
 
         # Green weights
         weights = {"hsv": 0.6, "lab": 0.2, "hue_sim": 0.2}
-        final_score = (
-            hsv_ratio * weights["hsv"]
-            + debug.get("lab_ratio", 0.0) * weights["lab"]
-            + debug.get("hue_similarity", 1.0) * weights["hue_sim"]
+        final_score = weighted_score(
+            {
+                "hsv": hsv_ratio,
+                "lab": debug.get("lab_ratio", 0.0),
+                "hue_sim": debug.get("hue_similarity"),
+            },
+            weights,
         )
         debug["final_score"] = float(final_score)
         return float(final_score), debug
@@ -72,7 +79,7 @@ class GreenStrategy(GenericStrategy):
             return None
 
         green_pixels = np.sum((h_vals >= 70) & (h_vals <= 100))
-        green_ratio = green_pixels / total_pixels
+        green_ratio = safe_ratio(int(green_pixels), int(total_pixels))
 
         if green_ratio > GREEN_DOMINANCE_RATIO:
             return "Green", float(green_ratio)

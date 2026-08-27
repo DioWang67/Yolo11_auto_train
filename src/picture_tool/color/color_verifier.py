@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Iterable, List, MutableMapping, Optional
 import cv2
 import numpy as np
 
-from picture_tool.color.strategies.base import ColorRange
+from picture_tool.color.strategies.base import ColorRange, center_crop
 from picture_tool.color.strategies.registry import ColorStrategyRegistry
 
 SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
@@ -110,6 +110,9 @@ class DecisionContext:
 
 DecisionRule = Callable[[str, float, "DecisionContext"], Optional[Tuple[str, float]]]
 
+#: Fewest saturated center pixels that can support a color verdict.
+MIN_VALID_PIXELS = 50
+
 
 # ============= 新增: 核心改進函數 =============
 
@@ -141,11 +144,9 @@ def _evaluate_image_improved(
             masks[color_name] = np.ones((h, w), dtype=bool)
             return ratios, masks, debug_info
 
-    # 2. 取中心區域做進一步分析
-    margin_y = int(h * 0.15)
-    margin_x = int(w * 0.15)
-    center_hsv = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
-    center_lab = lab_img[margin_y : h - margin_y, margin_x : w - margin_x]
+    # 2. 取中心區域做進一步分析（與 _apply_color_rules 使用同一種裁切）
+    center_hsv = center_crop(hsv_img)
+    center_lab = center_crop(lab_img)
 
     # 過濾低飽和度
     # 常數與比例由原 color_verifier 提供或策略內部處理
@@ -154,11 +155,14 @@ def _evaluate_image_improved(
     valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
     valid_lab = center_lab[sat_mask].reshape(-1, 3)
 
-    if len(valid_hsv) < 50:
-        # 太少有效像素，可能是黑色或其他低光
+    if len(valid_hsv) < MIN_VALID_PIXELS:
+        # 有效像素太少，這張圖沒有可據以判色的證據。
+        # 原本在這裡直接給 Black 0.7 —— 一個剛好高過 Black 門檻(0.45)的
+        # 捏造分數，套用在完全沒有量到顏色的區域上，於是曝光不足或洗白的
+        # 影像會「通過」顏色檢查。沒有證據的判定必須 fail closed。
+        debug_info["insufficient_pixels"] = True
+        debug_info["valid_pixel_count"] = int(len(valid_hsv))
         ratios = {color: 0.0 for color in color_ranges.keys()}
-        if "Black" in ratios:
-            ratios["Black"] = 0.7
         masks = {color: np.zeros((h, w), dtype=bool) for color in color_ranges.keys()}
         return ratios, masks, debug_info
 
@@ -207,10 +211,13 @@ def _apply_color_rules(
     context: DecisionContext,
 ) -> Tuple[str, float]:
     """套用後期校正邏輯 (使用策略模式)"""
-    # 決定何處是中心區域常數
-    CENTER_MARGIN_RATIO = 0.15
-    center_hsv = _extract_center_pixels(context.hsv_img, CENTER_MARGIN_RATIO)
-    center_lab = _extract_center_pixels(context.lab_img, CENTER_MARGIN_RATIO)
+    if context.debug_info.get("insufficient_pixels"):
+        # 沒有證據就沒有東西可以校正。所有 ratio 都是 0 時，橘/紅的
+        # "差距 < margin" 條件會恆成立，決勝邏輯會憑空產生一個預測。
+        return predicted_color, confidence
+
+    center_hsv = center_crop(context.hsv_img)
+    center_lab = center_crop(context.lab_img)
     
     # 調用註冊的所有策略嘗試進行後校正 (例如橘紅 tiebreak, 綠色校正)
     for strategy in ColorStrategyRegistry.all_strategies().values():

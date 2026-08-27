@@ -1,7 +1,14 @@
 import numpy as np
 from typing import Any, Dict, Tuple
 
-from picture_tool.color.strategies.base import ColorStrategy, ColorRange
+from picture_tool.color.strategies.base import (
+    ColorRange,
+    ColorStrategy,
+    circular_hue_mean,
+    hue_in_range,
+    safe_ratio,
+    weighted_score,
+)
 
 
 def circular_hue_distance(h1: float, h2: float) -> float:
@@ -31,15 +38,14 @@ class GenericStrategy(ColorStrategy):
         v_vals = hsv_vals[:, 2]
 
         h_mask = (
-            (h_vals >= color_range.hsv_min[0])
-            & (h_vals <= color_range.hsv_max[0])
+            hue_in_range(h_vals, color_range.hsv_min[0], color_range.hsv_max[0])
             & (s_vals >= color_range.hsv_min[1])
             & (s_vals <= color_range.hsv_max[1])
             & (v_vals >= color_range.hsv_min[2])
             & (v_vals <= color_range.hsv_max[2])
         )
 
-        hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
+        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
         debug["hsv_ratio"] = hsv_ratio
 
         lab_mask = (
@@ -50,13 +56,15 @@ class GenericStrategy(ColorStrategy):
             & (lab_vals[:, 2] >= color_range.lab_min[2])
             & (lab_vals[:, 2] <= color_range.lab_max[2])
         )
-        lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
+        lab_ratio = safe_ratio(np.count_nonzero(lab_mask), len(lab_vals))
         debug["lab_ratio"] = lab_ratio
 
-        mean_h = float(np.mean(h_vals))
+        mean_h = circular_hue_mean(h_vals)
         debug["mean_hue"] = mean_h
 
-        hue_similarity = 1.0
+        # Left as None when the baseline carries no hue statistic, so the term
+        # is dropped rather than awarded a perfect score it did not earn.
+        hue_similarity = None
         if color_range.hsv_mean is not None:
             expected_h = float(color_range.hsv_mean[0])
             hue_dist = circular_hue_distance(mean_h, expected_h)
@@ -66,10 +74,9 @@ class GenericStrategy(ColorStrategy):
 
         weights = {"hsv": 0.5, "lab": 0.3, "hue_sim": 0.2, "lab_chroma": 0.0}
 
-        final_score = (
-            hsv_ratio * weights["hsv"]
-            + lab_ratio * weights["lab"]
-            + hue_similarity * weights["hue_sim"]
+        final_score = weighted_score(
+            {"hsv": hsv_ratio, "lab": lab_ratio, "hue_sim": hue_similarity},
+            weights,
         )
 
         debug["final_score"] = float(final_score)
@@ -83,8 +90,7 @@ class GenericStrategy(ColorStrategy):
         global_sat_mask: np.ndarray,
     ) -> np.ndarray:
         hsv_cond = (
-            (hsv_img[:, :, 0] >= color_range.hsv_min[0])
-            & (hsv_img[:, :, 0] <= color_range.hsv_max[0])
+            hue_in_range(hsv_img[:, :, 0], color_range.hsv_min[0], color_range.hsv_max[0])
             & (hsv_img[:, :, 1] >= color_range.hsv_min[1])
             & (hsv_img[:, :, 1] <= color_range.hsv_max[1])
             & (hsv_img[:, :, 2] >= color_range.hsv_min[2])

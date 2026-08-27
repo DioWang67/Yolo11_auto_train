@@ -1,12 +1,24 @@
 import numpy as np
 from typing import Any, Dict, Tuple
 
-from picture_tool.color.strategies.base import ColorRange
+from picture_tool.color.strategies.base import (
+    ColorRange,
+    center_crop,
+    safe_ratio,
+    weighted_score,
+)
 from picture_tool.color.strategies.generic import GenericStrategy
 
 BLACK_S_THRESHOLD = 50.0
 BLACK_V_THRESHOLD = 80.0
 BLACK_MIN_COVERAGE = 0.6
+
+
+def _rule_margin(value: float, limit: float) -> float:
+    """How far below ``limit`` a measurement sits, on a 0..1 scale."""
+    if limit <= 0:
+        return 0.0
+    return float(min(1.0, max(0.0, 1.0 - value / limit)))
 
 from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
 
@@ -29,7 +41,7 @@ class BlackStrategy(GenericStrategy):
         v_vals = hsv_vals[:, 2]
 
         h_mask = (s_vals < BLACK_S_THRESHOLD) & (v_vals < BLACK_V_THRESHOLD)
-        hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
+        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
         debug["hsv_ratio"] = hsv_ratio
 
         # Lab match
@@ -41,17 +53,18 @@ class BlackStrategy(GenericStrategy):
             & (lab_vals[:, 2] >= color_range.lab_min[2])
             & (lab_vals[:, 2] <= color_range.lab_max[2])
         )
-        lab_ratio = float(np.count_nonzero(lab_mask)) / len(lab_vals)
+        lab_ratio = safe_ratio(np.count_nonzero(lab_mask), len(lab_vals))
         debug["lab_ratio"] = lab_ratio
 
+        # Black's hue really is undefined, so the similarity term is dropped
+        # and the remaining weights renormalized. Passing a hard-coded 1.0
+        # instead did not ignore the term -- it awarded a perfect score for it,
+        # handing Black a free 0.2 on every region, including regions with no
+        # black pixels at all.
         weights = {"hsv": 0.5, "lab": 0.3, "hue_sim": 0.2, "lab_chroma": 0.0}
-        
-        # Black ignores hue distance similarity since its hue is undefined
-        hue_similarity = 1.0  
-        final_score = (
-            hsv_ratio * weights["hsv"]
-            + lab_ratio * weights["lab"]
-            + hue_similarity * weights["hue_sim"]
+        final_score = weighted_score(
+            {"hsv": hsv_ratio, "lab": lab_ratio, "hue_sim": None},
+            weights,
         )
         debug["final_score"] = float(final_score)
         return float(final_score), debug
@@ -63,13 +76,9 @@ class BlackStrategy(GenericStrategy):
         color_range: ColorRange
     ) -> Tuple[bool, float]:
         """Detects if it's black early-on for short-circuiting."""
-        h, w = hsv_img.shape[:2]
-        margin_y = int(h * 0.15)
-        margin_x = int(w * 0.15)
-        center_region = hsv_img[margin_y : h - margin_y, margin_x : w - margin_x]
-
+        center_region = center_crop(hsv_img)
         if center_region.size == 0:
-            center_region = hsv_img
+            return False, 0.0
 
         mean_s = float(np.mean(center_region[:, :, 1]))
         mean_v = float(np.mean(center_region[:, :, 2]))
@@ -79,13 +88,29 @@ class BlackStrategy(GenericStrategy):
         black_mask = (center_region[:, :, 1] < BLACK_S_THRESHOLD) & (
             center_region[:, :, 2] < BLACK_V_THRESHOLD
         )
-        black_coverage = float(np.count_nonzero(black_mask)) / black_mask.size
+        black_coverage = safe_ratio(np.count_nonzero(black_mask), black_mask.size)
 
-        is_black = (
-            (mean_s < BLACK_S_THRESHOLD and mean_v < BLACK_V_THRESHOLD)
-            or (median_s < BLACK_S_THRESHOLD * 0.8 and median_v < BLACK_V_THRESHOLD * 0.8)
-            or (black_coverage > BLACK_MIN_COVERAGE)
-        )
+        # Confidence has to describe the rule that actually fired. Reporting
+        # coverage unconditionally meant a decision reached by the mean or the
+        # median rule was scored by an unrelated number, which could then fail
+        # black's own threshold -- "it is black, and black is NG" at once.
+        evidence = [0.0]
+        if mean_s < BLACK_S_THRESHOLD and mean_v < BLACK_V_THRESHOLD:
+            evidence.append(
+                min(
+                    _rule_margin(mean_s, BLACK_S_THRESHOLD),
+                    _rule_margin(mean_v, BLACK_V_THRESHOLD),
+                )
+            )
+        if median_s < BLACK_S_THRESHOLD * 0.8 and median_v < BLACK_V_THRESHOLD * 0.8:
+            evidence.append(
+                min(
+                    _rule_margin(median_s, BLACK_S_THRESHOLD * 0.8),
+                    _rule_margin(median_v, BLACK_V_THRESHOLD * 0.8),
+                )
+            )
+        if black_coverage > BLACK_MIN_COVERAGE:
+            evidence.append(black_coverage)
 
-        confidence = black_coverage if is_black else 0.0
-        return is_black, confidence
+        is_black = len(evidence) > 1
+        return is_black, (max(evidence) if is_black else 0.0)

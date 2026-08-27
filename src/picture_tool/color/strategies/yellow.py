@@ -1,7 +1,12 @@
 import numpy as np
 from typing import Any, Dict, Tuple
 
-from picture_tool.color.strategies.base import ColorRange
+from picture_tool.color.strategies.base import (
+    ColorRange,
+    center_crop,
+    safe_ratio,
+    weighted_score,
+)
 from picture_tool.color.strategies.generic import GenericStrategy
 
 YELLOW_H_RANGE = (20, 35)
@@ -29,7 +34,7 @@ class YellowStrategy(GenericStrategy):
         v_vals = hsv_vals[:, 2]
 
         h_mask = (h_vals >= YELLOW_H_RANGE[0]) & (h_vals <= YELLOW_H_RANGE[1]) & (s_vals >= YELLOW_S_MIN) & (v_vals >= YELLOW_V_MIN)
-        hsv_ratio = float(np.count_nonzero(h_mask)) / len(hsv_vals)
+        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
         debug["hsv_ratio"] = hsv_ratio
 
         # Delegate the rest to generic (LAB matching, hue similarity)
@@ -37,10 +42,13 @@ class YellowStrategy(GenericStrategy):
         
         # Yellow weights favor HSV heavily
         weights = {"hsv": 0.5, "lab": 0.2, "hue_sim": 0.3}
-        final_score = (
-            hsv_ratio * weights["hsv"]
-            + generic_debug.get("lab_ratio", 0.0) * weights["lab"]
-            + generic_debug.get("hue_similarity", 1.0) * weights["hue_sim"]
+        final_score = weighted_score(
+            {
+                "hsv": hsv_ratio,
+                "lab": generic_debug.get("lab_ratio", 0.0),
+                "hue_sim": generic_debug.get("hue_similarity"),
+            },
+            weights,
         )
         
         debug.update(generic_debug)
@@ -55,12 +63,9 @@ class YellowStrategy(GenericStrategy):
         color_range: ColorRange
     ) -> Tuple[bool, float]:
         """Rapidly detects yellow majorities."""
-        h, w = hsv_img.shape[:2]
-        margin = int(min(h, w) * 0.15)
-        center = hsv_img[margin : h - margin, margin : w - margin]
-
+        center = center_crop(hsv_img)
         if center.size == 0:
-            center = hsv_img
+            return False, 0.0
 
         h_vals = center[:, :, 0]
         s_vals = center[:, :, 1]
@@ -78,11 +83,13 @@ class YellowStrategy(GenericStrategy):
         )
 
         yellow_mask = yellow_mask_primary | yellow_mask_secondary
-        yellow_ratio = float(np.count_nonzero(yellow_mask)) / yellow_mask.size
+        yellow_ratio = safe_ratio(np.count_nonzero(yellow_mask), yellow_mask.size)
 
         # Rule from original code: compare with orange-like pixels
         orange_like_mask = (h_vals < 20) & (h_vals > 5) & (s_vals > 100)
-        orange_ratio = float(np.count_nonzero(orange_like_mask)) / orange_like_mask.size
+        orange_ratio = safe_ratio(
+            np.count_nonzero(orange_like_mask), orange_like_mask.size
+        )
 
         is_yellow = (yellow_ratio > 0.25) and (yellow_ratio > orange_ratio * 1.3)
         return is_yellow, yellow_ratio

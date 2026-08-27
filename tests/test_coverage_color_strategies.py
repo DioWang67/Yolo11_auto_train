@@ -183,3 +183,128 @@ def test_registry_registration_initialization_fuzzy_lookup_and_missing_fallback(
     assert imported == ["picture_tool.color.strategies.custom"]
     ColorStrategyRegistry.initialize()
     assert imported == ["picture_tool.color.strategies.custom"]
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the color-detection review
+#
+# These mirror the inference repository's
+# tests/test_stats_color_checker_unit.py. The two code bases gate the same
+# product, so a rule that holds there has to hold here too.
+# ---------------------------------------------------------------------------
+
+
+def test_orange_red_tiebreak_cannot_overtake_an_unrelated_color() -> None:
+    """The tie-breaker disambiguates; it must not manufacture confidence.
+
+    Reproduces the Black-reported-as-Orange failure: Black legitimately scored
+    highest, then the Orange/Red tie-breaker multiplied Orange's score by 1.3
+    and Orange won a comparison it had lost on the evidence.
+    """
+    from picture_tool.color.strategies.red_orange import RedOrangeStrategy
+
+    ratios = {
+        "Black": 0.385626,
+        "Yellow": 0.362031,
+        "Orange": 0.311123,
+        "Red": 0.219895,
+    }
+    # Hue and Lab both vote Orange, so this takes the strongest correction path.
+    hsv = np.array([[[10.0, 66.0, 89.0]] * 100], dtype=float)
+    lab = np.array([[[87.0, 120.0, 136.0]] * 100], dtype=float)
+
+    winner, confidence = RedOrangeStrategy().post_correction(
+        "Orange", ratios["Orange"], ratios, hsv, lab
+    )
+
+    assert winner == "Orange"
+    assert confidence == pytest.approx(max(ratios["Orange"], ratios["Red"]))
+    ratios[winner] = confidence
+    assert max(ratios, key=ratios.get) == "Black"
+
+
+def test_black_scores_nothing_on_pixels_that_are_not_black() -> None:
+    """Black's hue term was hard-coded to a perfect 1.0 and kept its weight.
+
+    That handed Black a free 0.2 on every region, whatever was in it.
+    """
+    from picture_tool.color.strategies.black import BlackStrategy
+
+    color_range = ColorRange(
+        name="Black",
+        hsv_min=np.array([0.0, 0.0, 0.0]),
+        hsv_max=np.array([180.0, 50.0, 80.0]),
+        lab_min=np.array([0.0, 0.0, 0.0]),
+        lab_max=np.array([10.0, 10.0, 10.0]),
+    )
+    bright = np.array([[30.0, 240.0, 250.0]] * 50)
+    lab = np.array([[240.0, 140.0, 200.0]] * 50)
+
+    score, _debug = BlackStrategy().match_ratio(bright, lab, color_range)
+
+    assert score == pytest.approx(0.0)
+
+
+def test_circular_hue_mean_crosses_the_seam() -> None:
+    from picture_tool.color.strategies.base import circular_hue_mean
+
+    assert circular_hue_mean(np.array([3.0, 178.0])) == pytest.approx(0.5, abs=1e-6)
+    assert circular_hue_mean(np.array([10.0, 20.0])) == pytest.approx(15.0, abs=1e-6)
+    assert circular_hue_mean(np.array([])) == 0.0
+
+
+def test_generic_strategy_uses_a_circular_hue_mean() -> None:
+    """Red pixels at 3 and 178 averaged to ~90 -- which is green."""
+    from picture_tool.color.strategies.generic import GenericStrategy
+
+    seam = np.array([[3.0, 200.0, 150.0]] * 50 + [[178.0, 200.0, 150.0]] * 50)
+    lab = np.array([[150.0, 150.0, 150.0]] * 100)
+
+    _score, debug = GenericStrategy().match_ratio(seam, lab, _range("Red"))
+
+    assert debug["mean_hue"] == pytest.approx(0.5, abs=0.1)
+
+
+def test_hue_range_test_wraps_around_zero() -> None:
+    from picture_tool.color.strategies.base import hue_in_range
+
+    h_vals = np.array([0.0, 5.0, 90.0, 175.0])
+
+    assert hue_in_range(h_vals, 80.0, 100.0).tolist() == [False, False, True, False]
+    # A margin pushed the recorded range past the seam.
+    assert hue_in_range(h_vals, 170.0, 190.0).tolist() == [True, True, False, True]
+    assert hue_in_range(h_vals, -10.0, 190.0).all()
+
+
+def test_weighted_score_drops_absent_terms_rather_than_scoring_them_perfect() -> None:
+    """The contract is that an absent term does not participate.
+
+    Note this is *not* "removing a term can never raise the score": with the
+    remaining terms at 1.0 the renormalized score is 1.0. What it rules out is
+    an absent term contributing a perfect 1.0 *and* its full weight, which is
+    what made a color with incomplete statistics outscore a complete one.
+    """
+    from picture_tool.color.strategies.base import weighted_score
+
+    weights = {"a": 0.5, "b": 0.3, "c": 0.2}
+
+    # Every term present: a plain weighted sum, unchanged from before.
+    assert weighted_score({"a": 1.0, "b": 0.0, "c": 0.0}, weights) == pytest.approx(0.5)
+    # "c" absent: the score is the other two renormalized, not 0.5 + 1.0 * 0.2.
+    assert weighted_score({"a": 1.0, "b": 0.0, "c": None}, weights) == pytest.approx(
+        0.5 / 0.8
+    )
+    assert weighted_score({"a": None, "b": None, "c": None}, weights) == 0.0
+
+
+@pytest.mark.parametrize("strategy_path", ["black.BlackStrategy", "yellow.YellowStrategy"])
+def test_fast_detect_survives_an_empty_region(strategy_path: str) -> None:
+    """An empty crop divided by a zero-sized mask and raised."""
+    import importlib
+
+    module_name, class_name = strategy_path.split(".")
+    module = importlib.import_module(f"picture_tool.color.strategies.{module_name}")
+    strategy = getattr(module, class_name)()
+
+    empty = np.zeros((0, 5, 3))
+    assert strategy.fast_detect(empty, empty, _range("Black")) == (False, 0.0)

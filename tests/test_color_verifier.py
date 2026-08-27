@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from picture_tool.color import color_verifier
 
@@ -137,3 +138,98 @@ def test_edge_margin_filters_border(tmp_path):
 
     assert summary["predicted_only"] == 1
     assert results[0].confidence == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the color-detection review
+# ---------------------------------------------------------------------------
+
+
+def _flat_ranges():
+    from picture_tool.color.strategies.base import ColorRange
+
+    def _one(name):
+        return ColorRange(
+            name,
+            np.array([0.0, 0.0, 0.0]),
+            np.array([180.0, 255.0, 255.0]),
+            np.array([0.0, 0.0, 0.0]),
+            np.array([255.0, 255.0, 255.0]),
+            hsv_mean=np.array([30.0, 100.0, 100.0]),
+            lab_mean=np.array([100.0, 120.0, 110.0]),
+        )
+
+    return {name: _one(name) for name in ("Black", "Green", "Orange", "Red", "Yellow")}
+
+
+def test_too_few_valid_pixels_does_not_invent_a_black_verdict():
+    """A washed-out region carries no color evidence.
+
+    It used to answer with a hard-coded ``Black: 0.7`` -- above black's own
+    0.45 threshold -- so an unlit or overexposed image passed the color gate.
+    """
+    import numpy as np
+
+    from picture_tool.color import color_verifier
+
+    grey = np.full((40, 40, 3), 128, dtype=np.uint8)
+    hsv = cv2.cvtColor(grey, cv2.COLOR_BGR2HSV).astype(np.float32)
+    lab = cv2.cvtColor(grey, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    ratios, _masks, debug = color_verifier._evaluate_image_improved(
+        grey, hsv, lab, _flat_ranges()
+    )
+
+    assert debug.get("insufficient_pixels") is True
+    assert set(ratios) == {"Black", "Green", "Orange", "Red", "Yellow"}
+    assert all(value == 0.0 for value in ratios.values())
+
+
+def test_post_correction_is_skipped_when_there_is_no_evidence():
+    """With every ratio at 0 the Orange/Red tie test is trivially satisfied."""
+    import numpy as np
+
+    from picture_tool.color import color_verifier
+
+    context = color_verifier.DecisionContext(
+        ratios=dict.fromkeys(("Black", "Orange", "Red"), 0.0),
+        debug_info={"insufficient_pixels": True},
+        hsv_img=np.full((40, 40, 3), 128, dtype=np.float32),
+        lab_img=np.full((40, 40, 3), 128, dtype=np.float32),
+    )
+
+    color, confidence = color_verifier._apply_color_rules("Orange", 0.0, context)
+
+    assert (color, confidence) == ("Orange", 0.0)
+    assert "post_corrected" not in context.debug_info
+
+
+def test_baseline_hue_is_aggregated_on_the_circle(tmp_path):
+    """Both aggregation levels used a linear mean over a periodic channel."""
+    import numpy as np
+
+    from picture_tool.color.color_inspection import (
+        ColorStatsRecorder,
+        compute_hsv_lab_stats,
+    )
+
+    hsv = np.zeros((20, 20, 3), np.uint8)
+    hsv[:10, :, 0] = 3
+    hsv[10:, :, 0] = 178
+    hsv[:, :, 1] = 200
+    hsv[:, :, 2] = 150
+    image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    per_image = compute_hsv_lab_stats(image, np.ones((20, 20), np.uint8))
+    assert per_image["hsv_mean"][0] == pytest.approx(0.5, abs=0.6)
+
+    recorder = ColorStatsRecorder()
+    for hue in (3.0, 178.0):
+        recorder.record(
+            tmp_path / "x.png", "Red",
+            [hue, 200, 150], [0, 0, 0], [180, 255, 255],
+            [50, 150, 150], [0, 0, 0], [255, 255, 255],
+            [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], 1.0,
+        )
+    aggregate = recorder.to_json()["summary"]["Red"]["hsv_mean"][0]
+    assert aggregate == pytest.approx(0.5, abs=1e-6)

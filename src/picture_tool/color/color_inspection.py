@@ -24,6 +24,8 @@ import cv2
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+from picture_tool.color.strategies.base import circular_hue_mean
+
 import os
 
 try:  # pragma: no cover - optional dependency resolution
@@ -295,6 +297,12 @@ class RunningStats:
         default_factory=lambda: np.zeros(3, dtype=np.float64)
     )
     coverage_sum: float = 0.0
+    # Hue is accumulated as a unit vector rather than added into ``hsv_sum``:
+    # summing per-image hue means and dividing by the count reintroduces the
+    # 0/179 seam at the aggregate level even when each image's own mean is
+    # circular. ``hsv_sum[0]`` is therefore recorded but never read back.
+    hue_sin_sum: float = 0.0
+    hue_cos_sum: float = 0.0
     hsv_min: np.ndarray = field(
         default_factory=lambda: np.full(3, np.inf, dtype=np.float64)
     )
@@ -325,6 +333,9 @@ class RunningStats:
         hsv_mean_arr = _to_numpy(hsv_mean)
         lab_mean_arr = _to_numpy(lab_mean)
         self.count += 1
+        hue_angle = float(hsv_mean_arr[0]) * (np.pi / 90.0)
+        self.hue_sin_sum += float(np.sin(hue_angle))
+        self.hue_cos_sum += float(np.cos(hue_angle))
         self.hsv_sum += hsv_mean_arr
         self.lab_sum += lab_mean_arr
         self.hsv_p10_sum += _to_numpy(hsv_p10)
@@ -341,6 +352,12 @@ class RunningStats:
         if self.count == 0:
             raise ValueError("No samples recorded")  # pragma: no cover
         hsv_mean = (self.hsv_sum / self.count).tolist()
+        hsv_mean[0] = float(
+            np.mod(
+                np.arctan2(self.hue_sin_sum, self.hue_cos_sum) * (90.0 / np.pi),
+                180.0,
+            )
+        )
         lab_mean = (self.lab_sum / self.count).tolist()
         hsv_p10 = (self.hsv_p10_sum / self.count).tolist()
         hsv_p90 = (self.hsv_p90_sum / self.count).tolist()
@@ -667,12 +684,23 @@ class SamPredictorWrapper:
 
 
 def _compute_channel_stats(
-    image: np.ndarray, mask: np.ndarray
+    image: np.ndarray, mask: np.ndarray, *, circular_first_channel: bool = False
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Mean/min/max of the masked pixels, per channel.
+
+    Args:
+        circular_first_channel: True for HSV, whose first channel is hue and
+            wraps at 0/179. Averaging it linearly puts the mean of red pixels
+            at 3 and 178 near 90 -- green -- and that value is written into
+            ``hsv_mean`` and later compared with circular distance by every
+            consumer of the baseline.
+    """
     masked = image[mask > 0]
     if masked.size == 0:
         raise ValueError("Empty mask; no pixels selected.")
-    mean = masked.mean(axis=0)
+    mean = np.asarray(masked.mean(axis=0), dtype=np.float64)
+    if circular_first_channel and mean.size:
+        mean[0] = circular_hue_mean(masked[:, 0])
     min_vals = masked.min(axis=0)
     max_vals = masked.max(axis=0)
     return mean, min_vals, max_vals
@@ -695,7 +723,9 @@ def compute_hsv_lab_stats(
         if lab_image is not None
         else cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
     )
-    hsv_mean, hsv_min, hsv_max = _compute_channel_stats(hsv, mask)
+    hsv_mean, hsv_min, hsv_max = _compute_channel_stats(
+        hsv, mask, circular_first_channel=True
+    )
     lab_mean, lab_min, lab_max = _compute_channel_stats(lab, mask)
     mask_bool = mask > 0
     coverage = float(np.count_nonzero(mask_bool)) / max(mask.size, 1)

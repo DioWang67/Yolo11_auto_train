@@ -21,6 +21,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sets used by Picture Tool.
 
 ### Changed
+- `picture_tool.color` 的中心裁切統一為 `strategies.base.center_crop()`。
+  原本評分路徑用逐軸 15%、規則路徑用 `min(h, w)`、黃色快速判定又是另一種，
+  同一張圖的三個判定看的不是同一批像素。
+- 色相環形平均、色相區間比對、權重正規化與安全比值抽到
+  `strategies/base.py`，與推論端 `core/stats_color_checker.py` 的對應實作
+  對齊。兩者仍是各自獨立的程式碼，但把關的是同一個產品——判定規則不一致
+  會讓模型通過訓練關卡卻在產線表現不同。
 - Operator training opens from the inference application's PIN-protected
   engineering settings and reports the existing terminal job instead of
   silently starting a duplicate.
@@ -30,6 +37,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of calibrating from candidate predictions.
 
 ### Fixed
+- 顏色決勝不再憑空製造信心。Orange/Red tie-break 會把勝方分數乘上 1.3（或
+  1.1），於是一個「只負責區分橘或紅」的步驟可以讓勝方超車一個本來分數更高
+  的無關顏色——這正是黑色被報成橘色的成因。現在改為把該配對原本的最佳分數
+  轉移給勝方，不創造任何新分數，與推論端 `_separate_orange_red` 一致。
+- Black 不再無條件白拿 0.2 分。`BlackStrategy` 把 hue 相似度硬寫成 1.0 再乘
+  0.2 權重，註解說是「忽略」但實際是「給滿分」，任何區域（包含完全不黑的
+  區域）都能拿到這 0.2。現在該項目直接不參與計分，其餘權重重新正規化。
+- 色相改用環形平均。OpenCV 色相在 0/179 環繞，但評分端與基準產出端都用線性
+  平均，紅色像素 3 與 178 會平均成 ~90（綠色）。這同時修在三處：策略評分的
+  `mean_hue`、`compute_hsv_lab_stats()` 的逐張 `hsv_mean`、以及
+  `RunningStats` 跨張聚合（改為累積單位向量，否則逐張修好仍會在聚合層重現）。
+- 統計缺失不再變成加分。缺少 `hsv_mean` / `lab_mean` 的顏色，其相似度項目
+  原本預設為完美的 1.0 且仍計入完整權重，導致統計不完整的顏色贏過統計完整
+  的顏色。現在缺失的項目直接排除、其餘權重重新正規化（統計齊全時為無變化）。
+- 空區域不再讓流程崩潰。`BlackStrategy.fast_detect` 與
+  `YellowStrategy.fast_detect` 以遮罩大小為分母卻未防零，空裁切會拋
+  `ZeroDivisionError`。
+- 有效像素過少時不再捏造 Black 判定。`_evaluate_image_improved()` 原本直接
+  給 `Black = 0.7`（高於 Black 自己的 0.45 門檻），使曝光不足或洗白的影像
+  「通過」顏色關卡。現在回報 `insufficient_pixels` 並讓所有分數為 0，
+  fail closed；後校正在此情況下一併跳過，否則所有 ratio 皆為 0 會讓橘/紅
+  決勝的「差距 < margin」條件恆成立而憑空生出預測。
+- 未特別處理的顏色，其色相區間比對現在能跨 0/179 環繞，因此 margin 把區間
+  推出邊界、或未來出現校正於色相 0 附近的顏色（粉紅、洋紅），不再被判成
+  「永不匹配」。
+- Black 快速判定回報的信心值現在對應實際觸發的規則。原本一律回報 coverage，
+  但判定可由 mean 或 median 規則觸發，此時 coverage 與被比較的門檻無因果
+  關係，會出現「這是黑色，而黑色不合格」的自相矛盾結果。
 - Promotion and deployment now publish artifacts atomically, verify portable
   package receipts, and bind position-gate evidence to the canonical target
   configuration and recomputed metrics.
