@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- 顏色關卡與推論端執行期之間新增跨實作一致性測試。兩者是各自獨立的程式碼，
+  卻在把關同一個產品，任何一邊的判定規則移動而另一邊沒有，就會讓模型通過關卡
+  卻在產線表現不同，而兩個 repo 各自都看不到。兩邊共用一份逐位元相同的
+  `tests/data/color_conformance.json`（顏色模型直接內嵌，所以各自的測試不需要
+  對方的 checkout 就能跑），各自把自己釘在案例上；workspace CI 比對兩份副本
+  是否相同。已知的合理差異記錄在 `known_divergences` 並附理由，而不是被抹掉。
 - Operator review handoff for confirmed OK, overkill, missed detections,
   annotation repair and color-only calibration routes with stable SHA-256
   sample identities.
