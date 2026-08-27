@@ -245,6 +245,49 @@ def test_black_scores_nothing_on_pixels_that_are_not_black() -> None:
     assert score == pytest.approx(0.0)
 
 
+def test_black_score_is_normalized_by_learned_crop_coverage() -> None:
+    from picture_tool.color.strategies.black import BlackStrategy
+
+    color_range = ColorRange(
+        name="Black",
+        hsv_min=np.array([0.0, 0.0, 0.0]),
+        hsv_max=np.array([179.0, 80.0, 80.0]),
+        lab_min=np.array([0.0, 120.0, 120.0]),
+        lab_max=np.array([80.0, 136.0, 136.0]),
+        coverage_mean=0.4,
+    )
+    hsv = np.array(
+        [[0.0, 20.0, 20.0]] * 40 + [[0.0, 0.0, 180.0]] * 60
+    )
+    lab = np.array(
+        [[20.0, 128.0, 128.0]] * 40 + [[180.0, 128.0, 128.0]] * 60
+    )
+
+    score, debug = BlackStrategy().match_ratio(hsv, lab, color_range)
+
+    assert debug["raw_ratio"] == pytest.approx(0.4)
+    assert debug["reference_coverage"] == pytest.approx(0.4)
+    assert score == pytest.approx(1.0)
+
+
+def test_black_score_fails_closed_without_learned_crop_coverage() -> None:
+    from picture_tool.color.strategies.black import BlackStrategy
+
+    color_range = ColorRange(
+        name="Black",
+        hsv_min=np.array([0.0, 0.0, 0.0]),
+        hsv_max=np.array([179.0, 255.0, 255.0]),
+        lab_min=np.array([0.0, 0.0, 0.0]),
+        lab_max=np.array([255.0, 255.0, 255.0]),
+    )
+    pixels = np.full((10, 3), 100.0)
+
+    score, debug = BlackStrategy().match_ratio(pixels, pixels, color_range)
+
+    assert score == 0.0
+    assert debug["invalid_reference_coverage"] == 1.0
+
+
 def test_circular_hue_mean_crosses_the_seam() -> None:
     from picture_tool.color.strategies.base import circular_hue_mean
 

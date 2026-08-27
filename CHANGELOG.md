@@ -43,6 +43,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of calibrating from candidate predictions.
 
 ### Fixed
+- Black 改為與推論端相同的 learned S/V + LAB 聯合匹配，並用基準的
+  `coverage_mean` 正規化；手寫的 `s < 50 & v < 80` shortcut 移除。缺少或無效的
+  `coverage_mean` 會 fail closed，而非對著不存在的參考值計分。這個 shortcut
+  原本兩頭不到岸 —— 既不是學出來的，也不是乾淨的規則 —— 而它的統計基準在自己的
+  holdout 上只有 3.6% 準確率。
+- 部署會保留已簽核的 `color_roi_policy`，不讓訓練輸出默默覆蓋站點的取樣幾何。
+  顏色基準是在特定 ROI 幾何下校正的，換掉幾何等於換掉基準的意義。
 - 顏色決勝不再憑空製造信心。Orange/Red tie-break 會把勝方分數乘上 1.3（或
   1.1），於是一個「只負責區分橘或紅」的步驟可以讓勝方超車一個本來分數更高
   的無關顏色——這正是黑色被報成橘色的成因。現在改為把該配對原本的最佳分數

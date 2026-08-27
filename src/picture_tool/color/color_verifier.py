@@ -163,6 +163,20 @@ def _evaluate_image_improved(
         debug_info["insufficient_pixels"] = True
         debug_info["valid_pixel_count"] = int(len(valid_hsv))
         ratios = {color: 0.0 for color in color_ranges.keys()}
+        black_debug = None
+        for color_name, color_range in color_ranges.items():
+            if color_name.casefold() != "black":
+                continue
+            strategy = ColorStrategyRegistry.get_strategy(color_name)
+            debug_info["black_strategy"] = strategy.__class__.__name__
+            ratios[color_name], black_debug = strategy.match_ratio(
+                center_hsv.reshape(-1, 3),
+                center_lab.reshape(-1, 3),
+                color_range,
+            )
+            break
+        if black_debug is not None:
+            debug_info["color_details"] = {"Black": black_debug}
         masks = {color: np.zeros((h, w), dtype=bool) for color in color_ranges.keys()}
         return ratios, masks, debug_info
 
@@ -171,7 +185,18 @@ def _evaluate_image_improved(
     all_debug = {}
     for color_name, color_range in color_ranges.items():
         strategy = ColorStrategyRegistry.get_strategy(color_name)
-        score, color_debug = strategy.match_ratio(valid_hsv, valid_lab, color_range)
+        if color_name.casefold() == "black":
+            score, color_debug = strategy.match_ratio(
+                center_hsv.reshape(-1, 3),
+                center_lab.reshape(-1, 3),
+                color_range,
+            )
+        else:
+            score, color_debug = strategy.match_ratio(
+                valid_hsv,
+                valid_lab,
+                color_range,
+            )
         ratios[color_name] = score
         all_debug[color_name] = color_debug
 

@@ -176,13 +176,16 @@ def test_too_few_valid_pixels_does_not_invent_a_black_verdict():
     hsv = cv2.cvtColor(grey, cv2.COLOR_BGR2HSV).astype(np.float32)
     lab = cv2.cvtColor(grey, cv2.COLOR_BGR2LAB).astype(np.float32)
 
+    ranges = _flat_ranges()
+    ranges["Black"].hsv_max = np.array([179.0, 80.0, 80.0])
+    ranges["Black"].lab_max = np.array([80.0, 136.0, 136.0])
     ratios, _masks, debug = color_verifier._evaluate_image_improved(
-        grey, hsv, lab, _flat_ranges()
+        grey, hsv, lab, ranges
     )
 
     assert debug.get("insufficient_pixels") is True
     assert set(ratios) == {"Black", "Green", "Orange", "Red", "Yellow"}
-    assert all(value == 0.0 for value in ratios.values())
+    assert all(value == 0.0 for value in ratios.values()), (ratios, debug)
 
 
 def test_post_correction_is_skipped_when_there_is_no_evidence():

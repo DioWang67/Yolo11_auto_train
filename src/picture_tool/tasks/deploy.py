@@ -61,6 +61,9 @@ STATION_LOCAL_FIELDS = {
     "jpeg_quality",
     "png_compression",
     "max_crops_per_frame",
+    # Runtime color sampling geometry must survive a detector deployment until
+    # an explicitly reviewed replacement policy is supplied.
+    "color_roi_policy",
     "buffer_limit",
     "flush_interval",
 }

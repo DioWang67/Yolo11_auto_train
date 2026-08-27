@@ -1,6 +1,7 @@
 from typing import Dict, Optional
 import importlib
 import pkgutil
+from types import ModuleType
 
 from picture_tool.color.strategies.base import ColorStrategy
 
@@ -39,7 +40,22 @@ class ColorStrategyRegistry:
         
         for _, module_name, _ in pkgutil.iter_modules(strategies_pkg.__path__):
             if module_name not in ('base', 'registry'):
-                importlib.import_module(f"picture_tool.color.strategies.{module_name}")
+                before = (frozenset(cls._strategies), cls._fallback)
+                module = importlib.import_module(
+                    f"picture_tool.color.strategies.{module_name}"
+                )
+                after = (frozenset(cls._strategies), cls._fallback)
+                # A reset registry plus an already-cached module otherwise
+                # stays silently incomplete because decorators only ran on the
+                # first import. Reload only when importing produced no
+                # registration; normal startup still imports every module once.
+                should_restore_cached_registration = (
+                    before == after
+                    and isinstance(module, ModuleType)
+                    and (module_name != "generic" or cls._fallback is None)
+                )
+                if should_restore_cached_registration:
+                    importlib.reload(module)
                 
         cls._initialized = True
 
