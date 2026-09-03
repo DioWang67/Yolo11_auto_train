@@ -43,6 +43,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of calibrating from candidate predictions.
 
 ### Fixed
+- `tests/test_color_integration.py` no longer leaves a `MagicMock` standing in
+  for the color verifier. It replaced the module in `sys.modules` at import
+  time and never restored it, so whichever suite ran afterwards tested the mock
+  instead of the real gate -- silently, as passes. The conformance guard was
+  among them, which means it could be switched off by test ordering.
 - Black 改為與推論端相同的 learned S/V + LAB 聯合匹配，並用基準的
   `coverage_mean` 正規化；手寫的 `s < 50 & v < 80` shortcut 移除。缺少或無效的
   `coverage_mean` 會 fail closed，而非對著不存在的參考值計分。這個 shortcut

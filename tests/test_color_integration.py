@@ -17,14 +17,41 @@ sys.modules["albumentations"] = MagicMock()
 # sys.modules["sklearn"] = sklearn
 # sys.modules["sklearn.model_selection"] = MagicMock()
 
-# Mock internal heavy modules
-# We want to test color_verifier logic, so we might not want to mock it entirely, 
-# but if it depends on cv2, we have to rely on mocks or careful imports.
-# For integration test of the GUI Panel, we can mock it.
-sys.modules["picture_tool.color.color_verifier"] = MagicMock()
+# ``color_panel`` imports the color verifier at module scope, so the stand-in
+# has to be in place before that import -- this suite exercises the GUI panel,
+# not the gate. It is put back immediately afterwards: the substitution used to
+# stay in ``sys.modules`` for the rest of the session, so whichever suite ran
+# after this one tested a MagicMock instead of the real color gate, and did it
+# silently, as passes. A conformance guard that can be switched off by test
+# ordering is not a guard.
+_VERIFIER_MODULE = "picture_tool.color.color_verifier"
+_REAL_VERIFIER_MODULE = sys.modules.get(_VERIFIER_MODULE)
+sys.modules[_VERIFIER_MODULE] = MagicMock()
 
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 from picture_tool.gui.color_panel import ColorPanel  # noqa: E402
+
+# Importing the panel bound the stand-in in two places: ``sys.modules`` and, as
+# the import machinery always does, an attribute of the parent package -- which
+# ``picture_tool.color``'s lazy ``__getattr__`` also caches in its globals. A
+# later ``from picture_tool.color import color_verifier`` reads that attribute,
+# so restoring only ``sys.modules`` leaves the mock in place.
+_VERIFIER_PACKAGE, _, _VERIFIER_ATTR = _VERIFIER_MODULE.rpartition(".")
+if _REAL_VERIFIER_MODULE is not None:
+    sys.modules[_VERIFIER_MODULE] = _REAL_VERIFIER_MODULE
+else:
+    sys.modules.pop(_VERIFIER_MODULE, None)
+_verifier_package = sys.modules.get(_VERIFIER_PACKAGE)
+if _verifier_package is not None:
+    if _REAL_VERIFIER_MODULE is not None:
+        setattr(_verifier_package, _VERIFIER_ATTR, _REAL_VERIFIER_MODULE)
+    else:
+        # Dropping the cache makes the lazy loader import the real module on the
+        # next request, instead of handing back the stand-in for good.
+        try:
+            delattr(_verifier_package, _VERIFIER_ATTR)
+        except AttributeError:
+            pass
 
 class TestColorIntegration(unittest.TestCase):
     @classmethod
