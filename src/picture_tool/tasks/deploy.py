@@ -39,6 +39,7 @@ from picture_tool.tasks.bundle import (
     find_color_model_source,
     rewrite_detection_config,
     select_runtime_weight,
+    uses_station_calibrated_color_baseline,
     validate_deployment_target,
 )
 from picture_tool.tasks.deployment_target import resolve_yolo_deployment_target
@@ -64,6 +65,17 @@ STATION_LOCAL_FIELDS = {
     # Runtime color sampling geometry must survive a detector deployment until
     # an explicitly reviewed replacement policy is supplied.
     "color_roi_policy",
+    # A detector config that does not know about provenance enforcement must
+    # not turn a station's strict safety decision back off.
+    "color_baseline_algorithm_enforcement",
+    # The approved baseline records the full resolved decision tuning it was
+    # measured under, so reverting the station's tuning invalidates that
+    # baseline and fails the color check closed under strict enforcement.
+    "color_decision_tuning",
+    # The pre-shift color reference was measured on this fixture under this
+    # light, so a deployment must not publish another station's numbers as the
+    # bar the next shift is judged against.
+    "color_preflight",
     "buffer_limit",
     "flush_interval",
 }
@@ -1785,6 +1797,11 @@ def run_deploy(config: dict, args: Any) -> None:
                 "Use version=auto or deploy.force=true intentionally."
             )
 
+        station_config_snapshot = _load_station_config_snapshot(station_config_path)
+        station_values = station_config_snapshot.values or {}
+        station_color_baseline_required = uses_station_calibrated_color_baseline(
+            det_cfg_data
+        )
         color_source = find_color_model_source(run_dir, color_cfg_name)
         color_source_kind = "training_run"
         color_destination = (
@@ -1795,7 +1812,30 @@ def run_deploy(config: dict, args: Any) -> None:
             and color_destination.parent != dest_dir.resolve()
         ):
             raise ValueError("Resolved station color model path is unsafe.")
-        if (
+        if station_color_baseline_required:
+            existing_color_name = Path(
+                str(station_values.get("color_model_path") or color_cfg_name)
+            ).name
+            color_destination = (
+                (dest_dir / existing_color_name).resolve()
+                if existing_color_name
+                else None
+            )
+            if (
+                color_destination is not None
+                and color_destination.parent != dest_dir.resolve()
+            ):
+                raise ValueError("Resolved station color model path is unsafe.")
+            if color_destination is None or not color_destination.is_file():
+                raise FileNotFoundError(
+                    "Detector deployment cannot publish training color statistics "
+                    "as a runtime baseline. Preserve an approved station baseline "
+                    "or rebuild it in the inference GUI before deployment."
+                )
+            color_cfg_name = existing_color_name
+            color_source = color_destination
+            color_source_kind = "existing_station"
+        elif (
             color_source is None
             and color_destination is not None
             and dcfg.get("preserve_station_settings", True)
@@ -1809,7 +1849,6 @@ def run_deploy(config: dict, args: Any) -> None:
                 f"for {color_cfg_name}."
             )
 
-        station_config_snapshot = _load_station_config_snapshot(station_config_path)
         deploy_config = dict(det_cfg_data)
         deploy_config = _preserve_station_fields(
             deploy_config,

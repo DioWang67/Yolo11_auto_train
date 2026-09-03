@@ -63,11 +63,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     that raw ratio. It manufactured confidence from a disambiguation step,
     which the orange/red tie-break was already fixed not to do, and the runtime
     has no counterpart. Green now competes on its score.
+- `color_decision_tuning` survives a detector deployment. v5 binds a baseline
+  to all of its resolved tuning keys, so reverting a station's tuning
+  invalidates its approved baseline and fails the color check closed under
+  strict enforcement -- the same reason `color_roi_policy` was already
+  preserved.
 - `tests/test_color_integration.py` no longer leaves a `MagicMock` standing in
   for the color verifier. It replaced the module in `sys.modules` at import
   time and never restored it, so whichever suite ran afterwards tested the mock
   instead of the real gate -- silently, as passes. The conformance guard was
   among them, which means it could be switched off by test ordering.
+- Detector deployment and portable bundles no longer publish training
+  `quality/color/stats.json` as a runtime `stats` baseline. Training records SAM
+  mask coverage, while the runtime records coverage in the station ROI; treating
+  them as interchangeable silently shifts Black scores. Deployments now preserve
+  the existing station baseline or fail when none exists, bundles omit the
+  incompatible file and require strict station calibration, and detector deploys
+  preserve the station's provenance-enforcement setting.
 - Black 改為與推論端相同的 learned S/V + LAB 聯合匹配，並用基準的
   `coverage_mean` 正規化；手寫的 `s < 50 & v < 80` shortcut 移除。缺少或無效的
   `coverage_mean` 會 fail closed，而非對著不存在的參考值計分。這個 shortcut

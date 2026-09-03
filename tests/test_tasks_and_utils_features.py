@@ -301,6 +301,7 @@ class TestTasksFunctionality:
                 {
                     "weights": "best.onnx",
                     "enable_color_check": True,
+                    "color_checker_type": "stats",
                     "color_model_path": "color_stats.json",
                 }
             ),
@@ -311,11 +312,16 @@ class TestTasksFunctionality:
         station.mkdir(parents=True)
         color_bytes = b'{"Orange": {"mean": [1, 2, 3]}}'
         (station / "color_stats.json").write_bytes(color_bytes)
+        (run_dir / "color_stats.json").write_bytes(b"training-geometry-stats")
         (station / "config.yaml").write_text(
             yaml.safe_dump(
                 {
                     "weights": "old.onnx",
                     "enable_color_check": True,
+                    "color_checker_type": "stats",
+                    "color_baseline_algorithm_enforcement": "strict",
+                    "color_roi_policy": {"inset_x_ratio": 0.2},
+                    "color_decision_tuning": {"center_margin_ratio": 0.15},
                     "color_model_path": (
                         "models/Cable1/A/yolo/color_stats.json"
                     ),
@@ -349,6 +355,57 @@ class TestTasksFunctionality:
         assert manifest["color_model_sha256"] == hashlib.sha256(
             color_bytes
         ).hexdigest()
+        deployed_config = yaml.safe_load(
+            (station / "config.yaml").read_text(encoding="utf-8")
+        )
+        assert deployed_config["color_baseline_algorithm_enforcement"] == "strict"
+        # The approved baseline is bound to both of these, so a detector deploy
+        # that reverted either would fail the color check closed under strict.
+        assert deployed_config["color_roi_policy"] == {"inset_x_ratio": 0.2}
+        assert deployed_config["color_decision_tuning"] == {
+            "center_margin_ratio": 0.15
+        }
+
+    def test_deploy_rejects_training_stats_without_station_baseline(self, tmp_path):
+        """A detector run cannot bootstrap a runtime baseline from SAM stats."""
+        import yaml
+
+        from picture_tool.tasks.deploy import run_deploy
+
+        run_dir = tmp_path / "runs" / "train"
+        weights_dir = run_dir / "weights"
+        weights_dir.mkdir(parents=True)
+        (weights_dir / "best.pt").write_bytes(b"pt")
+        (weights_dir / "best.onnx").write_bytes(b"onnx")
+        _write_runtime_export_contract(run_dir)
+        (run_dir / "color_stats.json").write_text("{}", encoding="utf-8")
+        (run_dir / "detection_config.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "weights": "best.onnx",
+                    "enable_color_check": True,
+                    "color_checker_type": "stats",
+                    "color_model_path": "color_stats.json",
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = {
+            "yolo_training": {
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+                "deploy": {
+                    "enabled": True,
+                    "product": "Cable1",
+                    "area": "A",
+                    "inference_models_dir": str(tmp_path / "models"),
+                    "version": "1.0.0",
+                },
+            }
+        }
+
+        with pytest.raises(FileNotFoundError, match="station baseline"):
+            run_deploy(config, SimpleNamespace())
 
     def test_artifact_bundle_matches_inference_models_layout(self, tmp_path):
         """Bundle should unzip directly under yolo11_inference/models."""
@@ -386,6 +443,7 @@ class TestTasksFunctionality:
                         }
                     },
                     "enable_color_check": True,
+                    "color_checker_type": "stats",
                     "color_model_path": "color_stats.json",
                 }
             ),
@@ -416,13 +474,15 @@ class TestTasksFunctionality:
 
         assert "PCBA1/A/yolo/config.yaml" in names
         assert "PCBA1/A/yolo/weights/best.onnx" in names
-        assert "PCBA1/A/yolo/color_stats.json" in names
+        assert "PCBA1/A/yolo/color_stats.json" not in names
+        assert "PCBA1/A/yolo/COLOR_BASELINE_REQUIRED.txt" in names
         assert "PCBA1/A/yolo/args.yaml" not in names
         assert "PCBA1/A/yolo/results.csv" not in names
         assert bundled_config["weights"] == "models/PCBA1/A/yolo/weights/best.onnx"
         assert (
             bundled_config["color_model_path"] == "models/PCBA1/A/yolo/color_stats.json"
         )
+        assert bundled_config["color_baseline_algorithm_enforcement"] == "strict"
         assert bundled_config["current_product"] == "PCBA1"
         assert bundled_config["current_area"] == "A"
         assert bundled_config["expected_items"] == {"PCBA1": {"A": ["J5-1"]}}

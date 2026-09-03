@@ -8,6 +8,19 @@ from picture_tool.tasks.deployment_target import resolve_yolo_deployment_target
 
 
 PLACEHOLDER_TARGET_NAMES = {"", "project", "train", "default"}
+STATION_COLOR_BASELINE_NOTICE = "COLOR_BASELINE_REQUIRED.txt"
+
+
+def uses_station_calibrated_color_baseline(config: Mapping[str, Any]) -> bool:
+    """Return whether runtime color statistics must remain station-owned.
+
+    Training records SAM mask coverage, while the runtime ``stats`` checker
+    normalizes against coverage measured in its configured station ROI. Those
+    values share a field name but not a geometry, so detector artifacts cannot
+    publish the training file as a runtime baseline.
+    """
+    checker_type = str(config.get("color_checker_type") or "").strip().casefold()
+    return bool(config.get("enable_color_check")) and checker_type == "stats"
 
 
 def validate_deployment_target(product: str, area: str) -> None:
@@ -281,6 +294,15 @@ def run_artifact_bundle(config, args):
             f"models/{product}/{area}/yolo/weights/{weights_filename}"
         )
 
+    station_color_baseline_required = uses_station_calibrated_color_baseline(
+        det_cfg_data
+    )
+    if station_color_baseline_required:
+        # A portable detector bundle cannot carry a station-calibrated color
+        # baseline. Keep the reference for extraction over an existing station
+        # and make incompatible station files fail closed when loaded.
+        det_cfg_data["color_baseline_algorithm_enforcement"] = "strict"
+
     color_model = det_cfg_data.get("color_model_path", "")
     color_source: Path | None = None
     if color_model:
@@ -288,8 +310,13 @@ def run_artifact_bundle(config, args):
         det_cfg_data["color_model_path"] = (
             f"models/{product}/{area}/yolo/{color_filename}"
         )
-        color_source = find_color_model_source(run_dir, color_filename)
-        if det_cfg_data.get("enable_color_check") and color_source is None:
+        if not station_color_baseline_required:
+            color_source = find_color_model_source(run_dir, color_filename)
+        if (
+            det_cfg_data.get("enable_color_check")
+            and color_source is None
+            and not station_color_baseline_required
+        ):
             raise FileNotFoundError(
                 "enable_color_check is true but no color model/stat file was found "
                 f"for {color_filename}."
@@ -344,6 +371,17 @@ def run_artifact_bundle(config, args):
                     else f"{zip_prefix}/{color_source.name}"
                 )
                 zf.write(color_source, arcname=arcname)
+            if station_color_baseline_required:
+                zf.writestr(
+                    f"{zip_prefix}/{STATION_COLOR_BASELINE_NOTICE}",
+                    "This detector bundle intentionally excludes color_stats.json.\n"
+                    "The stats color baseline is owned by the station because its "
+                    "coverage values are measured in the station ROI geometry.\n"
+                    "Preserve the station's approved stats-robust-v5 baseline, or "
+                    "run the inference GUI color-baseline rebuild before enabling "
+                    "inspection. Do not rename training quality/color/stats.json "
+                    "into this directory.\n",
+                )
 
             # Write verbatim files
             for src, arcname in files_to_zip:
@@ -355,6 +393,11 @@ def run_artifact_bundle(config, args):
             "    unzip %s -d /path/to/yolo11_inference/models/",
             zip_path, zip_path.name,
         )
+        if station_color_baseline_required:
+            logger.warning(
+                "Detector bundle excludes the station-owned stats color baseline; "
+                "preserve the approved station file or rebuild it in the inference GUI."
+            )
     except (FileNotFoundError, PermissionError, OSError) as e:
         raise RuntimeError(f"Failed to create artifact bundle: {e}") from e
 
