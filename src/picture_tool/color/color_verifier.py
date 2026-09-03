@@ -130,19 +130,19 @@ def _evaluate_image_improved(
     debug_info: Dict[str, Any] = {}
     h, w = hsv_img.shape[:2]
 
-    # 1. 快速檢查 (Short-circuit paths)
+    # 1. 快速檢查：只記錄，不再短路評分。
+    # 這裡原本在第一個 fast_detect 命中時就返回，把該色的信心值當成分數、
+    # 其他色全部歸零 —— 於是 40% 黃 + 60% 綠 判成黃色，而推論端判綠色，
+    # 因為捷徑回報的是「有看到這個顏色」，不是「這個顏色贏了」。推論端已
+    # 移除同一條捷徑並只留診斷欄位，這裡跟著做：每個顏色都要經過
+    # match_ratio 與同一份基準競爭。
     for color_name, color_range in color_ranges.items():
         strategy = ColorStrategyRegistry.get_strategy(color_name)
         is_detected, conf = strategy.fast_detect(hsv_img, lab_img, color_range)
         if is_detected:
             debug_info[f"is_{color_name.lower()}_detected"] = True
             debug_info[f"{color_name.lower()}_confidence"] = float(conf)
-            
-            ratios = {c: 0.0 for c in color_ranges.keys()}
-            ratios[color_name] = conf
-            masks = {c: np.zeros((h, w), dtype=bool) for c in color_ranges.keys()}
-            masks[color_name] = np.ones((h, w), dtype=bool)
-            return ratios, masks, debug_info
+            debug_info[f"{color_name.lower()}_score_adjustment"] = 0.0
 
     # 2. 取中心區域做進一步分析（與 _apply_color_rules 使用同一種裁切）
     center_hsv = center_crop(hsv_img)
@@ -210,18 +210,6 @@ def _evaluate_image_improved(
         masks[color_name] = strategy.build_mask(hsv_img, lab_img, color_range, sat_mask_full)
 
     return ratios, masks, debug_info
-
-
-def _extract_center_pixels(
-    img: np.ndarray, margin_ratio: float = 0.15
-) -> np.ndarray:
-    """Return the center crop used for rule-based decisions."""
-    h, w = img.shape[:2]
-    margin = int(min(h, w) * margin_ratio)
-    if margin == 0:
-        return img
-    center = img[margin : h - margin, margin : w - margin]
-    return center if center.size else img
 
 
 def _initial_prediction(ratios: Dict[str, float]) -> Tuple[str, float]:

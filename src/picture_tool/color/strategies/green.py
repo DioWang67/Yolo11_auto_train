@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from picture_tool.color.strategies.base import (
     ColorRange,
@@ -7,10 +7,7 @@ from picture_tool.color.strategies.base import (
     weighted_score,
 )
 from picture_tool.color.strategies.generic import GenericStrategy
-
-GREEN_DOMINANCE_RATIO = 0.3
-
-from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
+from picture_tool.color.strategies.registry import ColorStrategyRegistry
 
 @ColorStrategyRegistry.register("Green")
 class GreenStrategy(GenericStrategy):
@@ -58,30 +55,18 @@ class GreenStrategy(GenericStrategy):
         debug["final_score"] = float(final_score)
         return float(final_score), debug
 
-    def post_correction(
-        self,
-        predicted_color: str,
-        confidence: float,
-        ratios: Dict[str, float],
-        center_hsv: np.ndarray,
-        center_lab: np.ndarray
-    ) -> Optional[Tuple[str, float]]:
-        """Implements green dominance correction (override red)."""
-        if predicted_color != "Red":
-            return None
-
-        if center_hsv.size == 0:
-            return None
-
-        h_vals = center_hsv[:, :, 0]
-        total_pixels = h_vals.size
-        if total_pixels == 0:
-            return None
-
-        green_pixels = np.sum((h_vals >= 70) & (h_vals <= 100))
-        green_ratio = safe_ratio(int(green_pixels), int(total_pixels))
-
-        if green_ratio > GREEN_DOMINANCE_RATIO:
-            return "Green", float(green_ratio)
-            
-        return None
+    # No ``post_correction`` here, deliberately.
+    #
+    # There used to be a green-dominance override: when Red won, it counted
+    # pixels with hue in [70, 100] over the whole center crop -- no saturation
+    # or value filter, so unlit and washed-out pixels counted -- and above 0.3
+    # replaced the winner with ("Green", that raw ratio). It flipped a
+    # red-majority region to its green minority, and the confidence it reported
+    # was a hue count, not a score comparable with any other color's.
+    #
+    # That is what the orange/red tie-breaker in ``red_orange.py`` was already
+    # fixed not to do: a step that decides *which* color it is measures nothing
+    # new about how strongly the region matches, so nothing may be created. The
+    # inference runtime has no counterpart to this override, so keeping it here
+    # meant the gate and the line disagreed on the same board. Green now
+    # competes on ``match_ratio`` like every other color.

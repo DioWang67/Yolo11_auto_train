@@ -36,12 +36,21 @@ def test_green_strategy_match_and_post_correction_paths() -> None:
     assert debug["hsv_ratio"] == 0.5
     assert debug["final_score"] == score
 
-    image = np.full((2, 2, 3), [80, 100, 100], dtype=float)
-    assert strategy.post_correction("Orange", 0.5, {}, image, image) is None
-    assert strategy.post_correction("Red", 0.5, {}, np.array([]), image) is None
-    assert strategy.post_correction("Red", 0.5, {}, image, image) == ("Green", 1.0)
-    image[:, :, 0] = 20
-    assert strategy.post_correction("Red", 0.5, {}, image, image) is None
+
+def test_green_no_longer_overrides_a_red_verdict_from_a_hue_count() -> None:
+    """Green competes on its score, like every other color.
+
+    The removed override counted bare hue pixels over the whole crop and, above
+    0.3, replaced the winner with ("Green", that ratio) -- flipping a
+    red-majority region to its green minority and reporting a pixel count as a
+    confidence. The inference runtime has no counterpart, so this is also what
+    made the gate and the line disagree on the same board.
+    """
+    strategy = GreenStrategy()
+    all_green = np.full((2, 2, 3), [80, 100, 100], dtype=float)
+
+    assert strategy.post_correction("Red", 0.5, {}, all_green, all_green) is None
+    assert strategy.post_correction("Orange", 0.5, {}, all_green, all_green) is None
 
 
 @pytest.mark.parametrize("color", ["Red", "Orange"])

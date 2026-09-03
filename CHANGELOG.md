@@ -43,6 +43,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of calibrating from candidate predictions.
 
 ### Fixed
+- The training color gate now measures what the runtime measures. Three
+  differences had it reaching different verdicts on the same part, and the
+  shared conformance fixture could not see any of them because every one of its
+  cases was square:
+  - `strategies/base.py` `center_crop` derived one margin from `min(h, w)`
+    while the runtime crops each axis independently. On a square patch the two
+    are the same crop, which is why the suite stayed green; on an elongated
+    wire ROI they are not. A 384x96 red strip with an orange end came back Red
+    from the runtime and Orange from the gate.
+  - The `fast_detect` loop returned on the first color it recognized, reporting
+    that color with its own confidence and every other color zeroed -- so a 40%
+    yellow band beat a 60% green one. The indicators are still recorded in
+    debug info, and no longer adjust any score. The dead
+    `_extract_center_pixels`, a third copy of the old crop, is gone.
+  - `GreenStrategy.post_correction` flipped a Red verdict to Green whenever
+    bare hue pixels in [70, 100] exceeded 0.3 of the crop -- no saturation or
+    value filter, so unlit pixels counted -- and replaced the confidence with
+    that raw ratio. It manufactured confidence from a disambiguation step,
+    which the orange/red tie-break was already fixed not to do, and the runtime
+    has no counterpart. Green now competes on its score.
 - `tests/test_color_integration.py` no longer leaves a `MagicMock` standing in
   for the color verifier. It replaced the module in `sys.modules` at import
   time and never restored it, so whichever suite ran afterwards tested the mock

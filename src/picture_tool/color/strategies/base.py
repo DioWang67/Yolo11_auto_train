@@ -81,8 +81,14 @@ class ColorStrategy(ABC):
         color_range: ColorRange
     ) -> Tuple[bool, float]:
         """
-        Optional fast-path detection for obvious color majorities (like Black/Yellow).
-        Return (True, confidence) to short-circuit the evaluation pipeline.
+        Optional recognizer for an obvious color majority, kept for diagnostics.
+
+        Returning ``(True, confidence)`` no longer short-circuits anything: the
+        caller records it in debug info and scores every color anyway. It used
+        to return early, which reported whichever color was recognized *first*
+        rather than the one that won -- a 40% yellow band beat a 60% green one.
+        The inference runtime removed the same shortcut, so do not reinstate the
+        early return here without changing both sides and the shared fixture.
         """
         return False, 0.0
 
@@ -95,8 +101,12 @@ class ColorStrategy(ABC):
         center_lab: np.ndarray
     ) -> Optional[Tuple[str, float]]:
         """
-        Optional late-stage correction logic (e.g. Green dominance override, Orange/Red tiebreak).
-        Return a new (color, confidence) tuple to override the prediction.
+        Optional late-stage correction logic (e.g. the Orange/Red tiebreak).
+
+        Return a new ``(color, confidence)`` tuple to override the prediction. A
+        correction decides *which* color the region is; it measures nothing new
+        about how strongly the region matches, so it must carry an existing
+        score across rather than invent one from a raw pixel ratio.
         """
         return None
 
@@ -152,16 +162,24 @@ def center_crop(img: np.ndarray, margin_ratio: float = CENTER_MARGIN_RATIO) -> n
     """Crop a centered region, falling back to the full image when it cannot.
 
     Shared so every fast path and the main scoring path judge the *same*
-    pixels. They previously mixed per-axis margins with ``min(h, w)`` margins,
-    so the decisions could legitimately disagree about an elongated region.
+    pixels. The ratio is evaluated independently on width and height, mirroring
+    ``center_crop_by_ratio`` in the inference runtime
+    (``yolo11_inference/core/color_sampling.py``) which the baseline's
+    statistics are measured with. A single ``min(h, w)`` margin keeps a
+    different region of an elongated ROI -- on a wire that is enough to change
+    which color wins, so the two sides have to derive the crop the same way.
     """
-    if img.size == 0:
+    if not isinstance(img, np.ndarray) or img.ndim < 2 or img.size == 0:
+        return img
+    ratio = float(margin_ratio)
+    if not np.isfinite(ratio) or ratio <= 0.0:
         return img
     h, w = img.shape[:2]
-    margin = int(min(h, w) * margin_ratio)
-    if margin <= 0 or margin * 2 >= h or margin * 2 >= w:
+    margin_y = int(h * ratio)
+    margin_x = int(w * ratio)
+    if margin_y <= 0 and margin_x <= 0 or margin_y * 2 >= h or margin_x * 2 >= w:
         return img
-    cropped = img[margin : h - margin, margin : w - margin]
+    cropped = img[margin_y : h - margin_y, margin_x : w - margin_x]
     return cropped if cropped.size else img
 
 
