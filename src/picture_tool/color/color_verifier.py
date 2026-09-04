@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Iterable, List, MutableMapping, Optional
 import cv2
 import numpy as np
 
-from picture_tool.color.strategies.base import ColorRange, center_crop
+from picture_tool.color.strategies.base import ColorRange
 from picture_tool.color.strategies.registry import ColorStrategyRegistry
 
 SUPPORTED_FORMATS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
@@ -144,24 +144,26 @@ def _evaluate_image_improved(
             debug_info[f"{color_name.lower()}_confidence"] = float(conf)
             debug_info[f"{color_name.lower()}_score_adjustment"] = 0.0
 
-    # 2. 取中心區域做進一步分析（與 _apply_color_rules 使用同一種裁切）
-    center_hsv = center_crop(hsv_img)
-    center_lab = center_crop(lab_img)
+    # 2. 全框量測，不再取中心區域裁切。線材在偵測框裡的位置與彎曲程度每片板子
+    # 都不同，假設線材落在固定比例的中心區域，在某些板子上會把線材本身裁掉、
+    # 在另一些板子上又會混入背景。真正的排除雜訊機制現在在每個策略內部：
+    # 逐色相/飽和度/明度比對後，只保留最大連通區塊（見
+    # base.py 的 measure_color_region／largest_matching_blob，鏡射推論端
+    # core/stats_color_checker.py 的同名機制）。
+    #
+    # 這裡仍然算一次全框飽和度，只用來判斷「這張圖有沒有任何可據以判色的證
+    # 據」，讓 _apply_color_rules 知道要不要略過決勝邏輯 —— 不是拿來裁切要
+    # 餵給策略的像素。
+    sat_mask = hsv_img[:, :, 1] >= DEFAULT_SAT_THRESHOLD
+    valid_pixel_count = int(np.count_nonzero(sat_mask))
 
-    # 過濾低飽和度
-    # 常數與比例由原 color_verifier 提供或策略內部處理
-    # DEFAULT_SAT_THRESHOLD 在本體仍保留
-    sat_mask = center_hsv[:, :, 1] >= DEFAULT_SAT_THRESHOLD
-    valid_hsv = center_hsv[sat_mask].reshape(-1, 3)
-    valid_lab = center_lab[sat_mask].reshape(-1, 3)
-
-    if len(valid_hsv) < MIN_VALID_PIXELS:
+    if valid_pixel_count < MIN_VALID_PIXELS:
         # 有效像素太少，這張圖沒有可據以判色的證據。
         # 原本在這裡直接給 Black 0.7 —— 一個剛好高過 Black 門檻(0.45)的
         # 捏造分數，套用在完全沒有量到顏色的區域上，於是曝光不足或洗白的
         # 影像會「通過」顏色檢查。沒有證據的判定必須 fail closed。
         debug_info["insufficient_pixels"] = True
-        debug_info["valid_pixel_count"] = int(len(valid_hsv))
+        debug_info["valid_pixel_count"] = valid_pixel_count
         ratios = {color: 0.0 for color in color_ranges.keys()}
         black_debug = None
         for color_name, color_range in color_ranges.items():
@@ -169,10 +171,11 @@ def _evaluate_image_improved(
                 continue
             strategy = ColorStrategyRegistry.get_strategy(color_name)
             debug_info["black_strategy"] = strategy.__class__.__name__
+            # Black is not saturation-gated (it is the desaturated case), so
+            # it is still worth measuring over the whole box even when no
+            # other color has any evidence at all.
             ratios[color_name], black_debug = strategy.match_ratio(
-                center_hsv.reshape(-1, 3),
-                center_lab.reshape(-1, 3),
-                color_range,
+                hsv_img, lab_img, color_range
             )
             break
         if black_debug is not None:
@@ -180,23 +183,12 @@ def _evaluate_image_improved(
         masks = {color: np.zeros((h, w), dtype=bool) for color in color_ranges.keys()}
         return ratios, masks, debug_info
 
-    # 3. 多型呼叫策略計算分數
+    # 3. 多型呼叫策略計算分數，餵進整個偵測框，由各策略自己裁切/篩選
     ratios = {}
     all_debug = {}
     for color_name, color_range in color_ranges.items():
         strategy = ColorStrategyRegistry.get_strategy(color_name)
-        if color_name.casefold() == "black":
-            score, color_debug = strategy.match_ratio(
-                center_hsv.reshape(-1, 3),
-                center_lab.reshape(-1, 3),
-                color_range,
-            )
-        else:
-            score, color_debug = strategy.match_ratio(
-                valid_hsv,
-                valid_lab,
-                color_range,
-            )
+        score, color_debug = strategy.match_ratio(hsv_img, lab_img, color_range)
         ratios[color_name] = score
         all_debug[color_name] = color_debug
 
@@ -229,13 +221,11 @@ def _apply_color_rules(
         # "差距 < margin" 條件會恆成立，決勝邏輯會憑空產生一個預測。
         return predicted_color, confidence
 
-    center_hsv = center_crop(context.hsv_img)
-    center_lab = center_crop(context.lab_img)
-    
-    # 調用註冊的所有策略嘗試進行後校正 (例如橘紅 tiebreak, 綠色校正)
+    # 整個偵測框，不再是固定比例的中心裁切 —— 要跟 match_ratio 量測的是同一批
+    # 像素，否則決勝邏輯校正的就不是它本來要校正的那個分數。
     for strategy in ColorStrategyRegistry.all_strategies().values():
         result = strategy.post_correction(
-            predicted_color, confidence, context.ratios, center_hsv, center_lab
+            predicted_color, confidence, context.ratios, context.hsv_img, context.lab_img
         )
         if result is not None:
             predicted_color, confidence = result

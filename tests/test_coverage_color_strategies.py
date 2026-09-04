@@ -28,8 +28,12 @@ def _range(name: str, *, mean: bool = True) -> ColorRange:
 def test_green_strategy_match_and_post_correction_paths() -> None:
     strategy = GreenStrategy()
     assert strategy.match_ratio(np.array([]), np.array([]), _range("Green")) == (0.0, {})
-    hsv = np.array([[80, 100, 60], [10, 10, 200]], dtype=float)
-    lab = np.array([[100, 120, 110], [100, 120, 110]], dtype=float)
+    # One row of 8 green-matching pixels beside one row of 8 that clear the
+    # shared saturation gate but not green's own hue window: the matching row
+    # is a single connected block of 8, clearing the largest-matching-blob
+    # floor, so hsv_ratio is still a clean 0.5 of the whole candidate pool.
+    hsv = np.array([[[80, 100, 60]] * 8, [[10, 100, 60]] * 8], dtype=float)
+    lab = np.full((2, 8, 3), [100, 120, 110], dtype=float)
 
     score, debug = strategy.match_ratio(hsv, lab, _range("Green"))
     assert 0.0 < score <= 1.0
@@ -61,8 +65,11 @@ def test_red_orange_match_uses_color_specific_hue_and_optional_lab_chroma(
 ) -> None:
     strategy = RedOrangeStrategy()
     hue = 2 if color == "Red" else 12
-    hsv = np.array([[hue, 200, 180], [50, 200, 180]], dtype=float)
-    lab = np.array([[100, 120, 110], [100, 120, 110]], dtype=float)
+    # One row of 8 color-matching pixels beside one row of 8 that are not, so
+    # the matching row is a single connected block of 8 clearing the
+    # largest-matching-blob floor and hsv_ratio is still a clean 0.5.
+    hsv = np.array([[[hue, 200, 180]] * 8, [[50, 200, 180]] * 8], dtype=float)
+    lab = np.full((2, 8, 3), [100, 120, 110], dtype=float)
     color_range = _range(color, mean=with_lab_mean)
 
     score, debug = strategy.match_ratio(hsv, lab, color_range)
@@ -137,8 +144,11 @@ def test_yellow_strategy_match_and_fast_detection() -> None:
     strategy = YellowStrategy()
     color_range = _range("Yellow")
     assert strategy.match_ratio(np.array([]), np.array([]), color_range) == (0.0, {})
-    hsv = np.array([[25, 150, 200], [10, 30, 50]], dtype=float)
-    lab = np.array([[100, 120, 110], [100, 120, 110]], dtype=float)
+    # One row of 8 yellow-matching pixels beside one row of 8 that are not, so
+    # the matching row is a single connected block of 8 clearing the
+    # largest-matching-blob floor and hsv_ratio is still a clean 0.5.
+    hsv = np.array([[[25, 150, 200]] * 8, [[10, 30, 50]] * 8], dtype=float)
+    lab = np.full((2, 8, 3), [100, 120, 110], dtype=float)
     score, debug = strategy.match_ratio(hsv, lab, color_range)
     assert score > 0
     assert debug["hsv_ratio"] == 0.5
@@ -246,15 +256,24 @@ def test_black_scores_nothing_on_pixels_that_are_not_black() -> None:
         lab_min=np.array([0.0, 0.0, 0.0]),
         lab_max=np.array([10.0, 10.0, 10.0]),
     )
-    bright = np.array([[30.0, 240.0, 250.0]] * 50)
-    lab = np.array([[240.0, 140.0, 200.0]] * 50)
+    bright = np.full((5, 10, 3), [30.0, 240.0, 250.0])
+    lab = np.full((5, 10, 3), [240.0, 140.0, 200.0])
 
     score, _debug = BlackStrategy().match_ratio(bright, lab, color_range)
 
     assert score == pytest.approx(0.0)
 
 
-def test_black_score_is_normalized_by_learned_crop_coverage() -> None:
+def test_black_score_is_the_matched_blobs_share_of_the_whole_box() -> None:
+    """No coverage figure to divide by any more -- the blob's own share stands.
+
+    ``coverage_mean`` recorded how much of a *fixed, differently framed* crop
+    matched during calibration, a property of that crop's geometry rather than
+    of black. A region already isolated by connectivity does not need a
+    second, geometry-coupled number to normalize away contamination it no
+    longer contains. Mirrors the inference repository's
+    ``test_black_score_is_the_matched_blobs_share_of_the_whole_box``.
+    """
     from picture_tool.color.strategies.black import BlackStrategy
 
     color_range = ColorRange(
@@ -263,38 +282,18 @@ def test_black_score_is_normalized_by_learned_crop_coverage() -> None:
         hsv_max=np.array([179.0, 80.0, 80.0]),
         lab_min=np.array([0.0, 120.0, 120.0]),
         lab_max=np.array([80.0, 136.0, 136.0]),
-        coverage_mean=0.4,
     )
-    hsv = np.array(
-        [[0.0, 20.0, 20.0]] * 40 + [[0.0, 0.0, 180.0]] * 60
-    )
-    lab = np.array(
-        [[20.0, 128.0, 128.0]] * 40 + [[180.0, 128.0, 128.0]] * 60
-    )
+    # A solid 40-column-wide dark block against a bright background: one
+    # connected region of 40 * 10 = 400 pixels out of the whole 100x10 = 1000.
+    hsv = np.full((10, 100, 3), [0.0, 0.0, 180.0])
+    hsv[:, :40] = [0.0, 20.0, 20.0]
+    lab = np.full((10, 100, 3), [180.0, 128.0, 128.0])
+    lab[:, :40] = [20.0, 128.0, 128.0]
 
     score, debug = BlackStrategy().match_ratio(hsv, lab, color_range)
 
-    assert debug["raw_ratio"] == pytest.approx(0.4)
-    assert debug["reference_coverage"] == pytest.approx(0.4)
-    assert score == pytest.approx(1.0)
-
-
-def test_black_score_fails_closed_without_learned_crop_coverage() -> None:
-    from picture_tool.color.strategies.black import BlackStrategy
-
-    color_range = ColorRange(
-        name="Black",
-        hsv_min=np.array([0.0, 0.0, 0.0]),
-        hsv_max=np.array([179.0, 255.0, 255.0]),
-        lab_min=np.array([0.0, 0.0, 0.0]),
-        lab_max=np.array([255.0, 255.0, 255.0]),
-    )
-    pixels = np.full((10, 3), 100.0)
-
-    score, debug = BlackStrategy().match_ratio(pixels, pixels, color_range)
-
-    assert score == 0.0
-    assert debug["invalid_reference_coverage"] == 1.0
+    assert debug["blob_pixels"] == 400
+    assert score == pytest.approx(400 / 1000)
 
 
 def test_circular_hue_mean_crosses_the_seam() -> None:
@@ -309,8 +308,10 @@ def test_generic_strategy_uses_a_circular_hue_mean() -> None:
     """Red pixels at 3 and 178 averaged to ~90 -- which is green."""
     from picture_tool.color.strategies.generic import GenericStrategy
 
-    seam = np.array([[3.0, 200.0, 150.0]] * 50 + [[178.0, 200.0, 150.0]] * 50)
-    lab = np.array([[150.0, 150.0, 150.0]] * 100)
+    seam = np.array([[3.0, 200.0, 150.0]] * 50 + [[178.0, 200.0, 150.0]] * 50).reshape(
+        10, 10, 3
+    )
+    lab = np.full((10, 10, 3), [150.0, 150.0, 150.0])
 
     _score, debug = GenericStrategy().match_ratio(seam, lab, _range("Red"))
 

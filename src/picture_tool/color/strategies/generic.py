@@ -4,17 +4,13 @@ from typing import Any, Dict, Tuple
 from picture_tool.color.strategies.base import (
     ColorRange,
     ColorStrategy,
+    circular_hue_distance,
     circular_hue_mean,
     hue_in_range,
+    measure_color_region,
     safe_ratio,
     weighted_score,
 )
-
-
-def circular_hue_distance(h1: float, h2: float) -> float:
-    """Calculate circular distance for hue (0-180 degrees)."""
-    diff = abs(h1 - h2)
-    return float(min(diff, 180 - diff))
 
 
 from picture_tool.color.strategies.registry import ColorStrategyRegistry  # noqa: E402
@@ -25,17 +21,17 @@ class GenericStrategy(ColorStrategy):
 
     def match_ratio(
         self,
-        hsv_vals: np.ndarray,
-        lab_vals: np.ndarray,
+        hsv_img: np.ndarray,
+        lab_img: np.ndarray,
         color_range: ColorRange,
     ) -> Tuple[float, Dict[str, Any]]:
         debug: Dict[str, float] = {}
-        if hsv_vals.size == 0 or lab_vals.size == 0:
+        if hsv_img.size == 0 or lab_img.size == 0:
             return 0.0, debug
 
-        h_vals = hsv_vals[:, 0]
-        s_vals = hsv_vals[:, 1]
-        v_vals = hsv_vals[:, 2]
+        h_vals = hsv_img[:, :, 0]
+        s_vals = hsv_img[:, :, 1]
+        v_vals = hsv_img[:, :, 2]
 
         h_mask = (
             hue_in_range(h_vals, color_range.hsv_min[0], color_range.hsv_max[0])
@@ -45,21 +41,29 @@ class GenericStrategy(ColorStrategy):
             & (v_vals <= color_range.hsv_max[2])
         )
 
-        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
+        hsv_ratio, blob_hsv, blob_lab, candidate_pixels = measure_color_region(
+            hsv_img, lab_img, h_mask
+        )
         debug["hsv_ratio"] = hsv_ratio
+        if candidate_pixels == 0:
+            debug["final_score"] = 0.0
+            return 0.0, debug
 
         lab_mask = (
-            (lab_vals[:, 0] >= color_range.lab_min[0])
-            & (lab_vals[:, 0] <= color_range.lab_max[0])
-            & (lab_vals[:, 1] >= color_range.lab_min[1])
-            & (lab_vals[:, 1] <= color_range.lab_max[1])
-            & (lab_vals[:, 2] >= color_range.lab_min[2])
-            & (lab_vals[:, 2] <= color_range.lab_max[2])
+            (blob_lab[:, 0] >= color_range.lab_min[0])
+            & (blob_lab[:, 0] <= color_range.lab_max[0])
+            & (blob_lab[:, 1] >= color_range.lab_min[1])
+            & (blob_lab[:, 1] <= color_range.lab_max[1])
+            & (blob_lab[:, 2] >= color_range.lab_min[2])
+            & (blob_lab[:, 2] <= color_range.lab_max[2])
         )
-        lab_ratio = safe_ratio(np.count_nonzero(lab_mask), len(lab_vals))
+        # Same denominator as hsv_ratio, not the selection's own size: see
+        # ``measure_color_region``'s docstring and, in the inference
+        # repository, ``core/stats_color_checker.py``'s ``_improved_match_ratio``.
+        lab_ratio = safe_ratio(int(np.count_nonzero(lab_mask)), candidate_pixels)
         debug["lab_ratio"] = lab_ratio
 
-        mean_h = circular_hue_mean(h_vals)
+        mean_h = circular_hue_mean(blob_hsv[:, 0])
         debug["mean_hue"] = mean_h
 
         # Left as None when the baseline carries no hue statistic, so the term

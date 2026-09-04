@@ -4,6 +4,9 @@ from typing import Any, Dict, Tuple
 from picture_tool.color.strategies.base import (
     ColorRange,
     center_crop,
+    circular_hue_distance,
+    circular_hue_mean,
+    measure_color_region,
     safe_ratio,
     weighted_score,
 )
@@ -21,38 +24,57 @@ class YellowStrategy(GenericStrategy):
 
     def match_ratio(
         self,
-        hsv_vals: np.ndarray,
-        lab_vals: np.ndarray,
+        hsv_img: np.ndarray,
+        lab_img: np.ndarray,
         color_range: ColorRange,
     ) -> Tuple[float, Dict[str, Any]]:
         debug: Dict[str, float] = {}
-        if hsv_vals.size == 0 or lab_vals.size == 0:
+        if hsv_img.size == 0 or lab_img.size == 0:
             return 0.0, debug
-            
-        h_vals = hsv_vals[:, 0]
-        s_vals = hsv_vals[:, 1]
-        v_vals = hsv_vals[:, 2]
+
+        h_vals = hsv_img[:, :, 0]
+        s_vals = hsv_img[:, :, 1]
+        v_vals = hsv_img[:, :, 2]
 
         h_mask = (h_vals >= YELLOW_H_RANGE[0]) & (h_vals <= YELLOW_H_RANGE[1]) & (s_vals >= YELLOW_S_MIN) & (v_vals >= YELLOW_V_MIN)
-        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
+        hsv_ratio, blob_hsv, blob_lab, candidate_pixels = measure_color_region(
+            hsv_img, lab_img, h_mask
+        )
         debug["hsv_ratio"] = hsv_ratio
+        if candidate_pixels == 0:
+            debug["final_score"] = 0.0
+            return 0.0, debug
 
-        # Delegate the rest to generic (LAB matching, hue similarity)
-        generic_score, generic_debug = super().match_ratio(hsv_vals, lab_vals, color_range)
-        
+        lab_mask = (
+            (blob_lab[:, 0] >= color_range.lab_min[0])
+            & (blob_lab[:, 0] <= color_range.lab_max[0])
+            & (blob_lab[:, 1] >= color_range.lab_min[1])
+            & (blob_lab[:, 1] <= color_range.lab_max[1])
+            & (blob_lab[:, 2] >= color_range.lab_min[2])
+            & (blob_lab[:, 2] <= color_range.lab_max[2])
+        )
+        lab_ratio = safe_ratio(int(np.count_nonzero(lab_mask)), candidate_pixels)
+        debug["lab_ratio"] = lab_ratio
+
+        mean_h = circular_hue_mean(blob_hsv[:, 0])
+        hue_similarity = None
+        if color_range.hsv_mean is not None:
+            expected_h = float(color_range.hsv_mean[0])
+            hue_dist = circular_hue_distance(mean_h, expected_h)
+            hue_similarity = float(np.exp(-hue_dist / 15.0))
+            debug["hue_similarity"] = hue_similarity
+
         # Yellow weights favor HSV heavily
         weights = {"hsv": 0.5, "lab": 0.2, "hue_sim": 0.3}
         final_score = weighted_score(
             {
                 "hsv": hsv_ratio,
-                "lab": generic_debug.get("lab_ratio", 0.0),
-                "hue_sim": generic_debug.get("hue_similarity"),
+                "lab": lab_ratio,
+                "hue_sim": hue_similarity,
             },
             weights,
         )
-        
-        debug.update(generic_debug)
-        debug["hsv_ratio"] = hsv_ratio
+
         debug["final_score"] = float(final_score)
         return float(final_score), debug
 

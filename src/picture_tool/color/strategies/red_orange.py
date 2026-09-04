@@ -3,6 +3,10 @@ from typing import Any, Dict, Optional, Tuple
 
 from picture_tool.color.strategies.base import (
     ColorRange,
+    DEFAULT_SAT_THRESHOLD,
+    circular_hue_distance,
+    circular_hue_mean,
+    measure_color_region,
     safe_ratio,
     weighted_score,
 )
@@ -18,17 +22,17 @@ class RedOrangeStrategy(GenericStrategy):
 
     def match_ratio(
         self,
-        hsv_vals: np.ndarray,
-        lab_vals: np.ndarray,
+        hsv_img: np.ndarray,
+        lab_img: np.ndarray,
         color_range: ColorRange,
     ) -> Tuple[float, Dict[str, Any]]:
         debug: Dict[str, Any] = {}
-        if hsv_vals.size == 0 or lab_vals.size == 0:
+        if hsv_img.size == 0 or lab_img.size == 0:
             return 0.0, debug
-            
-        h_vals = hsv_vals[:, 0]
-        s_vals = hsv_vals[:, 1]
-        v_vals = hsv_vals[:, 2]
+
+        h_vals = hsv_img[:, :, 0]
+        s_vals = hsv_img[:, :, 1]
+        v_vals = hsv_img[:, :, 2]
 
         if color_range.name == "Red":
             h_mask = (
@@ -43,22 +47,41 @@ class RedOrangeStrategy(GenericStrategy):
                 & (s_vals >= max(color_range.hsv_min[1], 130))
                 & (v_vals >= max(color_range.hsv_min[2], 100))
             )
-            
-        hsv_ratio = safe_ratio(np.count_nonzero(h_mask), len(hsv_vals))
-        debug["hsv_ratio"] = hsv_ratio
 
-        # Reuse generic LAB and Hue Similarity
-        generic_score, generic_debug = super().match_ratio(hsv_vals, lab_vals, color_range)
-        debug.update(generic_debug)
+        hsv_ratio, blob_hsv, blob_lab, candidate_pixels = measure_color_region(
+            hsv_img, lab_img, h_mask
+        )
         debug["hsv_ratio"] = hsv_ratio
+        if candidate_pixels == 0:
+            debug["final_score"] = 0.0
+            return 0.0, debug
+
+        lab_mask = (
+            (blob_lab[:, 0] >= color_range.lab_min[0])
+            & (blob_lab[:, 0] <= color_range.lab_max[0])
+            & (blob_lab[:, 1] >= color_range.lab_min[1])
+            & (blob_lab[:, 1] <= color_range.lab_max[1])
+            & (blob_lab[:, 2] >= color_range.lab_min[2])
+            & (blob_lab[:, 2] <= color_range.lab_max[2])
+        )
+        lab_ratio = safe_ratio(int(np.count_nonzero(lab_mask)), candidate_pixels)
+        debug["lab_ratio"] = lab_ratio
+
+        mean_h = circular_hue_mean(blob_hsv[:, 0])
+        hue_similarity = None
+        if color_range.hsv_mean is not None:
+            expected_h = float(color_range.hsv_mean[0])
+            hue_dist = circular_hue_distance(mean_h, expected_h)
+            hue_similarity = float(np.exp(-hue_dist / 15.0))
+            debug["hue_similarity"] = hue_similarity
 
         # LAB Chroma similarity is specific to O/R. None when the baseline
         # carries no Lab statistic, so the term is dropped instead of scoring a
         # perfect match against a baseline that does not exist.
         lab_chroma_similarity = None
         if color_range.lab_mean is not None:
-            mean_a = float(np.mean(lab_vals[:, 1]))
-            mean_b = float(np.mean(lab_vals[:, 2]))
+            mean_a = float(np.mean(blob_lab[:, 1]))
+            mean_b = float(np.mean(blob_lab[:, 2]))
             expected_a = float(color_range.lab_mean[1])
             expected_b = float(color_range.lab_mean[2])
 
@@ -74,8 +97,8 @@ class RedOrangeStrategy(GenericStrategy):
         final_score = weighted_score(
             {
                 "hsv": hsv_ratio,
-                "lab": debug.get("lab_ratio", 0.0),
-                "hue_sim": debug.get("hue_similarity"),
+                "lab": lab_ratio,
+                "hue_sim": hue_similarity,
                 "lab_chroma": lab_chroma_similarity,
             },
             weights,
@@ -88,10 +111,17 @@ class RedOrangeStrategy(GenericStrategy):
         predicted_color: str,
         confidence: float,
         ratios: Dict[str, float],
-        center_hsv: np.ndarray,
-        center_lab: np.ndarray
+        hsv_img: np.ndarray,
+        lab_img: np.ndarray
     ) -> Optional[Tuple[str, float]]:
-        """Implements the Orange/Red tiebreak logic."""
+        """Implements the Orange/Red tiebreak logic.
+
+        ``hsv_img``/``lab_img`` are the whole detection box, not a fixed
+        geometric center-crop -- matching what ``match_ratio`` above measures
+        against, since a tie-break drawn from a different pixel pool than the
+        scores it is breaking a tie between would not be resolving the same
+        disagreement.
+        """
         if (
             "Orange" not in ratios
             or "Red" not in ratios
@@ -100,15 +130,13 @@ class RedOrangeStrategy(GenericStrategy):
         ):
             return None
 
-        if center_hsv.size == 0 or center_lab.size == 0:
+        if hsv_img.size == 0 or lab_img.size == 0:
             return None
 
-        flat_hsv = center_hsv.reshape(-1, 3)
-        flat_lab = center_lab.reshape(-1, 3)
+        flat_hsv = hsv_img.reshape(-1, 3)
+        flat_lab = lab_img.reshape(-1, 3)
         pair_score = max(ratios["Orange"], ratios["Red"])
-        
-        # Constant from original code
-        DEFAULT_SAT_THRESHOLD = 20.0
+
         sat_mask = flat_hsv[:, 1] >= DEFAULT_SAT_THRESHOLD
         valid_hsv = flat_hsv[sat_mask]
         valid_lab = flat_lab[sat_mask]

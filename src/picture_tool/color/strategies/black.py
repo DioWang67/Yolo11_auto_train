@@ -3,7 +3,8 @@ from typing import Any, Dict, Tuple
 
 from picture_tool.color.strategies.base import (
     ColorRange,
-    safe_ratio,
+    largest_matching_blob,
+    DEFAULT_MIN_BLOB_PIXELS,
 )
 from picture_tool.color.strategies.generic import GenericStrategy
 
@@ -15,56 +16,43 @@ class BlackStrategy(GenericStrategy):
 
     def match_ratio(
         self,
-        hsv_vals: np.ndarray,
-        lab_vals: np.ndarray,
+        hsv_img: np.ndarray,
+        lab_img: np.ndarray,
         color_range: ColorRange,
     ) -> Tuple[float, Dict[str, Any]]:
         debug: Dict[str, float] = {}
-        if hsv_vals.size == 0 or lab_vals.size == 0:
+        if hsv_img.size == 0 or lab_img.size == 0:
             return 0.0, debug
 
-        # Hue is undefined for achromatic pixels. Score the learned S/V and
-        # LAB envelope jointly, then normalize by the crop coverage recorded
-        # when this baseline was built. This is the same contract as the line
-        # inference implementation.
+        # Hue is undefined for achromatic pixels, and unlike every other color
+        # this is not saturation-gated first -- black *is* the desaturated
+        # case. Otherwise this is the same measurement as every chromatic
+        # color now gets: the whole detection box, restricted to its largest
+        # connected match, because black's wire varies board to board the
+        # same way a chromatic one does. Mirrors
+        # ``core/stats_color_checker.py``'s ``_black_baseline_match`` in the
+        # inference repository.
         sv_mask = (
-            (hsv_vals[:, 1] >= color_range.hsv_min[1])
-            & (hsv_vals[:, 1] <= color_range.hsv_max[1])
-            & (hsv_vals[:, 2] >= color_range.hsv_min[2])
-            & (hsv_vals[:, 2] <= color_range.hsv_max[2])
+            (hsv_img[:, :, 1] >= color_range.hsv_min[1])
+            & (hsv_img[:, :, 1] <= color_range.hsv_max[1])
+            & (hsv_img[:, :, 2] >= color_range.hsv_min[2])
+            & (hsv_img[:, :, 2] <= color_range.hsv_max[2])
         )
-        lab_mask = (
-            (lab_vals[:, 0] >= color_range.lab_min[0])
-            & (lab_vals[:, 0] <= color_range.lab_max[0])
-            & (lab_vals[:, 1] >= color_range.lab_min[1])
-            & (lab_vals[:, 1] <= color_range.lab_max[1])
-            & (lab_vals[:, 2] >= color_range.lab_min[2])
-            & (lab_vals[:, 2] <= color_range.lab_max[2])
+        lab_mask = np.all(
+            (lab_img >= color_range.lab_min) & (lab_img <= color_range.lab_max),
+            axis=2,
         )
-        raw_ratio = safe_ratio(np.count_nonzero(sv_mask & lab_mask), len(hsv_vals))
-        reference_coverage = color_range.coverage_mean
-        if (
-            reference_coverage is None
-            or not np.isfinite(reference_coverage)
-            or not 0.0 < reference_coverage <= 1.0
-        ):
-            debug.update(
-                {
-                    "raw_ratio": raw_ratio,
-                    "reference_coverage": 0.0,
-                    "final_score": 0.0,
-                    "invalid_reference_coverage": 1.0,
-                }
-            )
+        blob_mask = largest_matching_blob(
+            sv_mask & lab_mask, DEFAULT_MIN_BLOB_PIXELS
+        )
+        if blob_mask is None:
+            debug.update({"blob_pixels": 0, "final_score": 0.0})
             return 0.0, debug
-        score = min(1.0, raw_ratio / max(reference_coverage, 1e-6))
-        debug.update(
-            {
-                "raw_ratio": raw_ratio,
-                "reference_coverage": float(reference_coverage),
-                "final_score": float(score),
-            }
-        )
+
+        blob_pixels = int(np.count_nonzero(blob_mask))
+        total_pixels = hsv_img.shape[0] * hsv_img.shape[1]
+        score = min(1.0, float(blob_pixels) / float(total_pixels)) if total_pixels else 0.0
+        debug.update({"blob_pixels": blob_pixels, "final_score": float(score)})
         return float(score), debug
 
     def fast_detect(

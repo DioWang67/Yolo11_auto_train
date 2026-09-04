@@ -1,10 +1,20 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Tuple
 
+import cv2
 import numpy as np
 
 #: Fraction trimmed from each side when isolating the center of a region.
 CENTER_MARGIN_RATIO = 0.15
+#: Pixels a chromatic color's per-pixel envelope test must clear before the
+#: pixel counts toward any color at all. Mirrors
+#: ``core/stats_color_checker.py`` in the inference repository.
+DEFAULT_SAT_THRESHOLD = 20.0
+#: Floor on the largest connected matching region, in pixels. Below this, a
+#: color is unmeasurable rather than scored from noise. A real deployment
+#: value needs measuring against real crops before it can move, same as any
+#: other value compared against a threshold.
+DEFAULT_MIN_BLOB_PIXELS = 8.0
 
 
 class ColorRange:
@@ -48,12 +58,18 @@ class ColorStrategy(ABC):
     @abstractmethod
     def match_ratio(
         self,
-        hsv_vals: np.ndarray,
-        lab_vals: np.ndarray,
+        hsv_img: np.ndarray,
+        lab_img: np.ndarray,
         color_range: ColorRange
     ) -> Tuple[float, Dict[str, Any]]:
         """
-        Calculate how well the given pixels match this specific color.
+        Calculate how well the whole detection box matches this specific color.
+
+        ``hsv_img``/``lab_img`` are the whole box in its own 2D shape, not a
+        pre-flattened, pre-cropped pixel list: connected-component selection
+        (see ``measure_color_region``) needs the spatial layout a flat array
+        throws away.
+
         Returns:
             Tuple[float, Dict[str, Any]]: The confidence score (0-1) and debug details.
         """
@@ -139,6 +155,12 @@ def circular_hue_mean(hue_values: np.ndarray) -> float:
     return float(np.mod(mean_angle * (90.0 / np.pi), 180.0))
 
 
+def circular_hue_distance(h1: float, h2: float) -> float:
+    """Shortest distance between two hues on OpenCV's 0..179 circle."""
+    diff = abs(h1 - h2)
+    return float(min(diff, 180 - diff))
+
+
 def hue_in_range(h_vals: np.ndarray, hue_min: float, hue_max: float) -> np.ndarray:
     """Hue membership test that survives the 0/179 seam.
 
@@ -186,6 +208,85 @@ def center_crop(img: np.ndarray, margin_ratio: float = CENTER_MARGIN_RATIO) -> n
 def safe_ratio(count: int, total: int) -> float:
     """Fraction of ``total``, answering 0.0 rather than dividing by zero."""
     return float(count) / total if total else 0.0
+
+
+def largest_matching_blob(
+    match_mask: np.ndarray, min_pixels: float
+) -> Optional[np.ndarray]:
+    """The largest 4-connected region of ``match_mask``, or ``None`` below floor.
+
+    Mirror of ``_largest_matching_blob`` in
+    ``core/stats_color_checker.py`` (inference repository). A detection box is
+    scored for one known expected color, not classified from scratch, so this
+    never has to guess *which* color a region is -- only which pixels, among
+    those already matching that color's envelope, belong to one coherent
+    object rather than to scattered, unrelated pixels elsewhere in the box
+    (board silkscreen, a reflection, a neighboring wire). A wire's position and
+    curve vary board to board; a fixed geometric crop used to exclude that
+    scattered matter by luck, when the wire happened to sit where the crop
+    assumed it would. This excludes it by construction instead.
+
+    ``min_pixels`` rejects a match too small to trust -- a handful of stray
+    pixels sharing a hue is not a wire.
+    """
+    if match_mask.size == 0:
+        return None
+    count, labels = cv2.connectedComponents(
+        match_mask.astype(np.uint8), connectivity=4
+    )
+    if count <= 1:
+        return None
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0  # label 0 is background, never a candidate
+    largest_label = int(np.argmax(sizes))
+    if sizes[largest_label] < min_pixels:
+        return None
+    return labels == largest_label
+
+
+def measure_color_region(
+    hsv_img: np.ndarray,
+    lab_img: np.ndarray,
+    h_mask: np.ndarray,
+    sat_threshold: float = DEFAULT_SAT_THRESHOLD,
+    min_blob_pixels: float = DEFAULT_MIN_BLOB_PIXELS,
+) -> Tuple[float, np.ndarray, np.ndarray, int]:
+    """Restrict a chromatic color's scoring to its largest connected match.
+
+    ``h_mask`` is this color's own hue/sat/value test over the whole
+    detection box, not a fixed geometric sub-crop -- a wire's position and
+    curve vary board to board, so assuming it sits in a fixed fraction of the
+    box discards real wire pixels on some boards and admits board background
+    on others. Combined with the shared saturation gate, only the largest
+    connected region passing both is scored; a stray same-hue pixel elsewhere
+    in the box no longer inflates the ratio just because a rectangle used to
+    exclude it by luck.
+
+    Returns ``(hsv_ratio, measured_hsv, measured_lab, candidate_pixels)``.
+    When nothing forms a connected region at all, ``measured_*`` fall back to
+    the whole saturation-gated pool rather than an empty selection: this is
+    not the contamination problem blob selection exists to fix (a wire sitting
+    somewhere a fixed crop did not expect); it is a genuinely weak hue signal
+    (real desaturation, for instance), and the LAB/hue-mean terms computed
+    from the fallback still carry information a zero ``hsv_ratio`` does not
+    erase.
+    """
+    s_vals = hsv_img[:, :, 1]
+    sat_mask = s_vals >= sat_threshold
+    candidate_pixels = int(np.count_nonzero(sat_mask))
+    if candidate_pixels == 0:
+        empty = np.zeros((0, 3), dtype=hsv_img.dtype)
+        return 0.0, empty, np.zeros((0, 3), dtype=lab_img.dtype), 0
+
+    blob_mask = largest_matching_blob(h_mask & sat_mask, min_blob_pixels)
+    if blob_mask is not None:
+        hsv_ratio = safe_ratio(int(np.count_nonzero(blob_mask)), candidate_pixels)
+        measured_mask = blob_mask
+    else:
+        hsv_ratio = 0.0
+        measured_mask = sat_mask
+
+    return hsv_ratio, hsv_img[measured_mask], lab_img[measured_mask], candidate_pixels
 
 
 def weighted_score(

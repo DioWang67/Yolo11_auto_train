@@ -43,6 +43,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   instead of calibrating from candidate predictions.
 
 ### Fixed
+- The color gate is measured over the whole detection box now, restricted to
+  its largest connected match, mirroring the inference runtime's
+  `stats-robust-v6` contract. Every strategy's `match_ratio` used to receive a
+  pre-flattened, pre-cropped pixel list from a fixed geometric center-crop; it
+  now receives the whole 2D box and does its own saturation-gating and
+  connected-component selection (`measure_color_region`/
+  `largest_matching_blob` in `strategies/base.py`), because a wire's position
+  and curve vary board to board and a fixed crop assumed a fixed position.
+  Black drops `coverage_mean` -- a figure that recorded how much of a
+  *differently framed* crop matched during calibration -- and scores its
+  matched region's own share of the whole box instead; a region already
+  isolated by connectivity does not need a geometry-coupled number to
+  normalize away contamination it no longer contains. `lab_ratio` shares
+  `hsv_ratio`'s denominator (the whole candidate pool) rather than the
+  matched region's own size, which would have let an internally-consistent
+  minority region outscore a legitimate majority whose exact LAB rendering
+  missed its own recorded envelope by a hair -- caught by the shared
+  conformance fixture, not assumed. When nothing forms a connected region at
+  all, LAB and hue-mean terms fall back to the whole saturation-gated pool
+  rather than a hard zero, reproducing the previous behavior for a genuinely
+  weak (not contaminated) hue signal such as real desaturation.
+
+  Verified against the shared conformance fixture: 19 of 21 cases agree with
+  the runtime outright, and the one recorded divergence (`desaturated red`)
+  still diverges for its already-documented reason, not a new one.
+
 - The training color gate now measures what the runtime measures. Three
   differences had it reaching different verdicts on the same part, and the
   shared conformance fixture could not see any of them because every one of its
