@@ -59,6 +59,11 @@ if /I "%~1"=="--import" (
         exit /b 1
     )
     "%PYTHON_EXE%" -m picture_tool.gui.app --import-package "%~2"
+) else if /I "%~1"=="--open" (
+    REM Open the tool with no job pre-selected. Unlike the no-argument
+    REM case below, this does not require a resumable job to exist, so it
+    REM still works once the latest job has already been deployed.
+    "%PYTHON_EXE%" -m picture_tool.gui.app
 ) else if "%~1"=="" (
     "%PYTHON_EXE%" -m picture_tool.gui.app --resume-latest
 ) else (
