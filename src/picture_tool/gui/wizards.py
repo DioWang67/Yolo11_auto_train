@@ -47,6 +47,18 @@ class NewProjectWizard(QDialog):
         form_layout.addRow("Project Name:", self.name_edit)
         form_layout.addRow("Parent Directory:", loc_row)
 
+        # Product and station are what the rest of the system keys datasets
+        # by: the operator handoff requires data/<product>/<area>, so a
+        # project laid out any other way can never enter the retraining or
+        # submission flow.
+        self.product_edit = QLineEdit()
+        self.product_edit.setPlaceholderText("Cable1")
+        form_layout.addRow("Product:", self.product_edit)
+
+        self.area_edit = QLineEdit()
+        self.area_edit.setPlaceholderText("A")
+        form_layout.addRow("Station / Area:", self.area_edit)
+
         self.classes_edit = QLineEdit()
         self.classes_edit.setPlaceholderText("dog, cat, person")
         self.classes_edit.setText("object")  # Default value
@@ -75,6 +87,24 @@ class NewProjectWizard(QDialog):
         if dir_path:
             self.location_edit.setText(dir_path)
 
+    @staticmethod
+    def _validate_segment(value: str, label: str) -> str:
+        """Return a value safe to use as one directory name.
+
+        Product and station become path segments, so anything that could
+        redirect the dataset elsewhere is refused outright rather than
+        sanitized -- a silently rewritten station name would build the
+        project somewhere the operator did not ask for.
+        """
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{label} is required.")
+        if cleaned in {".", ".."} or any(ch in cleaned for ch in '/\\:*?"<>|\0'):
+            raise ValueError(
+                f"{label} must be a plain folder name, without path separators."
+            )
+        return cleaned
+
     def create_project(self):
         name = self.name_edit.text().strip()
         location = self.location_edit.text().strip()
@@ -83,6 +113,13 @@ class NewProjectWizard(QDialog):
             QMessageBox.warning(
                 self, "Missing Info", "Please provide both project name and location."
             )
+            return
+
+        try:
+            self._validate_segment(self.product_edit.text(), "Product")
+            self._validate_segment(self.area_edit.text(), "Station / Area")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Missing Info", str(exc))
             return
 
         project_dir = Path(location) / name
@@ -105,21 +142,38 @@ class NewProjectWizard(QDialog):
         except (OSError, ValueError, yaml.YAMLError) as e:
             QMessageBox.critical(self, "Error", f"Failed to create project: {e}")
 
+    def _dataset_scope(self, root: Path) -> tuple[str, str]:
+        """Return the (product, area) this project's dataset is keyed by.
+
+        Falls back to the project name and a default station so that callers
+        which build a structure without the dialog (tests, scripts) still
+        produce the two-level layout the rest of the system requires.
+        """
+        product = self.product_edit.text().strip() or root.name
+        area = self.area_edit.text().strip() or "A"
+        return product, area
+
     def _create_structure(self, root: Path):
         root.mkdir(parents=True, exist_ok=True)
-        project_name = root.name
+        product, area = self._dataset_scope(root)
 
-        # Standard Data Structure: data/<project>/...
-        data_root = root / "data" / project_name
+        # data/<product>/<area>/... -- the layout operator_handoff validates
+        # against (see its expected_dataset_root check). The old
+        # data/<project>/ shape omitted the station level, so a project made
+        # here could never be handed to the retraining flow.
+        data_root = root / "data" / product / area
         (data_root / "raw" / "images").mkdir(parents=True)
         (data_root / "raw" / "labels").mkdir(parents=True)
         (data_root / "processed").mkdir(parents=True)
         (data_root / "split").mkdir(parents=True)
         (data_root / "qc" / "color_samples").mkdir(parents=True)
         (data_root / "qc" / "position_samples").mkdir(parents=True)
-        
-        # Standard Runs Structure: runs/<project>/...
-        runs_root = root / "runs" / project_name
+        # Holds review_dataset_manifest.csv, the per-image record the handoff
+        # requires. Created empty here; stage 2 (image import) populates it.
+        (data_root / "metadata").mkdir(parents=True)
+
+        # Standard Runs Structure: runs/<product>/<area>/...
+        runs_root = root / "runs" / product / area
         (runs_root / "train").mkdir(parents=True)
         (runs_root / "infer").mkdir(parents=True)
         (runs_root / "quality" / "color").mkdir(parents=True)
@@ -147,12 +201,15 @@ class NewProjectWizard(QDialog):
             class_names = ["object"]
         
         project_name = root.name
+        product, area = self._dataset_scope(root)
         # Use absolute paths for the generated config to ensure stability
-        data_p = (root / "data" / project_name).resolve().as_posix()
-        runs_p = (root / "runs" / project_name).resolve().as_posix()
-        
+        data_p = (root / "data" / product / area).resolve().as_posix()
+        runs_p = (root / "runs" / product / area).resolve().as_posix()
+
         return {
             "project_name": project_name,
+            "product": product,
+            "area": area,
             "run_name": "train",
             "pipeline": {
                 "log_file": f"{runs_p}/logs/pipeline.log",
