@@ -9,6 +9,8 @@ from typing import List
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import QTabWidget, QTextEdit, QWidget
 
+from picture_tool.gui.theme import FONT_MONO, log_severity_status
+
 
 class LogViewer(QWidget):
     """日誌顯示組件，包含 Execution Logs 和 Config Preview tabs"""
@@ -26,13 +28,13 @@ class LogViewer(QWidget):
         # Tab 1: Execution Logs
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFont(QtGui.QFont("Consolas", 9))
+        self.log_text.setFont(QtGui.QFont(FONT_MONO, 9))
         self.tabs.addTab(self.log_text, "Execution Logs")
 
         # Tab 2: Config Preview (YAML)
         self.config_text = QTextEdit()
         self.config_text.setReadOnly(True)
-        self.config_text.setFont(QtGui.QFont("Consolas", 9))
+        self.config_text.setFont(QtGui.QFont(FONT_MONO, 9))
         self.tabs.addTab(self.config_text, "Config YAML")
 
         # NOTE: Layout 由 parent (MainWindow) 控制，這裡不設置
@@ -68,15 +70,13 @@ class LogViewer(QWidget):
         return True
 
     def _render_log_message(self, message: str) -> None:
-        """渲染日誌訊息（保持原始顏色配置）"""
-        color = "#cccccc"  # 預設顏色
-        lower = message.lower()
-        if "error" in lower:
-            color = "#ff6b6b"  # 紅色
-        elif "warning" in lower:
-            color = "#cca700"  # 橘黃色
-        elif "success" in lower:
-            color = "#6BCB77"  # 綠色
-        elif "info" in lower:
-            color = "#4D96FF"  # 藍色
-        self.log_text.append(f'<span style="color:{color};">{message}</span>')
+        """渲染日誌訊息，依嚴重度上色。
+
+        顏色取自 theme 的語意色票（深字），而非原本的深色主題亮字。這是可
+        讀性問題而非美觀問題：主控台已改為淺底，原本那組亮綠、亮紅與淺灰在
+        白底上幾乎看不見，而看不見的錯誤訊息等於沒有錯誤訊息。
+        """
+        status = log_severity_status(message)
+        self.log_text.append(
+            f'<span style="color:{status.text};">{message}</span>'
+        )

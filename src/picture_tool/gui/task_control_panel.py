@@ -25,6 +25,15 @@ from picture_tool.gui.constants import (
     TASK_OPTIONS,
     TASK_OPTIONS_MAP,
 )
+from picture_tool.gui.theme import (
+    FONT_SIZE_TINY,
+    STATUS_INFO,
+    STATUS_NEUTRAL,
+    STATUS_WARN,
+    SemanticColor,
+    muted_text,
+    status_text,
+)
 from picture_tool.gui.workflows import WORKFLOW_PRESET_MAP, ordered_task_keys
 
 
@@ -96,22 +105,22 @@ class TaskControlPanel(QWidget):
         layout.addLayout(grid)
 
         self.workflow_description_label = QLabel("")
-        self.workflow_description_label.setStyleSheet("color: #b5b5b5; font-size: 9pt;")
+        self.workflow_description_label.setStyleSheet(muted_text())
         self.workflow_description_label.setWordWrap(True)
         layout.addWidget(self.workflow_description_label)
 
         self.task_summary_label = QLabel("")
-        self.task_summary_label.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
+        self.task_summary_label.setStyleSheet(muted_text())
         self.task_summary_label.setWordWrap(True)
         layout.addWidget(self.task_summary_label)
 
         self.task_feedback_label = QLabel("")
-        self.task_feedback_label.setStyleSheet("color: #4D96FF; font-size: 9pt;")
+        self.task_feedback_label.setStyleSheet(status_text(STATUS_INFO))
         self.task_feedback_label.setWordWrap(True)
         layout.addWidget(self.task_feedback_label)
 
         self.dependency_label = QLabel("")
-        self.dependency_label.setStyleSheet("color: #b5b5b5; font-size: 8pt;")
+        self.dependency_label.setStyleSheet(muted_text(FONT_SIZE_TINY))
         self.dependency_label.setWordWrap(True)
         layout.addWidget(self.dependency_label)
 
@@ -158,7 +167,9 @@ class TaskControlPanel(QWidget):
         for task_name in ordered:
             label = TASK_OPTIONS_MAP.get(task_name, task_name)
             if task_name in auto_added:
-                parts.append(f"<i style='color:#cca700;'>{label} (auto)</i>")
+                parts.append(
+                    f"<i style='color:{STATUS_WARN.text};'>{label} (auto)</i>"
+                )
             else:
                 parts.append(label)
         self.dependency_label.setText(f"<b>Execution order:</b> {' -> '.join(parts)}")
@@ -173,7 +184,7 @@ class TaskControlPanel(QWidget):
 
     def _clear_all_tasks(self) -> None:
         self._set_selected_tasks([])
-        self._show_task_feedback("Task selection cleared.", color="#aaaaaa")
+        self._show_task_feedback("Task selection cleared.", STATUS_NEUTRAL)
 
     def _set_selected_tasks(self, task_keys: Iterable[str]) -> None:
         selected = set(task_keys)
@@ -193,9 +204,12 @@ class TaskControlPanel(QWidget):
             f"Selected {len(selected)} task(s): {', '.join(labels)}"
         )
 
-    def _show_task_feedback(self, message: str, color: str = "#4D96FF") -> None:
+    def _show_task_feedback(
+        self, message: str, status: SemanticColor = STATUS_INFO
+    ) -> None:
+        """Show one line of feedback about the current task selection."""
         self.task_feedback_label.setText(message)
-        self.task_feedback_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+        self.task_feedback_label.setStyleSheet(status_text(status))
 
     def _populate_preset_combo(self) -> None:
         self.preset_combo.clear()
@@ -229,7 +243,9 @@ class TaskControlPanel(QWidget):
             )
             self.log_message.emit(f"[INFO] Applied workflow {name}: {', '.join(normalized)}")
         else:
-            self._show_task_feedback(f"Workflow {name} has no valid tasks.", "#cca700")
+            self._show_task_feedback(
+                f"Workflow {name} has no valid tasks.", STATUS_WARN
+            )
 
     def _normalize_task_list(self, tasks: Iterable[str], *, name: str) -> List[str]:
         normalized: List[str] = []

@@ -27,7 +27,9 @@ from PyQt5.QtWidgets import (
     QComboBox,
 )
 
-# Placeholder imports - these will be replaced with actual module imports 
+from picture_tool.gui.theme import STATUS_NG, STATUS_OK
+
+# Placeholder imports - these will be replaced with actual module imports
 # once those modules are fully ready/refactored for GUI usage.
 try:
     from picture_tool.color import color_inspection
@@ -72,7 +74,7 @@ class ColorPanel(QWidget):
         
         # Determine status of SAM
         sam_status = "未安裝"
-        sam_color = "#ff6b6b" # Red
+        sam_color = STATUS_NG.text
         if color_inspection:
             try:
                 import os
@@ -80,7 +82,7 @@ class ColorPanel(QWidget):
                     raise ImportError("Bypass ultralytics during pytest")
                 import ultralytics  # noqa: F401
                 sam_status = "已就緒 (SAM 2 Supported)"
-                sam_color = "#6BCB77" # Green
+                sam_color = STATUS_OK.text
             except ImportError:
                 sam_status = "缺少 ultralytics 套件"
         
@@ -133,7 +135,7 @@ class ColorPanel(QWidget):
         # Action Area
         action_layout = QHBoxLayout()
         run_btn = QPushButton("▶ 開始驗證")
-        run_btn.setObjectName("PrimaryBtn")
+        run_btn.setObjectName("primaryAction")
         run_btn.setMinimumHeight(40)
         run_btn.clicked.connect(self._run_verification)
         action_layout.addWidget(run_btn)

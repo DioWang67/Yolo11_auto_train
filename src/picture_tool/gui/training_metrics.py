@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from picture_tool.gui.theme import FONT_SIZE_SMALL, mono_text
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -95,7 +96,7 @@ class TrainingMetricsWidget(QWidget):
         self.cls_loss_label = QLabel("cls: --")
         self.dfl_loss_label = QLabel("dfl: --")
         for lbl in (self.box_loss_label, self.cls_loss_label, self.dfl_loss_label):
-            lbl.setStyleSheet("color: #b5b5b5; font-size: 9pt; font-family: Consolas;")
+            lbl.setStyleSheet(mono_text(size=FONT_SIZE_SMALL))
             loss_row.addWidget(lbl)
         loss_row.addStretch()
         layout.addLayout(loss_row)

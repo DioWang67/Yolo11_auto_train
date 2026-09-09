@@ -14,6 +14,19 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from picture_tool.gui.theme import (
+    BORDER_DIVIDER,
+    RADIUS_CARD,
+    RADIUS_CONTROL,
+    STATUS_INFO,
+    STATUS_NEUTRAL,
+    STATUS_OK,
+    SURFACE_CARD,
+    TEXT_HEADING,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    status_card,
+)
 
 OPERATOR_WORKFLOW_STEPS = (
     "接收資料",
@@ -140,7 +153,9 @@ class OperatorWorkflowPanel(QFrame):
         self.setObjectName("OperatorWorkflowPanel")
         self.setStyleSheet(
             "QFrame#OperatorWorkflowPanel {"
-            "background: #111820; border: 1px solid #2f3b49; border-radius: 10px;"
+            f"background: {SURFACE_CARD}; "
+            f"border: 1px solid {BORDER_DIVIDER}; "
+            f"border-radius: {RADIUS_CARD};"
             "}"
         )
 
@@ -151,7 +166,7 @@ class OperatorWorkflowPanel(QFrame):
         header_layout = QHBoxLayout()
         self.heading_label = QLabel("產線模型補訓")
         self.heading_label.setStyleSheet(
-            "color: #f0f6fc; font-size: 17px; font-weight: 700;"
+            f"color: {TEXT_HEADING}; font-size: 17px; font-weight: 700;"
         )
         self.target_label = QLabel("尚未指定產品／站別")
         self.target_label.setAlignment(
@@ -159,7 +174,7 @@ class OperatorWorkflowPanel(QFrame):
             | QtCore.Qt.AlignVCenter  # type: ignore[attr-defined]
         )
         self.target_label.setStyleSheet(
-            "color: #58a6ff; font-size: 13px; font-weight: 600;"
+            f"color: {STATUS_INFO.text}; font-size: 13px; font-weight: 600;"
         )
         header_layout.addWidget(self.heading_label)
         header_layout.addStretch()
@@ -179,24 +194,23 @@ class OperatorWorkflowPanel(QFrame):
 
         self.state_title_label = QLabel("正在接收補訓資料")
         self.state_title_label.setStyleSheet(
-            "color: #f0f6fc; font-size: 16px; font-weight: 700;"
+            f"color: {TEXT_PRIMARY}; font-size: 16px; font-weight: 700;"
         )
         layout.addWidget(self.state_title_label)
 
         self.state_detail_label = QLabel("")
         self.state_detail_label.setWordWrap(True)
-        self.state_detail_label.setStyleSheet("color: #b8c4d1; font-size: 12px;")
+        self.state_detail_label.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 12px;"
+        )
         layout.addWidget(self.state_detail_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("模型更新 %p%")
-        self.progress_bar.setStyleSheet(
-            "QProgressBar {background: #202b36; border: 0; border-radius: 5px; "
-            "color: white; text-align: center; min-height: 18px;}"
-            "QProgressBar::chunk {background: #2f81f7; border-radius: 5px;}"
-        )
+        # Styling comes from the application stylesheet; this bar has no
+        # reason to look different from any other progress in the tool.
         layout.addWidget(self.progress_bar)
         self.set_state("queued")
 
@@ -251,19 +265,13 @@ class OperatorWorkflowPanel(QFrame):
                 presentation.is_success and index <= presentation.step_index
             )
             is_active = index == presentation.step_index and not presentation.is_success
+            # A step reads as done, current, or not yet reached. Weight
+            # carries the distinction as much as colour does, so the three
+            # stay apart for anyone who cannot separate green from blue.
             if is_completed:
-                style = (
-                    "background: #1f6f3e; color: #d9fbe5; border: 1px solid #2ea44f; "
-                    "border-radius: 6px; font-weight: 600;"
-                )
+                style = status_card(STATUS_OK, RADIUS_CONTROL) + " font-weight: 600;"
             elif is_active:
-                style = (
-                    "background: #174b7a; color: #e6f2ff; border: 1px solid #58a6ff; "
-                    "border-radius: 6px; font-weight: 700;"
-                )
+                style = status_card(STATUS_INFO, RADIUS_CONTROL) + " font-weight: 700;"
             else:
-                style = (
-                    "background: #202b36; color: #8b98a5; border: 1px solid #303b46; "
-                    "border-radius: 6px;"
-                )
+                style = status_card(STATUS_NEUTRAL, RADIUS_CONTROL)
             label.setStyleSheet(style)

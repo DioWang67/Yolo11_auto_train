@@ -30,6 +30,13 @@ from PyQt5.QtWidgets import (
 
 from picture_tool.gui.annotation_tracker import AnnotationTracker
 from picture_tool.gui.labelimg_launcher import LabelImgLauncher
+from picture_tool.gui.theme import (
+    FONT_SIZE_HEADING,
+    FONT_SIZE_LARGE,
+    SURFACE_BANNER,
+    TEXT_ON_BANNER,
+    muted_text,
+)
 from picture_tool.pending_annotations import (
     PendingAnnotationError,
     configure_pending_job_workspace,
@@ -115,7 +122,7 @@ class AnnotationPanel(QWidget):
         edit_btn.clicked.connect(self._edit_annotation_class)
 
         delete_btn = QPushButton("🗑️ 刪除")
-        delete_btn.setObjectName("DangerBtn")
+        delete_btn.setObjectName("dangerAction")
         delete_btn.clicked.connect(self._delete_annotation_class)
 
         import_btn = QPushButton("📥 從配置導入")
@@ -125,7 +132,7 @@ class AnnotationPanel(QWidget):
         import_file_btn.clicked.connect(self._import_classes_from_file_dialog)
 
         save_btn = QPushButton("💾 儲存類別")
-        save_btn.setObjectName("SuccessBtn")
+        save_btn.setObjectName("secondaryAction")
         save_btn.clicked.connect(self._save_annotation_classes)
 
         btn_layout.addWidget(add_btn, 0, 0)
@@ -151,16 +158,19 @@ class AnnotationPanel(QWidget):
             "3. 按 Ctrl+S 儲存；4. 關閉標註工具，系統會自動檢查。"
         )
         self.operator_instruction_label.setWordWrap(True)
+        # The inference GUI's instruction-band idiom, kept rather than
+        # lightened: the same instruction has to read as the same kind of
+        # message in both applications.
         self.operator_instruction_label.setStyleSheet(
-            "font-size: 12pt; font-weight: bold; padding: 12px; "
-            "background: #243447; color: white;"
+            f"font-size: {FONT_SIZE_HEADING}; font-weight: bold; padding: 12px; "
+            f"background: {SURFACE_BANNER}; color: {TEXT_ON_BANNER};"
         )
         self.operator_instruction_label.setVisible(False)
         layout.addWidget(self.operator_instruction_label)
 
         # Statistics
         self.annotation_stats_label = QLabel("尚未掃描")
-        self.annotation_stats_label.setStyleSheet("font-size: 11pt; color: #c9d1d9;")
+        self.annotation_stats_label.setStyleSheet(muted_text(FONT_SIZE_LARGE))
         layout.addWidget(self.annotation_stats_label)
 
         # Progress bar
@@ -196,7 +206,7 @@ class AnnotationPanel(QWidget):
 
         # Launch LabelImg button
         self.launch_annotation_btn = QPushButton("開始標註")
-        self.launch_annotation_btn.setObjectName("PrimaryBtn")
+        self.launch_annotation_btn.setObjectName("primaryAction")
         self.launch_annotation_btn.setMinimumHeight(48)
         self.launch_annotation_btn.clicked.connect(self._launch_labelimg)
         layout.addWidget(self.launch_annotation_btn)
@@ -207,7 +217,7 @@ class AnnotationPanel(QWidget):
         layout.addWidget(self.validate_annotations_btn)
 
         self.complete_pending_btn = QPushButton("我已儲存，重新檢查")
-        self.complete_pending_btn.setObjectName("SuccessBtn")
+        self.complete_pending_btn.setObjectName("secondaryAction")
         self.complete_pending_btn.setEnabled(False)
         self.complete_pending_btn.clicked.connect(
             lambda _checked=False: self._complete_operator_pending()
@@ -221,7 +231,7 @@ class AnnotationPanel(QWidget):
 
         # Start augmentation button
         self.augment_annotation_btn = QPushButton("完成後，開始擴增")
-        self.augment_annotation_btn.setObjectName("SuccessBtn")
+        self.augment_annotation_btn.setObjectName("secondaryAction")
         self.augment_annotation_btn.clicked.connect(
             self._start_augmentation_from_annotation
         )

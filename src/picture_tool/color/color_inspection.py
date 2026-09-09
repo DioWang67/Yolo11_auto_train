@@ -1015,80 +1015,40 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.setWindowTitle("🎨 SAM Color Selection Tool")
         self.setMinimumSize(1200, 800)
 
-        # Apply modern stylesheet
-        self.setStyleSheet("""
-            QWidget {
-                font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
-                background-color: #0d1117;
-                color: #c9d1d9;
-            }
-            QPushButton {
-                background-color: #21262d;
-                border: 1px solid #30363d;
-                color: #c9d1d9;
-                padding: 8px 16px;
-                border-radius: 6px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #30363d;
-                border-color: #484f58;
-            }
-            QPushButton:pressed {
-                background-color: #161b22;
-            }
-            QPushButton#PrimaryBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #1f6feb, stop:1 #58a6ff);
-                border: none;
-                color: #ffffff;
-                font-weight: 600;
-            }
-            QPushButton#PrimaryBtn:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #388bfd, stop:1 #79c0ff);
-            }
-            QPushButton#SuccessBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #238636, stop:1 #2ea043);
-                border: none;
-                color: #ffffff;
-                font-weight: 600;
-            }
-            QPushButton#SuccessBtn:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #2ea043, stop:1 #3fb950);
-            }
-            QLabel {
-                color: #c9d1d9;
+        # This window carried a full second copy of the application
+        # stylesheet, in dark. It predates the tool having one theme, and
+        # once the application went light the copy fought it: the window
+        # painted its own dark ground inside a light tool, and its button
+        # rules shadowed the shared ones. Only the two rules with no
+        # counterpart in the application sheet are kept, and they are built
+        # from the same tokens.
+        #
+        # Imported inside the method on purpose: ``picture_tool.gui`` eagerly
+        # loads the pipeline manager, so importing the theme at module scope
+        # would make this colour tool pull in ``main_pipeline``.
+        from picture_tool.gui.theme import (
+            BORDER_DIVIDER,
+            FONT_SIZE_SMALL,
+            RADIUS_CARD,
+            RADIUS_CONTROL,
+            STATUS_INFO,
+            SURFACE_CARD,
+            SURFACE_MUTED,
+            TEXT_MUTED,
+        )
+
+        self.setStyleSheet(
+            f"""
+            QLabel {{
                 padding: 4px;
-            }
-            QComboBox {
-                background-color: #161b22;
-                border: 2px solid #30363d;
-                color: #c9d1d9;
-                padding: 6px 10px;
-                border-radius: 6px;
-            }
-            QComboBox:hover {
-                border-color: #484f58;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 25px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #161b22;
-                border: 2px solid #30363d;
-                color: #c9d1d9;
-                selection-background-color: #1f6feb;
-            }
-            QScrollArea {
-                border: 2px solid #30363d;
-                border-radius: 8px;
-                background-color: #0d1117;
-            }
-        """)
+            }}
+            QScrollArea {{
+                border: 1px solid {BORDER_DIVIDER};
+                border-radius: {RADIUS_CARD};
+                background-color: {SURFACE_CARD};
+            }}
+        """
+        )
         self.recorder = ColorStatsRecorder()
         self.sam = SamPredictorWrapper(cfg.sam)
         self.sam_image_bgr: Optional[np.ndarray] = None
@@ -1144,18 +1104,22 @@ class SamSelectionWindow(QtWidgets.QWidget):
         self.stats_label = QtWidgets.QLabel("HSV/LAB stats: -")
         self.stats_label.setWordWrap(True)
         self.sam_status_label = QtWidgets.QLabel("SAM: Idle")
-        self.sam_status_label.setStyleSheet("color: #888;")
+        self.sam_status_label.setStyleSheet(f"color: {TEXT_MUTED};")
 
         self.info_label = QtWidgets.QLabel(
             "🖌 拖曳矩形框選區域，左鍵增加正面點，右鍵增加負面點。"
         )
         self.info_label.setWordWrap(True)
         self.info_label.setStyleSheet(
-            "color: #8b949e; font-size: 9pt; padding: 8px; background-color: #161b22; border-radius: 6px;"
+            f"color: {TEXT_MUTED}; font-size: {FONT_SIZE_SMALL}; padding: 8px; "
+            f"background-color: {SURFACE_MUTED}; "
+            f"border-radius: {RADIUS_CONTROL};"
         )
 
         self.prompt_label = QtWidgets.QLabel("📍 Points: 0(+)/0(-)")
-        self.prompt_label.setStyleSheet("font-weight: 600; color: #58a6ff;")
+        self.prompt_label.setStyleSheet(
+            f"font-weight: 600; color: {STATUS_INFO.text};"
+        )
 
         # Navigation buttons
         btn_prev = QtWidgets.QPushButton("◀ Previous")
@@ -1165,11 +1129,11 @@ class SamSelectionWindow(QtWidgets.QWidget):
 
         # Action buttons
         btn_save = QtWidgets.QPushButton("💾 Save Selection")
-        btn_save.setObjectName("SuccessBtn")
+        btn_save.setObjectName("secondaryAction")
         btn_save.clicked.connect(self._save_current_selection)
 
         btn_finish = QtWidgets.QPushButton("✓ Finish & Export")
-        btn_finish.setObjectName("PrimaryBtn")
+        btn_finish.setObjectName("primaryAction")
         btn_finish.clicked.connect(self._finish_session)
 
         # Edit buttons
@@ -1223,13 +1187,15 @@ class SamSelectionWindow(QtWidgets.QWidget):
 
         # Status panel with card style
         status_panel = QtWidgets.QWidget()
-        status_panel.setStyleSheet("""
-            QWidget {
-                background-color: #161b22;
-                border-radius: 8px;
+        status_panel.setStyleSheet(
+            f"""
+            QWidget {{
+                background-color: {SURFACE_MUTED};
+                border-radius: {RADIUS_CARD};
                 padding: 12px;
-            }
-        """)
+            }}
+        """
+        )
         status_layout = QtWidgets.QVBoxLayout(status_panel)
         status_layout.setContentsMargins(12, 12, 12, 12)
         status_layout.addWidget(self.file_label)
@@ -1616,6 +1582,13 @@ def run_gui_session(cfg: SessionConfig):
     owns_app = app is None
     if owns_app:
         app = QtWidgets.QApplication([])
+        # Launched from the CLI rather than from the training GUI, so no
+        # application stylesheet has been installed yet. Installing it here
+        # is what keeps the tool looking the same either way; the window no
+        # longer carries a theme of its own to fall back on.
+        from picture_tool.gui.style_manager import load_stylesheet
+
+        load_stylesheet(app)
     window = SamSelectionWindow(cfg)
     window.show()
     if owns_app:

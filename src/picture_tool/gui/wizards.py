@@ -58,7 +58,7 @@ class NewProjectWizard(QDialog):
 
         btn_layout = QHBoxLayout()
         create_btn = QPushButton("Create Project")
-        create_btn.setObjectName("PrimaryBtn")  # Re-use app style if possible
+        create_btn.setObjectName("primaryAction")
         create_btn.clicked.connect(self.create_project)
 
         cancel_btn = QPushButton("Cancel")

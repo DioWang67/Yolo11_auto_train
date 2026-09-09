@@ -7,6 +7,15 @@ from pathlib import Path
 from typing import Dict, List
 
 import yaml
+from picture_tool.gui.theme import (
+    BORDER_DIVIDER,
+    FONT_SIZE_BODY,
+    STATUS_OK,
+    STATUS_WARN,
+    TEXT_MUTED,
+    log_severity_status,
+    muted_text,
+)
 from picture_tool.operator_acceptance import (
     OperatorAcceptanceError,
     load_operator_acceptance_summary,
@@ -431,22 +440,22 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("Ready to start")
         self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: #888; font-size: 9pt;")
+        self.status_label.setStyleSheet(muted_text())
 
         self.run_summary_label = QLabel("將執行 0 項任務")
         self.run_summary_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.run_summary_label.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
+        self.run_summary_label.setStyleSheet(muted_text())
 
         btns_layout = QHBoxLayout()
         self.start_btn = QPushButton("▶ RUN PIPELINE")
-        self.start_btn.setObjectName("PrimaryBtn")
+        self.start_btn.setObjectName("primaryAction")
         self.start_btn.setMinimumHeight(45)
         self.start_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.start_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.start_btn.clicked.connect(self._start_pipeline_from_ui)
 
         self.stop_btn = QPushButton("⏹ STOP")
-        self.stop_btn.setObjectName("DangerBtn")
+        self.stop_btn.setObjectName("dangerAction")
         self.stop_btn.setMinimumHeight(45)
         self.stop_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setEnabled(False)
@@ -474,13 +483,13 @@ class MainWindow(QMainWindow):
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFrameShadow(QFrame.Shadow.Sunken)
-        line.setStyleSheet("background-color: #3e3e42;")
+        line.setStyleSheet(f"background-color: {BORDER_DIVIDER};")
         line.setFixedHeight(1)
         return line
 
     def _create_hint_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
-        lbl.setStyleSheet("color: #b5b5b5; font-size: 9pt;")
+        lbl.setStyleSheet(muted_text())
         lbl.setWordWrap(True)
         return lbl
 
@@ -694,7 +703,8 @@ class MainWindow(QMainWindow):
                     f"待標註：{target.product}/{target.area}（{target.pending_count} 張）"
                 )
                 self.status_label.setStyleSheet(
-                    "color: #F0AD4E; font-size: 10pt; font-weight: bold;"
+                    f"color: {STATUS_WARN.text}; font-size: {FONT_SIZE_BODY}; "
+                    "font-weight: bold;"
                 )
                 self._start_operator_job_heartbeat()
                 return
@@ -741,7 +751,8 @@ class MainWindow(QMainWindow):
             self.task_control.setEnabled(False)
             self.status_label.setText(f"待開始：{target.product}/{target.area}")
             self.status_label.setStyleSheet(
-                "color: #6BCB77; font-size: 10pt; font-weight: bold;"
+                f"color: {STATUS_OK.text}; font-size: {FONT_SIZE_BODY}; "
+                "font-weight: bold;"
             )
             self.start_btn.setText("開始訓練並部署")
             if not self.start_pipeline():
@@ -937,7 +948,15 @@ class MainWindow(QMainWindow):
     def reset_task_statuses(self, tasks):
         self._rebuild_status_items(default_state="Pending...", only=tasks)
 
-    def _set_task_status(self, task: str, message: str, color=None) -> None:
+    def _set_task_status(self, task: str, message: str) -> None:
+        """Update one task row's leading glyph and detail line.
+
+        State is carried by the glyph rather than by colour. The signature
+        used to take a ``color`` the body never applied, so the two call
+        sites were passing dark-theme values that changed nothing -- they are
+        dropped here rather than translated into light-theme values that
+        would also change nothing.
+        """
         item = self.task_status_items.get(task)
         if item:
             # 使用簡單的符號來表示狀態，讓列表更生動
@@ -987,7 +1006,7 @@ class MainWindow(QMainWindow):
         for task in targets:
             label_text = TASK_OPTIONS_MAP.get(task, task)
             item = QListWidgetItem(f"⚪  {label_text} : {default_state}")
-            item.setForeground(QtGui.QColor("#aaaaaa"))
+            item.setForeground(QtGui.QColor(TEXT_MUTED))
             self.task_status_items[task] = item
             self.status_list.addItem(item)
 
@@ -1192,7 +1211,7 @@ class MainWindow(QMainWindow):
 
     def on_task_started(self, task_name: str):
         """Handle task start."""
-        self._set_task_status(task_name, "Running...", color="#4D96FF")
+        self._set_task_status(task_name, "Running...")
         operator_states = {
             "yolo_augmentation": ("preparing_dataset", "正在進行資料增強", 15),
             "dataset_lint": ("preparing_dataset", "正在檢查訓練資料", 25),
@@ -1219,7 +1238,7 @@ class MainWindow(QMainWindow):
 
     def on_task_completed(self, task_name: str):
         """Handle task completion."""
-        self._set_task_status(task_name, "Done", color="#6BCB77")
+        self._set_task_status(task_name, "Done")
 
     def on_progress_updated(self, value: int):
         """Handle progress update."""
@@ -1234,18 +1253,11 @@ class MainWindow(QMainWindow):
             self.stop_btn.setEnabled(False)
 
     def _render_log_message(self, message: str) -> None:
-        color = "#cccccc"
-        lower = message.lower()
-        if "error" in lower:
-            color = "#ff6b6b"
-        elif "warning" in lower:
-            color = "#cca700"
-        elif "success" in lower:
-            color = "#6BCB77"
-        elif "info" in lower:
-            color = "#4D96FF"
         if self.log_text is not None:
-            self.log_text.append(f'<span style="color:{color};">{message}</span>')
+            status = log_severity_status(message)
+            self.log_text.append(
+                f'<span style="color:{status.text};">{message}</span>'
+            )
 
     def _should_display_log(self, message: str) -> bool:
         if not hasattr(self, "log_filter_combo"):

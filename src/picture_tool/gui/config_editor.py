@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from picture_tool.gui.constants import ANOMALIB_MODEL_DESCRIPTIONS
+from picture_tool.gui.theme import muted_text
 
 
 class ConfigEditor(QWidget):
@@ -192,7 +193,7 @@ class ConfigEditor(QWidget):
 
         self.anomalib_model_hint = QLabel("")
         self.anomalib_model_hint.setWordWrap(True)
-        self.anomalib_model_hint.setStyleSheet("color: #b5b5b5; font-size: 9pt;")
+        self.anomalib_model_hint.setStyleSheet(muted_text())
         layout.addRow("", self.anomalib_model_hint)
         self._set_anomalib_model_hint(model_combo.currentText())
 

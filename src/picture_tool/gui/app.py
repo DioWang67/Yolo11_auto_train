@@ -94,11 +94,15 @@ def main() -> None:
         except (OSError, zipfile.BadZipFile, PortableTrainingImportError) as exc:
             parser.exit(2, f"ERROR: {exc}\n")
     app = QApplication([sys.argv[0], *qt_args])
-    
-    # Set Global Font
-    font = QtGui.QFont("Segoe UI", 9)
-    app.setFont(font)
-    
+
+    # The application font has to agree with the stylesheet's family, not
+    # contradict it: this used to ask for Segoe UI while the sheet asked for
+    # JhengHei first, so Latin text and digits could render from a different
+    # face than the same values do in the inference GUI on the line.
+    from picture_tool.gui.theme import FONT_FAMILY_PRIMARY
+
+    app.setFont(QtGui.QFont(FONT_FAMILY_PRIMARY, 9))
+
     # Launch Main Window
     window = window_class()
     window.set_background_mode(args.background)

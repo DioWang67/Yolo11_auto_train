@@ -23,6 +23,14 @@ from PyQt5.QtCore import pyqtSignal
 
 from picture_tool.gui.wizards import NewProjectWizard
 from picture_tool.gui.readiness import build_project_readiness, format_readiness_preview
+from picture_tool.gui.theme import (
+    STATUS_INFO,
+    STATUS_NG,
+    STATUS_OK,
+    mono_text,
+    muted_text,
+    status_text,
+)
 from picture_tool.path_resolver import parse_project_area_override
 
 class ConfigPanel(QWidget):
@@ -74,13 +82,11 @@ class ConfigPanel(QWidget):
         self.product_override_edit.textChanged.connect(self._on_product_changed)
 
         self.path_preview_label = QLabel("")
-        self.path_preview_label.setStyleSheet("color: #6BCB77; font-size: 8pt; font-family: Consolas;")
+        self.path_preview_label.setStyleSheet(mono_text(STATUS_OK.text))
         self.path_preview_label.setWordWrap(True)
 
         self.readiness_preview_label = QLabel("")
-        self.readiness_preview_label.setStyleSheet(
-            "color: #b5b5b5; font-size: 8pt; font-family: Consolas;"
-        )
+        self.readiness_preview_label.setStyleSheet(mono_text())
         self.readiness_preview_label.setWordWrap(True)
 
         row1 = QHBoxLayout()
@@ -104,7 +110,7 @@ class ConfigPanel(QWidget):
         layout.addLayout(row2)
 
         self.config_status_label = QLabel("尚未載入設定")
-        self.config_status_label.setStyleSheet("color: #aaaaaa; font-size: 9pt;")
+        self.config_status_label.setStyleSheet(muted_text())
         layout.addWidget(self.config_status_label)
 
     def _on_product_changed(self, text: str) -> None:
@@ -118,16 +124,12 @@ class ConfigPanel(QWidget):
         try:
             parsed = parse_project_area_override(text)
         except ValueError as exc:
-            self.path_preview_label.setStyleSheet(
-                "color: #ff6b6b; font-size: 8pt; font-family: Consolas;"
-            )
+            self.path_preview_label.setStyleSheet(mono_text(STATUS_NG.text))
             self.path_preview_label.setText(f"Invalid product input: {exc}")
             self.readiness_preview_label.setText("")
             return
 
-        self.path_preview_label.setStyleSheet(
-            "color: #6BCB77; font-size: 8pt; font-family: Consolas;"
-        )
+        self.path_preview_label.setStyleSheet(mono_text(STATUS_OK.text))
         project = parsed.project
         area = parsed.area or "(config default)"
         data_root = f"data/{project}/{parsed.area}" if parsed.area else f"data/{project}"
@@ -151,18 +153,15 @@ class ConfigPanel(QWidget):
         try:
             readiness = build_project_readiness(self.manager.config, product_override)
         except (OSError, ValueError) as exc:
-            self.readiness_preview_label.setStyleSheet(
-                "color: #ff6b6b; font-size: 8pt; font-family: Consolas;"
-            )
+            self.readiness_preview_label.setStyleSheet(mono_text(STATUS_NG.text))
             self.readiness_preview_label.setText(f"Readiness check failed: {exc}")
             return
 
         has_blocking_warning = not (
             readiness.is_ready_for_yolo or readiness.is_ready_for_anomalib
         )
-        color = "#ff6b6b" if has_blocking_warning else "#b5b5b5"
         self.readiness_preview_label.setStyleSheet(
-            f"color: {color}; font-size: 8pt; font-family: Consolas;"
+            mono_text(STATUS_NG.text) if has_blocking_warning else mono_text()
         )
         self.readiness_preview_label.setText(format_readiness_preview(readiness))
 
@@ -170,7 +169,7 @@ class ConfigPanel(QWidget):
         """Update status label based on current configuration."""
         if not self.manager.config:
             self.config_status_label.setText("尚未載入設定 (無效)")
-            self.config_status_label.setStyleSheet("color: #ff4d4d; font-size: 9pt;")
+            self.config_status_label.setStyleSheet(status_text(STATUS_NG))
             return
 
         proj_name = self.manager.config.get("project_name", "Unknown")
@@ -184,7 +183,7 @@ class ConfigPanel(QWidget):
         self.config_status_label.setText(
             f"✅ {proj_name} / {run_name} ({path_str})"
         )
-        self.config_status_label.setStyleSheet("color: #4D96FF; font-size: 9pt;")
+        self.config_status_label.setStyleSheet(status_text(STATUS_INFO))
 
     # ------------------------------------------------------------------
     # Actions
@@ -221,7 +220,7 @@ class ConfigPanel(QWidget):
         except Exception as e:
             self.log_message.emit(f"[ERROR] Failed to load config: {e}")
             self.config_status_label.setText(f"載入失敗: {e}")
-            self.config_status_label.setStyleSheet("color: #ff4d4d;")
+            self.config_status_label.setStyleSheet(status_text(STATUS_NG))
 
     def load_default_config(self) -> None:
         """Load default config and update UI"""
