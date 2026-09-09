@@ -377,10 +377,15 @@ def run_artifact_bundle(config, args):
                     "This detector bundle intentionally excludes color_stats.json.\n"
                     "The stats color baseline is owned by the station because its "
                     "coverage values are measured in the station ROI geometry.\n"
-                    "Preserve the station's approved stats-robust-v5 baseline, or "
-                    "run the inference GUI color-baseline rebuild before enabling "
-                    "inspection. Do not rename training quality/color/stats.json "
-                    "into this directory.\n",
+                    "Preserve the station's approved baseline, or run the inference "
+                    "GUI color-baseline rebuild before enabling inspection. Do not "
+                    "rename training quality/color/stats.json into this directory.\n"
+                    "The runtime names the baseline algorithm it requires, and "
+                    "refuses an incompatible one under "
+                    "color_baseline_algorithm_enforcement: strict; this notice "
+                    "deliberately does not restate that version, because a copy "
+                    "here would go stale at the next contract bump and send the "
+                    "station after the wrong baseline.\n",
                 )
 
             # Write verbatim files
