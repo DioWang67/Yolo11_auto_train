@@ -1058,6 +1058,10 @@ def apply_handoff_to_config(
         # The immutable review snapshot is the augmentation source, while the
         # splitter must consume the generated variants plus copied originals.
         "split_source_stage": "processed",
+        # Carried so the training run can name the job it came from. Without
+        # this the job identity stops at the GUI, leaving a deployed model
+        # unable to point back at the batch of photos that produced it.
+        "job_id": handoff.job_id,
     }
     augmented_images, augmented_labels = _configure_operator_yolo_augmentation(
         updated,

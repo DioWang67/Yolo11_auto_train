@@ -1,3 +1,4 @@
+import json
 import logging
 import zipfile
 from pathlib import Path
@@ -180,6 +181,36 @@ def _contracted_runtime_name(run_dir: Path) -> str | None:
     return runtime_path.name
 
 
+def _provenance_identifiers(run_dir: Path) -> dict[str, Any]:
+    """Return the training-provenance IDs, without the per-image list.
+
+    Returns an empty mapping when the run predates provenance recording, so
+    the bundle simply omits the file rather than shipping empty fields that
+    would read as "trained on nothing".
+    """
+    metadata_path = run_dir / "last_run_metadata.json"
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict) or not payload.get("dataset_id"):
+        return {}
+    identifiers = {
+        "schema_version": 1,
+        "dataset_id": str(payload["dataset_id"]),
+        "dataset_image_count": payload.get("dataset_image_count"),
+        "trained_at": payload.get("trained_at"),
+        "note": (
+            "Identifiers only. The per-image manifest stays with the "
+            "training project; look this dataset_id up there."
+        ),
+    }
+    job_id = str(payload.get("job_id") or "")
+    if job_id:
+        identifiers["training_job_id"] = job_id
+    return identifiers
+
+
 def find_color_model_source(run_dir: Path, color_model_name: str) -> Path | None:
     """Find the color model/stat file that should be deployed.
 
@@ -337,12 +368,24 @@ def run_artifact_bundle(config, args):
                 if cand.exists():
                     files_to_zip.append((cand, f"{zip_prefix}/{cand.name}"))
 
+    # Identifiers only, deliberately. The full per-image manifest names source
+    # image paths and product codes; a bundle is what crosses to another
+    # station, so it carries the IDs needed to look the batch up at home
+    # rather than the batch itself.
+    provenance_stub = _provenance_identifiers(run_dir)
+
     # Build ZIP
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             # Write rewritten config.yaml
             config_yaml_str = yaml.safe_dump(det_cfg_data, allow_unicode=True, sort_keys=False)
             zf.writestr(f"{zip_prefix}/config.yaml", config_yaml_str)
+
+            if provenance_stub:
+                zf.writestr(
+                    f"{zip_prefix}/training_provenance_ids.json",
+                    json.dumps(provenance_stub, ensure_ascii=False, indent=2),
+                )
 
             # Write weights
             if bcfg.get("include_weights", True):

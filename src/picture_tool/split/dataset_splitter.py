@@ -1,8 +1,10 @@
 import logging
 import hashlib
+import json
 import random
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -31,10 +33,17 @@ def _source_group_key(image_path: Path) -> str:
 
 def _build_source_groups(
     images: List[Path], labels: List[Path], logger: logging.Logger
-) -> List[List[tuple[Path, Path]]]:
-    """Deduplicate identical images and group augmentation families."""
+) -> tuple[List[List[tuple[Path, Path]]], dict[Path, str]]:
+    """Deduplicate identical images and group augmentation families.
+
+    Also returns the content digest of every kept image. The digests are
+    computed here anyway to detect duplicates; returning them lets the
+    provenance manifest record what was trained on without a second full
+    read of every file.
+    """
     by_source: dict[str, List[tuple[Path, Path]]] = {}
     by_digest: dict[str, tuple[str, Path]] = {}
+    digest_by_image: dict[Path, str] = {}
     duplicate_count = 0
     for image_path, label_path in zip(images, labels):
         digest = _sha256_file(image_path)
@@ -50,6 +59,7 @@ def _build_source_groups(
             duplicate_count += 1
             continue
         by_digest[digest] = (label_content, image_path)
+        digest_by_image[image_path] = digest
         by_source.setdefault(_source_group_key(image_path), []).append(
             (image_path, label_path)
         )
@@ -58,7 +68,7 @@ def _build_source_groups(
             "Removed %d byte-identical duplicate image(s) before split.",
             duplicate_count,
         )
-    return [by_source[key] for key in sorted(by_source)]
+    return [by_source[key] for key in sorted(by_source)], digest_by_image
 
 
 def _group_multilabel_matrix(
@@ -80,6 +90,87 @@ def _flatten_groups(
 ) -> tuple[List[Path], List[Path]]:
     pairs = [pair for index in indices for pair in groups[int(index)]]
     return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
+
+
+PROVENANCE_FILENAME = "training_provenance.json"
+PROVENANCE_SCHEMA_VERSION = 1
+
+
+def _review_sample_id(image_path: Path) -> str:
+    """Return the operator sample ID an image came from, or "" if not one."""
+    source_stem = _source_group_key(image_path)
+    if source_stem.startswith("review_"):
+        return source_stem[len("review_") :]
+    return ""
+
+
+def compute_dataset_id(rows: List[dict]) -> str:
+    """Content-address a split assignment.
+
+    Deliberately built only from (split, image digest) so the same photos
+    split the same way yield the same ID on any machine and after any
+    re-copy. ``compute_dir_hash`` cannot be used for this: it digests
+    paths, sizes and mtimes, so copying a dataset changes it while
+    swapping an image's contents may not.
+    """
+    digest = hashlib.sha256()
+    for line in sorted(f"{row['split']}\0{row['sha256']}" for row in rows):
+        digest.update(line.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _write_provenance(
+    staging_dir: Path,
+    splits: dict[str, tuple[List[Path], List[Path]]],
+    digest_by_image: dict[Path, str],
+    class_names: List[str],
+    logger: logging.Logger,
+) -> str:
+    """Record exactly which images entered each split, and return the ID.
+
+    Written into the staging directory so it lands atomically with the
+    split it describes; writing it to the output directory afterwards
+    would be clobbered by the directory swap.
+    """
+    rows: List[dict] = []
+    for split, (images, _labels) in splits.items():
+        for image_path in images:
+            sha = digest_by_image.get(image_path)
+            if sha is None:
+                # Only reachable if a caller supplies groups this function
+                # did not build; recorded as empty rather than guessed.
+                sha = ""
+            rows.append(
+                {
+                    "split": split,
+                    "file_name": image_path.name,
+                    "source_path": str(image_path),
+                    "sha256": sha,
+                    "sample_id": _review_sample_id(image_path),
+                }
+            )
+    rows.sort(key=lambda row: (row["split"], row["file_name"]))
+    dataset_id = compute_dataset_id(rows)
+    payload = {
+        "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "dataset_id": dataset_id,
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "image_count": len(rows),
+        "split_counts": {split: len(images) for split, (images, _) in splits.items()},
+        "class_names": list(class_names),
+        "images": rows,
+    }
+    destination = staging_dir / PROVENANCE_FILENAME
+    destination.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    logger.info(
+        "Recorded training provenance: %d image(s), dataset_id=%s",
+        len(rows),
+        dataset_id[:12],
+    )
+    return dataset_id
 
 
 def _group_review_sample_ids(group: List[tuple[Path, Path]]) -> set[str]:
@@ -270,7 +361,9 @@ def split_dataset(config, log_file=None, logger=None):
         except (ValueError, TypeError, UnicodeDecodeError, OSError):
             pass
 
-    source_groups = _build_source_groups(paired_images, paired_labels, logger)
+    source_groups, digest_by_image = _build_source_groups(
+        paired_images, paired_labels, logger
+    )
     raw_forced_sample_ids = split_config.get("force_train_sample_ids", [])
     if not isinstance(raw_forced_sample_ids, list):
         raise ValueError("force_train_sample_ids 必須是 sample ID 清單")
@@ -472,6 +565,18 @@ def split_dataset(config, log_file=None, logger=None):
     if src_classes.exists():
         shutil.copy2(src_classes, dst_classes)
         logger.info(f"Copied classes.txt to {dst_classes}")
+
+    _write_provenance(
+        staging_dir,
+        {
+            "train": (train_images, train_labels),
+            "val": (val_images, val_labels),
+            "test": (test_images, test_labels),
+        },
+        digest_by_image,
+        class_names if isinstance(class_names, list) else [],
+        logger,
+    )
 
     if output_dir.exists():
         output_dir.replace(backup_dir)

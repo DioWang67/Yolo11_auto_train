@@ -2109,6 +2109,26 @@ def run_deploy(config: dict, args: Any) -> None:
         ).astimezone().isoformat(timespec="seconds")
         deployed_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
         config_snapshot_relative = f"versions/{versioned_name}.config.yaml"
+        # The per-image list is kept beside the weight it describes so the
+        # station can answer "which photos trained this?" without reaching
+        # into the training project, which may be moved or pruned.
+        provenance_source = run_dir / str(
+            training_metadata.get("dataset_provenance_file") or ""
+        ) if training_metadata.get("dataset_provenance_file") else None
+        dataset_dir_recorded = training_metadata.get("dataset_dir")
+        if (
+            provenance_source is not None
+            and not provenance_source.is_file()
+            and dataset_dir_recorded
+        ):
+            # The trainer records the manifest's name, not its location; it
+            # lives with the split it describes, not in the run directory.
+            provenance_source = Path(dataset_dir_recorded) / provenance_source.name
+        provenance_relative = (
+            f"versions/{versioned_name}.provenance.json"
+            if provenance_source is not None and provenance_source.is_file()
+            else None
+        )
         manifest = {
             "schema_version": 2,
             "deployed_version": _version_str(version),
@@ -2134,6 +2154,15 @@ def run_deploy(config: dict, args: Any) -> None:
             "area": area,
             "dataset_hash": training_metadata.get("dataset_hash"),
             "training_config_hash": training_metadata.get("config_hash"),
+            # Content-addressed identity of the images this weight saw, plus
+            # the job that supplied them. dataset_hash above cannot serve this
+            # purpose: it digests paths, sizes and mtimes, so it is neither
+            # reproducible across machines nor resolvable to a file list.
+            "dataset_id": training_metadata.get("dataset_id"),
+            "dataset_image_count": training_metadata.get("dataset_image_count"),
+            "training_job_id": training_metadata.get("job_id"),
+            "training_provenance": provenance_relative,
+            "provenance_confidence": "recorded" if provenance_relative else None,
             "evaluation_metrics": evaluation_gate.get("metrics", {}),
             "evaluation_gate_passed": evaluation_gate.get("passed"),
             "model_acceptance_gate_passed": (
@@ -2198,6 +2227,10 @@ def run_deploy(config: dict, args: Any) -> None:
         # config. This makes later rollback deterministic instead of guessing
         # which thresholds/classes belonged to an old artifact.
         transaction.write_yaml(dest_dir / config_snapshot_relative, deploy_config)
+        if provenance_source is not None and provenance_relative is not None:
+            transaction.copy_verified(
+                provenance_source, dest_dir / provenance_relative
+            )
         transaction.write_yaml(
             versioned_path.with_name(f"{versioned_path.name}.manifest.yaml"),
             manifest,

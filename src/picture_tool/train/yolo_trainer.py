@@ -11,6 +11,7 @@ from picture_tool.utils.experiment import write_experiment
 from picture_tool.utils.experiment import _load_metrics_csv  # type: ignore
 from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
+from picture_tool.split.dataset_splitter import PROVENANCE_FILENAME
 from picture_tool.tracking.experiment_tracker import get_tracker
 
 
@@ -29,6 +30,35 @@ try:
     from ultralytics import YOLO  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover
     YOLO = None  # type: ignore
+
+
+def _read_dataset_provenance(
+    dataset_dir: Any, logger: logging.Logger
+) -> dict[str, Any]:
+    """Summarize the split's provenance manifest for the run metadata.
+
+    Only the identifiers and counts are lifted; the per-image list stays in
+    the split directory so the run metadata does not grow with the dataset.
+    A missing manifest is normal for a split produced before this existed,
+    and yields no keys rather than empty ones -- an absent field reads as
+    "not recorded", while `dataset_id: ""` would read as "recorded nothing".
+    """
+    manifest_path = Path(dataset_dir) / PROVENANCE_FILENAME
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read training provenance: %s", exc)
+        return {}
+    if not isinstance(payload, dict) or not payload.get("dataset_id"):
+        logger.warning("Training provenance at %s is malformed", manifest_path)
+        return {}
+    return {
+        "dataset_id": str(payload["dataset_id"]),
+        "dataset_image_count": int(payload.get("image_count") or 0),
+        "dataset_provenance_file": PROVENANCE_FILENAME,
+    }
 
 
 def _ensure_data_yaml(
@@ -420,6 +450,15 @@ def train_yolo(
             "dataset_dir": str(params["dataset_dir"]),
             "trained_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
+        # dataset_hash above stays exactly as it was: skip_yolo_train compares
+        # it to decide whether training can be skipped. The provenance fields
+        # are additive and answer a different question -- which images these
+        # weights actually saw.
+        metadata.update(_read_dataset_provenance(params["dataset_dir"], logger))
+        handoff_cfg = config.get("operator_handoff") or {}
+        job_id = str(handoff_cfg.get("job_id") or "")
+        if job_id:
+            metadata["job_id"] = job_id
         with open(run_dir / "last_run_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
     except (FileNotFoundError, OSError, ValueError) as e:
