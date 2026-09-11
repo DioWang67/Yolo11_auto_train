@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from picture_tool.autotrain import AutoTrainError
+from picture_tool.autotrain.class_schema import ClassSchema, validate_label_class_ids
 from picture_tool.dataset_manifest_lock import autotrain_store_lock
 
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,11 @@ class DatasetVersion:
     split_policy: Mapping[str, Any]
     description: str
     content_id: str
+    #: The ordered class contract these labels were written against. Recorded
+    #: with the version rather than looked up later: the labels store class
+    #: *ids*, so a version whose schema has to be inferred afterwards is a
+    #: version whose labels have no defined meaning.
+    class_schema: ClassSchema | None = None
     root: Path | None = None
     schema_version: int = LINEAGE_SCHEMA_VERSION
     extra: Mapping[str, Any] = field(default_factory=dict)
@@ -99,6 +105,9 @@ class DatasetVersion:
             "description": self.description,
             "content_id": self.content_id,
             "sample_count": len(self.sample_ids),
+            "class_schema": (
+                self.class_schema.to_dict() if self.class_schema else None
+            ),
             "extra": dict(self.extra),
         }
 
@@ -123,6 +132,11 @@ class DatasetVersion:
                 split_policy=dict(payload.get("split_policy") or {}),
                 description=str(payload.get("description", "")),
                 content_id=str(payload.get("content_id", "")),
+                class_schema=(
+                    ClassSchema.from_dict(payload["class_schema"])
+                    if payload.get("class_schema")
+                    else None
+                ),
                 root=root,
                 schema_version=int(payload.get("schema_version", 0)),
                 extra=dict(payload.get("extra") or {}),
@@ -221,6 +235,7 @@ class DatasetVersionStore:
         *,
         source: str,
         label_source: str,
+        class_schema: ClassSchema,
         description: str = "",
         split_policy: Mapping[str, Any] | None = None,
         parent_version: str | None = None,
@@ -231,6 +246,11 @@ class DatasetVersionStore:
         Built in a staging directory and moved into place only once complete,
         so an interrupted run cannot leave a half-populated version that a
         later cycle would treat as real.
+
+        ``class_schema`` is required, not inferred. These labels store class
+        ids; without the ordered names they were written against, the version
+        records numbers whose meaning has to be guessed later, and a wrong
+        guess trains a model that is confidently mislabelled.
         """
         if not samples:
             raise DatasetVersionError(
@@ -280,10 +300,15 @@ class DatasetVersionStore:
                 split_policy=dict(split_policy or {}),
                 description=description,
                 content_id=content_id_for(sample_ids),
+                class_schema=class_schema,
                 root=destination,
                 extra=dict(extra or {}),
             )
             self._materialise(record, samples, destination)
+            # Checked once the labels are in place and before the version is
+            # handed back: a version is immutable, so an id outside the schema
+            # would be baked in and only surface when a trainer choked on it.
+            validate_label_class_ids(record.labels_dir, class_schema)
         return record
 
     def verify(self, version: str) -> tuple[str, ...]:

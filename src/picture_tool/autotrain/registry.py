@@ -25,6 +25,10 @@ from typing import Any, Mapping
 import yaml
 
 from picture_tool.autotrain import AutoTrainError
+from picture_tool.autotrain.class_schema import (
+    ClassSchema,
+    read_checkpoint_class_schema,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -102,6 +106,10 @@ class CandidateModel:
     training_metrics: Mapping[str, Any] = field(default_factory=dict)
     evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
     promotion_decision: Mapping[str, Any] = field(default_factory=dict)
+    #: The class contract this candidate was trained against. Recorded so a
+    #: later comparison can refuse two models whose class ids mean different
+    #: things before it reads a single metric off them.
+    class_schema: ClassSchema | None = None
     notes: str = ""
     schema_version: int = MANIFEST_SCHEMA_VERSION
 
@@ -124,6 +132,9 @@ class CandidateModel:
             "training_metrics": dict(self.training_metrics),
             "evaluation_metrics": dict(self.evaluation_metrics),
             "promotion_decision": dict(self.promotion_decision),
+            "class_schema": (
+                self.class_schema.to_dict() if self.class_schema else None
+            ),
             "notes": self.notes,
         }
 
@@ -147,6 +158,11 @@ class CandidateModel:
                 training_metrics=dict(payload.get("training_metrics") or {}),
                 evaluation_metrics=dict(payload.get("evaluation_metrics") or {}),
                 promotion_decision=dict(payload.get("promotion_decision") or {}),
+                class_schema=(
+                    ClassSchema.from_dict(payload["class_schema"])
+                    if payload.get("class_schema")
+                    else None
+                ),
                 notes=str(payload.get("notes", "")),
                 schema_version=int(payload.get("schema_version", 0)),
             )
@@ -165,6 +181,10 @@ class ChampionModel:
     dataset_id: str
     evaluation_metrics: Mapping[str, Any]
     source: str
+    #: Filled in by :func:`read_champion_class_schema`, which has to open the
+    #: checkpoint; left unset by the cheap metadata read so that reporting a
+    #: champion does not pay for loading torch.
+    class_schema: ClassSchema | None = None
     status: str = PRODUCTION
 
     def to_dict(self) -> dict[str, Any]:
@@ -175,6 +195,9 @@ class ChampionModel:
             "training_weight_path": self.training_weight_path,
             "dataset_id": self.dataset_id,
             "evaluation_metrics": dict(self.evaluation_metrics),
+            "class_schema": (
+                self.class_schema.to_dict() if self.class_schema else None
+            ),
             "status": self.status,
             "source": self.source,
         }
@@ -229,6 +252,7 @@ class CandidateRegistry:
         parent_model: str = "",
         cycle_id: str = "",
         training_config: Mapping[str, Any] | None = None,
+        class_schema: ClassSchema | None = None,
         notes: str = "",
     ) -> CandidateModel:
         """Create a candidate in ``TRAINING``.
@@ -255,6 +279,7 @@ class CandidateRegistry:
             updated_at=now,
             artifact_path=str(directory),
             training_config=dict(training_config or {}),
+            class_schema=class_schema,
             notes=notes,
         )
         directory.mkdir(parents=True, exist_ok=True)
@@ -384,6 +409,39 @@ def read_champion(model_dir: str | Path) -> ChampionModel | None:
         evaluation_metrics={},
         source=str(directory / "config.yaml"),
     )
+
+
+def station_class_schema(model_dir: str | Path) -> ClassSchema | None:
+    """The deployed champion's class contract for a station, if there is one.
+
+    The one-call form of "read the champion, then read its checkpoint", so
+    callers that only need the contract do not each repeat the two steps and
+    risk one of them drifting.
+    """
+    champion = read_champion(model_dir)
+    if champion is None:
+        return None
+    return read_champion_class_schema(champion)
+
+
+def read_champion_class_schema(champion: ChampionModel) -> ClassSchema | None:
+    """Read the champion's own class contract from its training checkpoint.
+
+    The checkpoint is the strongest statement of what the deployed model's
+    class ids mean --- it is what inference itself reads at load time, and
+    what every production record's ``class_names`` is derived from. Nothing
+    else in production states it: the deployment manifest records checksums,
+    metrics and paths but carries no class list at all, and the station
+    ``config.yaml`` has only ``expected_items``, which is not one.
+
+    Separate from :func:`read_champion` because this opens the weight file.
+    Returns ``None`` when there is no readable ``.pt`` to open, leaving the
+    caller to fall through to another source rather than fail here.
+    """
+    path = champion.training_weight_path or champion.weights_path
+    if not path:
+        return None
+    return read_checkpoint_class_schema(path)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

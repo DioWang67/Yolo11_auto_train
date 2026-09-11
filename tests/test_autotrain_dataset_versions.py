@@ -13,6 +13,13 @@ from picture_tool.autotrain.dataset_versions import (
     LabelledSample,
     content_id_for,
 )
+from picture_tool.autotrain.class_schema import normalize_class_names
+
+#: The real Cable1/A contract, in the order the station's champion and
+#: every handoff manifest record it.
+SCHEMA = normalize_class_names(
+    ["Black", "Green", "Orange", "Red", "Yellow"], source="test"
+)
 
 
 def _sample(tmp_path: Path, sample_id: str, *, label: str | None = "0 0.5 0.5 0.2 0.2"):
@@ -33,7 +40,11 @@ def _store(tmp_path: Path) -> DatasetVersionStore:
 
 
 def _create(store, tmp_path, ids, **kwargs):
-    options = {"source": "pool", "label_source": "operator"}
+    options = {
+        "source": "pool",
+        "label_source": "operator",
+        "class_schema": SCHEMA,
+    }
     options.update(kwargs)
     return store.create([_sample(tmp_path, i) for i in ids], **options)
 
@@ -221,6 +232,7 @@ def test_a_verified_negative_gets_an_explicit_empty_label(tmp_path):
         [_sample(tmp_path, "empty", label=None)],
         source="pool",
         label_source="operator",
+        class_schema=SCHEMA,
     )
 
     assert (version.labels_dir / "empty.txt").is_file()
@@ -233,7 +245,9 @@ def test_a_verified_negative_gets_an_explicit_empty_label(tmp_path):
 
 def test_an_empty_dataset_version_is_refused(tmp_path):
     with pytest.raises(DatasetVersionError, match="nothing to"):
-        _store(tmp_path).create([], source="pool", label_source="operator")
+        _store(tmp_path).create(
+            [], source="pool", label_source="operator", class_schema=SCHEMA
+        )
 
 
 def test_duplicate_sample_ids_are_refused(tmp_path):
@@ -241,7 +255,12 @@ def test_duplicate_sample_ids_are_refused(tmp_path):
     duplicate = _sample(tmp_path, "a")
 
     with pytest.raises(DatasetVersionError, match="Duplicate sample id"):
-        store.create([duplicate, duplicate], source="pool", label_source="operator")
+        store.create(
+            [duplicate, duplicate],
+            source="pool",
+            label_source="operator",
+            class_schema=SCHEMA,
+        )
 
 
 def test_a_missing_image_aborts_without_leaving_a_partial_version(tmp_path):
@@ -251,7 +270,12 @@ def test_a_missing_image_aborts_without_leaving_a_partial_version(tmp_path):
     broken.image_path.unlink()
 
     with pytest.raises(DatasetVersionError, match="no image"):
-        store.create([good, broken], source="pool", label_source="operator")
+        store.create(
+            [good, broken],
+            source="pool",
+            label_source="operator",
+            class_schema=SCHEMA,
+        )
 
     assert store.list_versions() == ()
     assert not (store.root / "dataset_v001").exists()
