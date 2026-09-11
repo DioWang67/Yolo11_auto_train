@@ -42,12 +42,21 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from picture_tool.autotrain.class_schema import (  # noqa: E402
+    ClassSchema,
+    normalize_class_names,
+    resolve_class_schema,
+    schema_from_station_config,
+)
 from picture_tool.autotrain.dataset_versions import (  # noqa: E402
     DatasetVersionStore,
     LabelledSample,
 )
 from picture_tool.autotrain.paths import AutoTrainPaths  # noqa: E402
-from picture_tool.autotrain.registry import read_champion  # noqa: E402
+from picture_tool.autotrain.registry import (  # noqa: E402
+    read_champion,
+    read_champion_class_schema,
+)
 from picture_tool.autotrain.trainer import train_candidate  # noqa: E402
 from picture_tool.config_loader import load_config  # noqa: E402
 
@@ -112,19 +121,18 @@ def find_job(data_root: Path, product: str, area: str, job_id: str) -> Path:
     )
 
 
-def read_class_names(job_raw: Path) -> list[str]:
-    """Class order from the job's own data.yaml.
+def read_job_class_schema(job_raw: Path) -> ClassSchema | None:
+    """The class order recorded in the job's own data.yaml.
 
-    Taken from the job rather than the station config on purpose: this is the
-    order the labels were written against, and a challenger trained on a
-    different order would be incomparable to the champion.
+    This is what the job's labels were actually written against, so it is the
+    sharpest available cross-check on the contract resolved from the station.
     """
     for data_yaml in sorted(job_raw.parent.rglob("data.yaml")):
         payload = yaml.safe_load(data_yaml.read_text(encoding="utf-8"))
         names = (payload or {}).get("names")
-        if isinstance(names, list) and names:
-            return [str(name) for name in names]
-    raise SystemExit(f"No data.yaml with a class list found under {job_raw.parent}")
+        if names:
+            return normalize_class_names(names, source=f"job:{data_yaml.name}")
+    return None
 
 
 def collect_samples(job_raw: Path) -> list[LabelledSample]:
@@ -171,14 +179,8 @@ def main(argv: list[str] | None = None) -> int:
 
     data_root = paths.workspace.training_project / "data"
     job_raw = find_job(data_root, args.product, args.area, args.job)
-    class_names = read_class_names(job_raw)
     samples = collect_samples(job_raw)
-    LOGGER.info(
-        "Using %d labelled samples from %s (classes: %s)",
-        len(samples),
-        job_raw,
-        ", ".join(class_names),
-    )
+    LOGGER.info("Using %d labelled samples from %s", len(samples), job_raw)
 
     champion = read_champion(paths.production_model_dir(args.product, args.area))
     if champion is None:
@@ -190,6 +192,19 @@ def main(argv: list[str] | None = None) -> int:
     base_model = champion.training_weight_path or champion.weights_path
     LOGGER.info("Continuing from champion weight %s", base_model)
 
+    # The same resolution a cycle performs, against the same sources, plus
+    # the job's own data.yaml -- the order its labels were written against.
+    model_dir = paths.production_model_dir(args.product, args.area)
+    class_schema = resolve_class_schema(
+        [
+            read_champion_class_schema(champion),
+            schema_from_station_config(model_dir),
+            read_job_class_schema(job_raw),
+        ],
+        context=f"{args.product}/{args.area}",
+    )
+    LOGGER.info("Class contract: %s", class_schema.describe())
+
     store = DatasetVersionStore(
         scratch / "datasets", product=args.product, area=args.area
     )
@@ -197,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         samples,
         source=f"operator_handoff:{job_raw.parents[3].name}",
         label_source="human",
+        class_schema=class_schema,
         description="Smoke run of the real training interface",
     )
     problems = store.verify(version.version)
@@ -212,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         work_dir=scratch / "work",
         model_version=f"{args.product}_{args.area}_smoke_candidate",
         base_model=str(base_model),
-        class_names=class_names,
+        class_schema=class_schema,
         epochs=args.epochs,
         imgsz=args.imgsz,
         batch=args.batch,
