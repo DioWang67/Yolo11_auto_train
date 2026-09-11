@@ -7,12 +7,20 @@ from pathlib import Path
 import pytest
 
 from picture_tool.autotrain import golden
+from picture_tool.autotrain.class_schema import normalize_class_names
 from picture_tool.autotrain.evaluator import (
     COMPLETED,
     INVALIDATED,
     EvaluationError,
     evaluate_candidate,
     golden_data_yaml,
+)
+
+#: The real Cable1/A contract. A golden set is registered against one,
+#: so that a later evaluation can refuse a model whose ids mean something
+#: else rather than silently comparing different classes.
+SCHEMA = normalize_class_names(
+    ["Black", "Green", "Orange", "Red", "Yellow"], source="test"
 )
 
 
@@ -179,7 +187,7 @@ def _registered_golden(tmp_path, *, with_data_yaml: bool):
     (root / "a.jpg").write_bytes(b"golden-a")
     if with_data_yaml:
         (root / "data.yaml").write_text("path: .\nval: images\n", encoding="utf-8")
-    dataset = golden.register(root, registered_by="engineer")
+    dataset = golden.register(root, class_schema=SCHEMA, registered_by="engineer")
     return golden.resolve(str(root), dataset.manifest_sha256)
 
 

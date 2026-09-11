@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from picture_tool.autotrain import golden
+from picture_tool.autotrain.class_schema import normalize_class_names
 from picture_tool.autotrain.golden import (
     CONTAMINATED,
     INVALID,
@@ -21,6 +22,13 @@ from picture_tool.autotrain.golden import (
     NOT_CONFIGURED,
     OK,
     GoldenDatasetError,
+)
+
+#: The real Cable1/A contract. A golden set is registered against one,
+#: so that a later evaluation can refuse a model whose ids mean something
+#: else rather than silently comparing different classes.
+SCHEMA = normalize_class_names(
+    ["Black", "Green", "Orange", "Red", "Yellow"], source="test"
 )
 
 
@@ -38,7 +46,7 @@ def _registered(tmp_path: Path, contents=None):
     root = _golden_dir(
         tmp_path, contents or {"a.jpg": b"image-a", "b.jpg": b"image-b"}
     )
-    dataset = golden.register(root, registered_by="engineer", description="v1 set")
+    dataset = golden.register(root, class_schema=SCHEMA, registered_by="engineer", description="v1 set")
     return root, dataset
 
 
@@ -67,7 +75,7 @@ def test_registration_records_what_is_there_without_moving_it(tmp_path):
     root = _golden_dir(tmp_path, {"a.jpg": b"image-a", "sub/b.png": b"image-b"})
     before = sorted(p.name for p in root.rglob("*") if p.is_file())
 
-    dataset = golden.register(root, registered_by="engineer")
+    dataset = golden.register(root, class_schema=SCHEMA, registered_by="engineer")
 
     after = sorted(p.name for p in root.rglob("*") if p.is_file())
     assert after == sorted([*before, "golden_manifest.json"])
@@ -79,7 +87,7 @@ def test_registration_requires_an_owner(tmp_path):
     root = _golden_dir(tmp_path, {"a.jpg": b"image-a"})
 
     with pytest.raises(GoldenDatasetError, match="registered_by is required"):
-        golden.register(root, registered_by="  ")
+        golden.register(root, class_schema=SCHEMA, registered_by="  ")
 
 
 def test_registration_refuses_an_empty_directory(tmp_path):
@@ -87,21 +95,21 @@ def test_registration_refuses_an_empty_directory(tmp_path):
     root.mkdir()
 
     with pytest.raises(GoldenDatasetError, match="nothing to register"):
-        golden.register(root, registered_by="engineer")
+        golden.register(root, class_schema=SCHEMA, registered_by="engineer")
 
 
 def test_registration_refuses_a_missing_directory(tmp_path):
     with pytest.raises(GoldenDatasetError, match="not found"):
-        golden.register(tmp_path / "nope", registered_by="engineer")
+        golden.register(tmp_path / "nope", class_schema=SCHEMA, registered_by="engineer")
 
 
 def test_re_registration_is_refused_unless_explicitly_intended(tmp_path):
     root, _ = _registered(tmp_path)
 
     with pytest.raises(GoldenDatasetError, match="locked once"):
-        golden.register(root, registered_by="engineer")
+        golden.register(root, class_schema=SCHEMA, registered_by="engineer")
 
-    replacement = golden.register(root, registered_by="engineer", overwrite=True)
+    replacement = golden.register(root, class_schema=SCHEMA, registered_by="engineer", overwrite=True)
     assert replacement.image_count == 2
 
 

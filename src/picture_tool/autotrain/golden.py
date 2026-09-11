@@ -28,12 +28,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from picture_tool.autotrain import AutoTrainError
+from picture_tool.autotrain.class_schema import ClassSchema
 
 LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +75,13 @@ class GoldenDataset:
     registered_by: str
     registered_at: str
     description: str
+    #: The class contract these labels were drawn against. A golden set whose
+    #: class order differs from the model under test measures nothing: every
+    #: per-class number would compare two different classes.
+    class_schema: ClassSchema | None = None
+    #: Per-sample ``representative`` / ``hard_case`` label, where the person
+    #: who assembled the set said which is which. Absent means unsplit.
+    groups: Mapping[str, str] = field(default_factory=dict)
     schema_version: int = MANIFEST_SCHEMA_VERSION
 
     @property
@@ -118,14 +126,22 @@ def register(
     root: str | Path,
     *,
     registered_by: str,
+    class_schema: ClassSchema,
     description: str = "",
+    groups: Mapping[str, str] | None = None,
     overwrite: bool = False,
 ) -> GoldenDataset:
     """Lock an existing directory as a golden evaluation set.
 
     Does not select, copy or move any data --- it records what is already
     there and hashes it. ``registered_by`` is required so the record says who
-    made this call.
+    made this call: this is the approval marker, and a set with nobody's name
+    on it is not approved.
+
+    ``class_schema`` is required for the same reason it is required of a
+    dataset version. These labels store class ids, and a yardstick whose ids
+    mean something different from the model's is worse than no yardstick --- it
+    reports confident numbers about the wrong classes.
     """
     directory = Path(root).expanduser().resolve()
     if not directory.is_dir():
@@ -157,6 +173,8 @@ def register(
         "description": description,
         "images": {sample_id: relative for sample_id, relative in sorted(images.items())},
         "image_count": len(images),
+        "class_schema": class_schema.to_dict(),
+        "groups": {key: str(value) for key, value in sorted((groups or {}).items())},
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     manifest_path.write_text(serialized, encoding="utf-8")
@@ -170,6 +188,8 @@ def register(
         registered_by=registered_by.strip(),
         registered_at=str(payload["registered_at"]),
         description=description,
+        class_schema=class_schema,
+        groups=dict(groups or {}),
     )
 
 
@@ -234,6 +254,12 @@ def resolve(
         registered_by=str(payload.get("registered_by", "")),
         registered_at=str(payload.get("registered_at", "")),
         description=str(payload.get("description", "")),
+        class_schema=(
+            ClassSchema.from_dict(payload["class_schema"])
+            if payload.get("class_schema")
+            else None
+        ),
+        groups={str(k): str(v) for k, v in (payload.get("groups") or {}).items()},
         schema_version=int(payload.get("schema_version", 0)),
     )
 

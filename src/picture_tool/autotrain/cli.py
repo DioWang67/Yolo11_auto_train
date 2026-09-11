@@ -16,6 +16,10 @@ import typer
 
 from picture_tool.autotrain import AutoTrainDisabledError, AutoTrainError
 from picture_tool.autotrain import golden as golden_module
+from picture_tool.autotrain.class_schema import (
+    resolve_class_schema,
+    schema_from_station_config,
+)
 from picture_tool.autotrain.config import AutoTrainConfig
 from picture_tool.autotrain.labeling import (
     export_request,
@@ -24,6 +28,10 @@ from picture_tool.autotrain.labeling import (
 )
 from picture_tool.autotrain.orchestrator import TrainingCycle, run_training_cycle
 from picture_tool.autotrain.paths import AutoTrainPaths
+from picture_tool.autotrain.registry import (
+    read_champion,
+    read_champion_class_schema,
+)
 from picture_tool.autotrain.service import AutoTrainService
 
 app = typer.Typer(
@@ -236,13 +244,32 @@ def golden_register(
     registered_by: str = typer.Option(..., help="Who is registering this set."),
     description: str = typer.Option("", help="What this set covers."),
     overwrite: bool = typer.Option(False, help="Replace an existing registration."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+    product: str = typer.Option("", help="Station product."),
+    area: str = typer.Option("", help="Station area."),
 ):
     """Lock a directory as the golden evaluation set."""
 
     def action():
+        # Resolved from the station rather than asked for on the command
+        # line: the contract the golden labels must agree with is whatever
+        # the deployed model uses, not whatever the person typing remembers.
+        service = _service(config, product, area)
+        model_dir = service.paths.production_model_dir(
+            service.product, service.area
+        )
+        champion = read_champion(model_dir)
+        schema = resolve_class_schema(
+            [
+                read_champion_class_schema(champion) if champion else None,
+                schema_from_station_config(model_dir),
+            ],
+            context=f"{service.product}/{service.area}",
+        )
         dataset = golden_module.register(
             path,
             registered_by=registered_by,
+            class_schema=schema,
             description=description,
             overwrite=overwrite,
         )
@@ -251,6 +278,7 @@ def golden_register(
                 "root": str(dataset.root),
                 "image_count": dataset.image_count,
                 "manifest_sha256": dataset.manifest_sha256,
+                "class_schema": schema.to_dict(),
                 "next": "put dataset_path and manifest_sha256 in the settings file",
             }
         )
