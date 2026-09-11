@@ -1,0 +1,87 @@
+# Autonomous training (Phase 1) — a parallel path beside the production flow.
+#
+# While `enabled` is false the whole subsystem is inert: every entry point
+# refuses before touching the filesystem, and no production behaviour changes.
+# Nothing in yolo11_inference imports this package, so disabling it here is not
+# just a flag — the code is structurally absent from the production path.
+#
+# This path NEVER deploys. It produces a challenger model, an evaluation
+# against the deployed champion, and a recommendation. Adopting a challenger
+# stays a named human action in the existing
+# "工程設定 > 檢測評估版本" release flow.
+
+autonomous_training:
+  enabled: false
+
+  # Which station this configuration describes. Both are required once
+  # enabled, and each must be a single path segment.
+  station:
+    product: Cable1
+    area: A
+
+  # How much production history one collection pass reads. The collector only
+  # ever reads production records; it copies selected images into its own pool
+  # immediately, because the inference project's retention policy can delete
+  # PASS images (default 30 days) before the next cycle runs.
+  collector:
+    lookback_days: 7
+    max_records: 5000
+    compute_image_quality: true
+
+  # Candidates are chosen automatically but NOT labelled automatically: the
+  # pool feeds a human labelling queue. Predictions are never used as ground
+  # truth — doing so reinforces the model's own errors, which is why the
+  # operator flow already forbids it.
+  selectors:
+    low_confidence:
+      enabled: true
+      conf_below: 0.55
+      max_samples: 200
+    review_correction:
+      enabled: true
+      max_samples: 500
+    random_sample:
+      enabled: true
+      fraction: 0.01
+      max_samples: 50
+      seed: 20260910
+
+    # Reserved for a later phase. The keys are accepted so the shape is
+    # stable, but switching one on is refused rather than silently ignored.
+    model_disagreement:
+      enabled: false
+    class_imbalance:
+      enabled: false
+    embedding_novelty:
+      enabled: false
+    distribution_drift:
+      enabled: false
+
+  # Locked evaluation dataset. Leave dataset_path empty until a real golden
+  # set has been chosen by a human: evaluation then reports NOT_CONFIGURED and
+  # promotion is refused (fail-closed). Do not point this at data that took
+  # part in training or model selection.
+  golden:
+    dataset_path: ""
+    manifest_sha256: ""
+
+  # Challenger training. base_model: champion continues from the currently
+  # deployed weight, which preserves the classes the line already detects.
+  training:
+    base_model: champion
+    epochs: 50
+    imgsz: 640
+    device: auto
+    batch: 4
+
+  # Deterministic promotion thresholds. No judgement call is delegated to a
+  # model or an agent: this decides PROMOTION_CANDIDATE vs REJECTED.
+  # max_overall_regression mirrors the existing deployment gate's own default
+  # so the two gates cannot disagree by accident.
+  promotion:
+    min_map50_delta: 0.0
+    max_overall_regression: 0.02
+    critical_classes: []
+    max_critical_class_recall_drop: 0.005
+    max_false_negatives: 0
+    require_golden_pass: true

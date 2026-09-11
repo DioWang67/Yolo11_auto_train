@@ -1,0 +1,398 @@
+"""Registry of challenger models.
+
+This registry owns *candidates* only. The deployed champion is not recorded
+here --- it is read from the production project's own
+``deployment_manifest.yaml`` and station ``config.yaml``, which are already
+the authority on what the line is running. A second copy would be a second
+truth, and the two would disagree the first time someone activated a model
+through the existing release flow without telling this subsystem.
+
+So ``PRODUCTION`` is a status this registry can *report* but never *assign*.
+Nothing here can change which model production loads.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import tempfile
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping
+
+import yaml
+
+from picture_tool.autotrain import AutoTrainError
+
+LOGGER = logging.getLogger(__name__)
+
+MANIFEST_FILENAME = "manifest.json"
+MANIFEST_SCHEMA_VERSION = 1
+
+#: Read from production, never assigned here.
+PRODUCTION = "PRODUCTION"
+#: A training run is in flight.
+TRAINING = "TRAINING"
+#: Training finished and produced weights.
+TRAINED = "TRAINED"
+#: Evaluation against the champion is in flight.
+EVALUATING = "EVALUATING"
+#: Evaluated and found not better, per the promotion policy.
+REJECTED = "REJECTED"
+#: Evaluated and worth a human's consideration. Still not deployed.
+PROMOTION_CANDIDATE = "PROMOTION_CANDIDATE"
+#: Superseded or deliberately retired.
+ARCHIVED = "ARCHIVED"
+#: Training or evaluation could not complete. Distinct from REJECTED, which
+#: is a measured verdict --- conflating "worse" with "crashed" would hide
+#: infrastructure failures inside what looks like a quality result.
+FAILED = "FAILED"
+
+CANDIDATE_STATUSES = (
+    TRAINING,
+    TRAINED,
+    EVALUATING,
+    REJECTED,
+    PROMOTION_CANDIDATE,
+    ARCHIVED,
+    FAILED,
+)
+
+_ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
+    TRAINING: frozenset({TRAINED, FAILED, ARCHIVED}),
+    TRAINED: frozenset({EVALUATING, FAILED, ARCHIVED}),
+    EVALUATING: frozenset({PROMOTION_CANDIDATE, REJECTED, FAILED, ARCHIVED}),
+    PROMOTION_CANDIDATE: frozenset({ARCHIVED, REJECTED}),
+    REJECTED: frozenset({ARCHIVED}),
+    FAILED: frozenset({ARCHIVED}),
+    ARCHIVED: frozenset(),
+}
+
+
+class ModelRegistryError(AutoTrainError):
+    """Raised on an unknown model or an illegal status transition."""
+
+
+@dataclass(frozen=True)
+class CandidateModel:
+    """One challenger and everything known about where it came from."""
+
+    model_version: str
+    product: str
+    area: str
+    status: str
+    parent_model: str = ""
+    dataset_version: str = ""
+    dataset_content_id: str = ""
+    cycle_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    artifact_path: str = ""
+    weight_sha256: str = ""
+    training_config: Mapping[str, Any] = field(default_factory=dict)
+    training_metrics: Mapping[str, Any] = field(default_factory=dict)
+    evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
+    promotion_decision: Mapping[str, Any] = field(default_factory=dict)
+    notes: str = ""
+    schema_version: int = MANIFEST_SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "model_version": self.model_version,
+            "product": self.product,
+            "area": self.area,
+            "status": self.status,
+            "parent_model": self.parent_model,
+            "dataset_version": self.dataset_version,
+            "dataset_content_id": self.dataset_content_id,
+            "cycle_id": self.cycle_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "artifact_path": self.artifact_path,
+            "weight_sha256": self.weight_sha256,
+            "training_config": dict(self.training_config),
+            "training_metrics": dict(self.training_metrics),
+            "evaluation_metrics": dict(self.evaluation_metrics),
+            "promotion_decision": dict(self.promotion_decision),
+            "notes": self.notes,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CandidateModel":
+        try:
+            return cls(
+                model_version=str(payload["model_version"]),
+                product=str(payload.get("product", "")),
+                area=str(payload.get("area", "")),
+                status=str(payload.get("status", TRAINING)),
+                parent_model=str(payload.get("parent_model", "")),
+                dataset_version=str(payload.get("dataset_version", "")),
+                dataset_content_id=str(payload.get("dataset_content_id", "")),
+                cycle_id=str(payload.get("cycle_id", "")),
+                created_at=str(payload.get("created_at", "")),
+                updated_at=str(payload.get("updated_at", "")),
+                artifact_path=str(payload.get("artifact_path", "")),
+                weight_sha256=str(payload.get("weight_sha256", "")),
+                training_config=dict(payload.get("training_config") or {}),
+                training_metrics=dict(payload.get("training_metrics") or {}),
+                evaluation_metrics=dict(payload.get("evaluation_metrics") or {}),
+                promotion_decision=dict(payload.get("promotion_decision") or {}),
+                notes=str(payload.get("notes", "")),
+                schema_version=int(payload.get("schema_version", 0)),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ModelRegistryError(f"Malformed candidate manifest: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class ChampionModel:
+    """The model production is actually running, as read from production."""
+
+    model_version: str
+    weights_path: str
+    weight_sha256: str
+    training_weight_path: str
+    dataset_id: str
+    evaluation_metrics: Mapping[str, Any]
+    source: str
+    status: str = PRODUCTION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model_version": self.model_version,
+            "weights_path": self.weights_path,
+            "weight_sha256": self.weight_sha256,
+            "training_weight_path": self.training_weight_path,
+            "dataset_id": self.dataset_id,
+            "evaluation_metrics": dict(self.evaluation_metrics),
+            "status": self.status,
+            "source": self.source,
+        }
+
+
+class CandidateRegistry:
+    """Stores candidate manifests under ``models/candidates/<product>/<area>``."""
+
+    def __init__(self, root: str | Path, *, product: str = "", area: str = "") -> None:
+        self.root = Path(root).expanduser().resolve()
+        self.product = product
+        self.area = area
+
+    def directory_for(self, model_version: str) -> Path:
+        return self.root / model_version
+
+    # -- reading ----------------------------------------------------------------
+
+    def list_models(self) -> tuple[CandidateModel, ...]:
+        """Every readable candidate, newest first."""
+        if not self.root.is_dir():
+            return ()
+        models: list[CandidateModel] = []
+        for entry in sorted(self.root.iterdir()):
+            manifest = entry / MANIFEST_FILENAME
+            if not manifest.is_file():
+                continue
+            try:
+                models.append(self._read(manifest))
+            except ModelRegistryError as exc:
+                LOGGER.warning("Skipping unreadable candidate %s: %s", entry.name, exc)
+        models.sort(key=lambda model: (model.created_at, model.model_version), reverse=True)
+        return tuple(models)
+
+    def get(self, model_version: str) -> CandidateModel:
+        manifest = self.directory_for(model_version) / MANIFEST_FILENAME
+        if not manifest.is_file():
+            raise ModelRegistryError(f"Unknown candidate model: {model_version}")
+        return self._read(manifest)
+
+    def by_status(self, status: str) -> tuple[CandidateModel, ...]:
+        return tuple(model for model in self.list_models() if model.status == status)
+
+    # -- writing ----------------------------------------------------------------
+
+    def register(
+        self,
+        model_version: str,
+        *,
+        dataset_version: str = "",
+        dataset_content_id: str = "",
+        parent_model: str = "",
+        cycle_id: str = "",
+        training_config: Mapping[str, Any] | None = None,
+        notes: str = "",
+    ) -> CandidateModel:
+        """Create a candidate in ``TRAINING``.
+
+        Registered before training starts so a crashed run still leaves a
+        record explaining what was attempted.
+        """
+        directory = self.directory_for(model_version)
+        if (directory / MANIFEST_FILENAME).is_file():
+            raise ModelRegistryError(
+                f"Candidate {model_version} is already registered."
+            )
+        now = _utc_now()
+        model = CandidateModel(
+            model_version=model_version,
+            product=self.product,
+            area=self.area,
+            status=TRAINING,
+            parent_model=parent_model,
+            dataset_version=dataset_version,
+            dataset_content_id=dataset_content_id,
+            cycle_id=cycle_id,
+            created_at=now,
+            updated_at=now,
+            artifact_path=str(directory),
+            training_config=dict(training_config or {}),
+            notes=notes,
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+        self._write(model)
+        return model
+
+    def update_status(
+        self,
+        model_version: str,
+        status: str,
+        *,
+        notes: str = "",
+        **updates: Any,
+    ) -> CandidateModel:
+        """Move a candidate to a new status, refusing illegal transitions.
+
+        The state machine is enforced rather than advisory: a candidate that
+        jumped from TRAINING straight to PROMOTION_CANDIDATE would be one
+        nobody evaluated, and that must be impossible, not merely unlikely.
+        """
+        if status not in CANDIDATE_STATUSES:
+            raise ModelRegistryError(
+                f"{status!r} is not a candidate status. Valid: "
+                + ", ".join(CANDIDATE_STATUSES)
+            )
+        if status == PRODUCTION:  # pragma: no cover - excluded by the check above
+            raise ModelRegistryError(
+                "PRODUCTION is read from the inference project and cannot be "
+                "assigned here."
+            )
+        current = self.get(model_version)
+        allowed = _ALLOWED_TRANSITIONS.get(current.status, frozenset())
+        if status != current.status and status not in allowed:
+            raise ModelRegistryError(
+                f"Cannot move {model_version} from {current.status} to {status}. "
+                f"Allowed from {current.status}: "
+                + (", ".join(sorted(allowed)) or "nothing")
+            )
+        model = replace(
+            current,
+            status=status,
+            updated_at=_utc_now(),
+            notes=notes or current.notes,
+            **updates,
+        )
+        self._write(model)
+        return model
+
+    # -- internals ---------------------------------------------------------------
+
+    def _read(self, manifest: Path) -> CandidateModel:
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ModelRegistryError(f"Unable to read {manifest}: {exc}") from exc
+        return CandidateModel.from_dict(payload)
+
+    def _write(self, model: CandidateModel) -> None:
+        directory = self.directory_for(model.model_version)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / MANIFEST_FILENAME
+        handle, temporary = tempfile.mkstemp(dir=str(directory), prefix=".manifest-")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(
+                    model.to_dict(), stream, ensure_ascii=False, indent=2, sort_keys=True
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except OSError as exc:
+            raise ModelRegistryError(f"Unable to write {path}: {exc}") from exc
+        finally:
+            if os.path.exists(temporary):
+                try:
+                    os.remove(temporary)
+                except OSError:  # pragma: no cover - best effort cleanup
+                    LOGGER.debug("Could not remove %s", temporary)
+
+
+# ---------------------------------------------------------------------------
+# The champion, read from production
+
+
+def read_champion(model_dir: str | Path) -> ChampionModel | None:
+    """Read the deployed model from the production station directory.
+
+    Read-only. Prefers ``deployment_manifest.yaml`` because it carries the
+    checksums and the metrics the model was deployed on; falls back to the
+    station ``config.yaml``'s ``weights`` key so a station deployed before
+    manifests existed still reports a champion instead of nothing.
+    """
+    directory = Path(model_dir).expanduser()
+    manifest_path = directory / "deployment_manifest.yaml"
+    payload = _read_yaml(manifest_path)
+    if payload:
+        weights = str(payload.get("deployed_weight_file") or payload.get("weights") or "")
+        return ChampionModel(
+            model_version=str(payload.get("deployed_version") or ""),
+            weights_path=_resolve_optional(directory, weights),
+            weight_sha256=str(payload.get("weight_sha256") or ""),
+            training_weight_path=_resolve_optional(
+                directory, str(payload.get("training_weight_file") or "")
+            ),
+            dataset_id=str(payload.get("dataset_id") or ""),
+            evaluation_metrics=dict(payload.get("evaluation_metrics") or {}),
+            source=str(manifest_path),
+        )
+
+    config = _read_yaml(directory / "config.yaml")
+    if not config:
+        return None
+    weights = str(config.get("weights") or "")
+    if not weights:
+        return None
+    return ChampionModel(
+        model_version=str(config.get("model_version") or ""),
+        weights_path=_resolve_optional(directory, weights),
+        weight_sha256="",
+        training_weight_path="",
+        dataset_id="",
+        evaluation_metrics={},
+        source=str(directory / "config.yaml"),
+    )
+
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        LOGGER.warning("Unable to read %s: %s", path, exc)
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_optional(base: Path, value: str) -> str:
+    if not value:
+        return ""
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((base / candidate).resolve())
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
