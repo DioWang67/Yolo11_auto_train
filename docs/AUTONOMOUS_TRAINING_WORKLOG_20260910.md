@@ -188,14 +188,14 @@ fail-closed，不是 bug。
 - **重跑一次不代表重訓一次。** `skip_yolo_train` 比對 `dataset_hash` 與 `config_hash`，
   相符就把整條 run 跳掉（增生／lint／切分／訓練全跳），而且只寫在 log 裡。
   看 `TrainingResult.trained_this_run`，不要看有沒有產出權重。
-- **`_class_names()` 的 fallback 在真實站別上會失敗。** 它找
-  `models/<產品>/<站別>/yolo/config.yaml` 的 `class_names` 或 `names`，
-  但 Cable1/A 兩個都沒有，只有 `expected_items`
-  （`['Red','Green','Orange','Yellow','Black','Black']` —— 站別的預期項目清單，
-  順序不同且有重複，**不是**模型類別表，不要拿來用）。正確的類別順序在
-  handoff job 自己的 `data.yaml`（`['Black','Green','Orange','Red','Yellow']`）。
-  **尚未確認**收集到的產線紀錄帶不帶 `class_names`；若不帶，train 步驟會丟
-  `CycleError`。跑完整 cycle 前先確認這件事。
+- **`expected_items` 不是類別表，而且它「看起來可以用」。**
+  Cable1/A 的 `expected_items` 是 `['Red','Green','Orange','Yellow','Black','Black']`，
+  真正的契約是 `['Black','Green','Orange','Red','Yellow']`——順序全不同（每一個
+  class id 都會錯），而且 `Black` 出現兩次，因為站別實體上預期兩條黑線。
+  真跑的 per-class 數字證實了這點：Black 的實例數正好是其他類別的兩倍。
+  `core/detector.py` 用 `set(expected_items) - detected` 對待它，語意是「預期看到的
+  物件多重集合」。**2026-09-11 起這條路徑不再可能誤用它**：class schema 拒絕重複
+  名稱，所以 `expected_items` 是被結構性擋掉，不是靠記得別用（見 §6）。
 - **`tests/conftest.py` 的隔離 workspace 是 session 級的。** dataset 版本號、pool、
   registry 會跨測試累積，斷言變順序相依。`test_autotrain_orchestrator.py` 與
   `test_autotrain_service.py` 因此**每個測試自建一份 `WorkspacePaths`** 指向 `tmp_path`。
@@ -220,3 +220,52 @@ fail-closed，不是 bug。
 2. **候選一律以 `NEEDS_LABEL` 進池，預測永遠不當真值。** repo 自己就明訂
    「誤報不能直接把原推理框當正確答案」。
 3. **golden 未設定 → 拒絕升級。** 「沒辦法檢查」不能讀成「通過了」。
+
+---
+
+## 6. Class schema（2026-09-11 新增）
+
+`class_id -> class_name` 是這條路徑上唯一「錯了不會當掉、只會靜靜產出語意錯亂模型」
+的東西，所以它被做成一個有身分的型別：`autotrain/class_schema.py`。
+
+### Cable1/A 的真正契約
+
+```
+0=Black  1=Green  2=Orange  3=Red  4=Yellow
+hash 05f915927011ba63db6d16d535e714c014b53f3f6602391688536aa5b3119df9
+```
+
+三個獨立來源完全一致：champion checkpoint 的 `model.names`、handoff manifest 的
+`class_names_json` / `class_schema_hash`、以及 job 自己的 `data.yaml`。
+掃過 29 個真實 manifest、9576 個 id→name 對照，**零不一致**。
+
+雜湊直接沿用 operator handoff 既有的 `_class_schema_hash`（不是另寫一份），
+所以這條路徑寫出的 schema 與 operator 流程寫出的可以直接比對。
+
+### Source of truth 優先序
+
+1. dataset version 記錄的 schema
+2. champion checkpoint 的 `model.names`
+3. 站別 `config.yaml` **明確宣告**的 `class_names` / `names`
+4. 產線紀錄的 `model_info.class_names`
+5. 以上皆無 → **拒絕**（fail closed）
+
+優先序只決定「回報時標示哪個來源」，**不決定誰贏**：所有存在的來源必須一致，
+不一致就停。**同名不同序算不一致**——這正是整件事存在的理由，用 set 比較會誤判相等。
+
+### 誰在什麼時候檢查
+
+| 位置 | 檢查什麼 | 失敗行為 |
+| --- | --- | --- |
+| `build_dataset` | 解析契約 | 無來源 → **BLOCK**（不是 fail，等待是合理狀態） |
+| `DatasetVersionStore.create` | 標註 class_id 在範圍內 | raise（版本不可變，錯了就永久了） |
+| `train`（orchestrator） | dataset + champion + 紀錄三方一致 | fail，訊息含兩邊 mapping、dataset 版本、champion 版本 |
+| `train_candidate` | 版本 schema 與傳入 schema 一致；工作副本標註範圍 | raise，**runner 完全不會被呼叫** |
+
+### 兩個之後會用到的缺口
+
+- **deploy manifest 完全沒有 class 欄位**（48 個 key 一個都沒有）。所以 champion 的
+  契約只能開 checkpoint 才讀得到。要讓它變便宜，得請 `deploy.py` 寫進去。
+- **本機沒有真實產線紀錄**（`Result/` 是空的），所以「產線紀錄帶不帶 `class_names`」
+  是從產生端程式碼確認的（`yolo11_inference/core/yolo_inference_model.py:441`，
+  註解明寫 ordered names 是訓練資料契約的一部分），不是從真實紀錄檔。
