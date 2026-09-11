@@ -8,6 +8,7 @@ where the safety properties actually live.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -244,6 +245,39 @@ def test_the_dataset_version_is_copied_not_used_in_place(tmp_path):
     assert sorted(p.name for p in version.root.rglob("*")) == before
     assert (tmp_path / "work" / "raw" / "images" / "a.jpg").is_file()
     assert (tmp_path / "work" / "raw" / "labels" / "a.txt").is_file()
+
+
+def test_the_working_copy_is_writable(tmp_path):
+    """The point of copying is to get a workspace the pipeline may write in.
+
+    The version store marks its own files read-only to enforce immutability,
+    and ``copy2`` carries permission bits, so the copy inherits that bit unless
+    it is cleared deliberately.
+    """
+    version = _dataset_version(tmp_path)
+
+    prepare_work_dir(version, tmp_path / "work")
+
+    for relative in ("raw/images/a.jpg", "raw/labels/a.txt"):
+        assert os.access(tmp_path / "work" / relative, os.W_OK), relative
+
+
+def test_a_retry_can_prepare_the_same_work_dir_again(tmp_path):
+    """A failed train step is retried into the cycle's existing work dir.
+
+    Cycle steps are resumable and the work directory is keyed on the cycle, so
+    the second attempt copies over the first attempt's files. If those are
+    read-only the retry dies on PermissionError -- masking whatever actually
+    failed the first time.
+    """
+    version = _dataset_version(tmp_path)
+    with pytest.raises(CandidateTrainingError, match="Challenger training failed"):
+        _train(tmp_path, dataset_version=version, runner=_FakeRunner(fail=True))
+
+    result = _train(tmp_path, dataset_version=version, runner=_FakeRunner())
+
+    assert result.weights_path.is_file()
+    assert result.dataset_version == version.version
 
 
 def test_an_unlabelled_image_stops_training(tmp_path):

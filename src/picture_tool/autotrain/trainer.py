@@ -28,6 +28,7 @@ import copy
 import hashlib
 import logging
 import shutil
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -213,8 +214,8 @@ def prepare_work_dir(dataset_version: DatasetVersion, work_dir: Path) -> Path:
                 f"Dataset version {dataset_version.version} is missing a label "
                 f"for {image.name}; refusing to train on an unlabelled image."
             )
-        shutil.copy2(image, raw_images / image.name)
-        shutil.copy2(label, raw_labels / label.name)
+        _copy_into_workspace(image, raw_images / image.name)
+        _copy_into_workspace(label, raw_labels / label.name)
         copied += 1
 
     if copied == 0:
@@ -317,6 +318,26 @@ def train_candidate(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _copy_into_workspace(source: Path, destination: Path) -> None:
+    """Copy one file in so the pipeline may later write over it.
+
+    ``copy2`` is kept for the mtime it preserves: the existing ``dataset_hash``
+    is taken over relative paths, sizes and mtimes, so copying the same
+    immutable version twice has to produce the same hash for the trainer's skip
+    cache to mean anything.
+
+    What must be undone is the other half of ``copy2``. The version store marks
+    its files read-only to enforce immutability, and that bit travels with the
+    copy --- leaving this supposedly writable workspace read-only, and making a
+    retried cycle die on ``PermissionError`` instead of on whatever actually
+    stopped it the first time.
+    """
+    if destination.exists():
+        destination.chmod(destination.stat().st_mode | stat.S_IWUSR)
+    shutil.copy2(source, destination)
+    destination.chmod(destination.stat().st_mode | stat.S_IWUSR)
 
 
 def _default_runner() -> Callable[..., Any]:
