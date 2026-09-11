@@ -39,7 +39,12 @@ BASE_CONFIG = {
         "device": "cpu",
         "deploy": {"enabled": True, "inference_models_dir": "/production/models"},
         "export_onnx": {"enabled": True},
-        "position_validation": {"enabled": True},
+        # The packaged default, pointing at a directory a challenger cycle
+        # never builds.
+        "position_validation": {
+            "enabled": True,
+            "sample_dir": "./data/project/split/test/images",
+        },
     },
     "yolo_evaluation": {"gate": {"enabled": True, "min_map50": 0.8}},
 }
@@ -229,7 +234,11 @@ def test_position_calibration_stays_out_of_a_challenger_run(tmp_path):
         device="cpu",
     )
 
-    assert config["yolo_training"]["position_validation"]["enabled"] is False
+    position = config["yolo_training"]["position_validation"]
+    assert position["enabled"] is False
+    # Disabled is not enough: the inherited sample_dir names a directory this
+    # cycle never builds, and the schema check reports it before every task.
+    assert "sample_dir" not in position
 
 
 # ---------------------------------------------------------------------------

@@ -177,6 +177,11 @@ def build_candidate_config(
     # station behaviour; a challenger has no business touching it.
     position = training.setdefault("position_validation", {})
     position["enabled"] = False
+    # Its sample_dir is inherited from the station config and points into a
+    # directory this cycle never builds. Disabled means it is never read, but
+    # the schema check still reports it on every task, burying the warnings
+    # that would matter.
+    position.pop("sample_dir", None)
 
     # Nothing from this path is published, so every publishing block is
     # switched off as well as excluded from the task list.
