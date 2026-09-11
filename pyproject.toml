@@ -94,6 +94,7 @@ picture-tool-anomalib = "picture_tool.anomalib_cli:main"
 picture-tool-dataset-inventory = "picture_tool.dataset_inventory:main"
 picture-tool-color-calibrate = "picture_tool.color.threshold_calibration:main"
 picture-tool-runtime-pair = "picture_tool.runtime_pair_deployment:main"
+picture-tool-autotrain = "picture_tool.autotrain.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/robotlearning/Yolo11_auto_train"
