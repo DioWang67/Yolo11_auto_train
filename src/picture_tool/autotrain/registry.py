@@ -31,6 +31,13 @@ LOGGER = logging.getLogger(__name__)
 MANIFEST_FILENAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = 1
 
+#: Where ``deploy`` puts a station's weight files, and the segment its
+#: deployment manifest leaves out when naming them.
+STATION_WEIGHTS_DIRNAME = "weights"
+#: The directory every station lives under in the inference project. Used to
+#: find the root that a station config's relative paths are written against.
+MODELS_DIRNAME = "models"
+
 #: Read from production, never assigned here.
 PRODUCTION = "PRODUCTION"
 #: A training run is in flight.
@@ -344,12 +351,17 @@ def read_champion(model_dir: str | Path) -> ChampionModel | None:
     manifest_path = directory / "deployment_manifest.yaml"
     payload = _read_yaml(manifest_path)
     if payload:
-        weights = str(payload.get("deployed_weight_file") or payload.get("weights") or "")
+        weights = str(
+            payload.get("deployed_file")
+            or payload.get("deployed_weight_file")
+            or payload.get("weights")
+            or ""
+        )
         return ChampionModel(
             model_version=str(payload.get("deployed_version") or ""),
-            weights_path=_resolve_optional(directory, weights),
+            weights_path=_resolve_station_artifact(directory, weights),
             weight_sha256=str(payload.get("weight_sha256") or ""),
-            training_weight_path=_resolve_optional(
+            training_weight_path=_resolve_station_artifact(
                 directory, str(payload.get("training_weight_file") or "")
             ),
             dataset_id=str(payload.get("dataset_id") or ""),
@@ -365,7 +377,7 @@ def read_champion(model_dir: str | Path) -> ChampionModel | None:
         return None
     return ChampionModel(
         model_version=str(config.get("model_version") or ""),
-        weights_path=_resolve_optional(directory, weights),
+        weights_path=_resolve_station_config_weight(directory, weights),
         weight_sha256="",
         training_weight_path="",
         dataset_id="",
@@ -385,13 +397,54 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _resolve_optional(base: Path, value: str) -> str:
+def _resolve_station_artifact(directory: Path, value: str) -> str:
+    """Resolve a file named by the station's deployment manifest.
+
+    ``deploy`` writes artifacts into the station's ``weights`` directory but
+    records them in the manifest by bare filename, so that segment has to be
+    put back here. A value that already carries a directory is taken as
+    written, which is what a hand-built or older manifest looks like.
+    """
     if not value:
         return ""
     candidate = Path(value)
     if candidate.is_absolute():
         return str(candidate)
-    return str((base / candidate).resolve())
+    if len(candidate.parts) == 1:
+        candidate = Path(STATION_WEIGHTS_DIRNAME) / candidate
+    return str((directory / candidate).resolve())
+
+
+def _resolve_station_config_weight(directory: Path, value: str) -> str:
+    """Resolve the ``weights`` value from a station ``config.yaml``.
+
+    This one does not follow the manifest's convention: it is written
+    relative to the inference *project root*
+    (``models/<product>/<area>/yolo/weights/...``), which is how the
+    inference project itself resolves it. Joining it to the station
+    directory instead would repeat the whole ``models/...`` prefix.
+    """
+    if not value:
+        return ""
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return str(candidate)
+    root = _inference_project_root(directory)
+    return str(((root or directory) / candidate).resolve())
+
+
+def _inference_project_root(directory: Path) -> Path | None:
+    """The project root a station config's paths are written against.
+
+    Station directories are ``<root>/models/<product>/<area>/yolo``, so the
+    root is the parent of the ``models`` directory above this one. Found by
+    name rather than by counting levels, so a deeper or shallower station
+    layout does not silently resolve to the wrong place.
+    """
+    for parent in directory.resolve().parents:
+        if parent.name == MODELS_DIRNAME:
+            return parent.parent
+    return None
 
 
 def _utc_now() -> str:

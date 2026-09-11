@@ -204,15 +204,22 @@ def test_an_unreadable_manifest_is_skipped_not_fatal(registry):
 
 
 def test_the_champion_is_read_from_the_deployment_manifest(tmp_path):
+    """The manifest is copied from one a real deploy wrote.
+
+    ``deploy`` records ``deployed_file`` and ``training_weight_file`` as bare
+    filenames and puts the files in the station's ``weights`` directory, so
+    resolving them against the station directory alone names files that do
+    not exist --- which is what a challenger would then try to train from.
+    """
     model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
-    model_dir.mkdir(parents=True)
+    (model_dir / "weights").mkdir(parents=True)
     (model_dir / "deployment_manifest.yaml").write_text(
         yaml.safe_dump(
             {
                 "deployed_version": "1.2.0",
-                "deployed_weight_file": "weights/best.onnx",
+                "deployed_file": "Cable1_A_v1.2.0_20260727.onnx",
                 "weight_sha256": "abc123",
-                "training_weight_file": "weights/best.training.pt",
+                "training_weight_file": "Cable1_A_v1.2.0_20260727.training.pt",
                 "dataset_id": "dataset-abc",
                 "evaluation_metrics": {"map50": 0.81, "recall": 0.9},
             }
@@ -225,22 +232,55 @@ def test_the_champion_is_read_from_the_deployment_manifest(tmp_path):
     assert champion.model_version == "1.2.0"
     assert champion.weight_sha256 == "abc123"
     assert champion.evaluation_metrics["map50"] == 0.81
-    assert champion.weights_path.endswith("best.onnx")
     assert champion.status == "PRODUCTION"
+    weights_dir = (model_dir / "weights").resolve()
+    assert champion.weights_path == str(weights_dir / "Cable1_A_v1.2.0_20260727.onnx")
+    assert champion.training_weight_path == str(
+        weights_dir / "Cable1_A_v1.2.0_20260727.training.pt"
+    )
+
+
+def test_a_manifest_naming_a_subdirectory_is_taken_as_written(tmp_path):
+    """A hand-built or older manifest may spell the directory out."""
+    model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
+    model_dir.mkdir(parents=True)
+    (model_dir / "deployment_manifest.yaml").write_text(
+        yaml.safe_dump(
+            {"deployed_version": "1.2.0", "deployed_file": "weights/best.onnx"}
+        ),
+        encoding="utf-8",
+    )
+
+    champion = read_champion(model_dir)
+
+    assert champion.weights_path == str((model_dir / "weights" / "best.onnx").resolve())
 
 
 def test_a_station_without_a_manifest_falls_back_to_its_config(tmp_path):
+    """The station config's weights value is project-root relative.
+
+    Unlike the manifest it spells out the whole ``models/...`` path, because
+    the inference project resolves it from its own root. Joining that to the
+    station directory would repeat the prefix.
+    """
     model_dir = tmp_path / "models" / "Cable1" / "A" / "yolo"
-    model_dir.mkdir(parents=True)
+    (model_dir / "weights").mkdir(parents=True)
     (model_dir / "config.yaml").write_text(
-        yaml.safe_dump({"weights": "weights/best.pt", "model_version": "1.0.0"}),
+        yaml.safe_dump(
+            {
+                "weights": "models/Cable1/A/yolo/weights/best.pt",
+                "model_version": "1.0.0",
+            }
+        ),
         encoding="utf-8",
     )
 
     champion = read_champion(model_dir)
 
     assert champion.model_version == "1.0.0"
-    assert champion.weights_path.endswith("best.pt")
+    assert champion.weights_path == str(
+        (model_dir / "weights" / "best.pt").resolve()
+    )
     assert champion.weight_sha256 == ""
 
 
@@ -257,13 +297,14 @@ def test_a_corrupt_deployment_manifest_falls_back_rather_than_raising(tmp_path):
     model_dir.mkdir(parents=True)
     (model_dir / "deployment_manifest.yaml").write_text("{[bad", encoding="utf-8")
     (model_dir / "config.yaml").write_text(
-        yaml.safe_dump({"weights": "weights/best.pt"}), encoding="utf-8"
+        yaml.safe_dump({"weights": "models/Cable1/A/yolo/weights/best.pt"}),
+        encoding="utf-8",
     )
 
     champion = read_champion(model_dir)
 
     assert champion is not None
-    assert champion.weights_path.endswith("best.pt")
+    assert champion.weights_path == str((model_dir / "weights" / "best.pt").resolve())
 
 
 def test_reading_the_champion_never_writes_to_production(tmp_path):
