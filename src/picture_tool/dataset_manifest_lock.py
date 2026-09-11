@@ -150,3 +150,22 @@ def master_manifest_lock(
     lock_path = root / ".operator_handoff" / "master_manifest.lock"
     with _cross_process_lock(lock_path, timeout_seconds):
         yield
+
+
+@contextmanager
+def autotrain_store_lock(
+    store_root: str | Path,
+    *,
+    name: str = "store",
+    timeout_seconds: float = 15.0,
+) -> Iterator[None]:
+    """Serialize autonomous-training store transactions.
+
+    Keeps the lock file inside the caller's own store rather than under
+    ``.operator_handoff``: the autonomous training path must not create or
+    contend for files in the operator workflow's area.
+    """
+    root = Path(store_root).expanduser().resolve()
+    lock_path = root / ".locks" / f"{name}.lock"
+    with _cross_process_lock(lock_path, timeout_seconds):
+        yield
