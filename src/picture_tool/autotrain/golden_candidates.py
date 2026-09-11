@@ -35,6 +35,7 @@ import csv
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from dataclasses import replace as _replace
 from pathlib import Path
@@ -77,6 +78,33 @@ HARD_CASE_REASONS = (
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 
+#: Verdicts on whether a candidate could become golden *today*.
+ELIGIBLE = "ELIGIBLE"
+#: A production image with evidence but no boxes. Annotate it first.
+NEEDS_LABEL = "NEEDS_LABEL"
+#: Has boxes, but they do not describe the whole image --- a count that
+#: disagrees with the station, or copies that disagree with each other.
+LABEL_INCOMPLETE = "LABEL_INCOMPLETE"
+#: Cannot be traced to an original, so leakage cannot be ruled out.
+SOURCE_UNKNOWN = "SOURCE_UNKNOWN"
+#: This image, or something derived from it, has been trained on.
+TRAINING_CONTAMINATION = "TRAINING_CONTAMINATION"
+#: Carries class ids the station's contract cannot explain.
+SCHEMA_MISMATCH = "SCHEMA_MISMATCH"
+
+ELIGIBILITY_REASONS = (
+    ELIGIBLE,
+    NEEDS_LABEL,
+    LABEL_INCOMPLETE,
+    SOURCE_UNKNOWN,
+    TRAINING_CONTAMINATION,
+    SCHEMA_MISMATCH,
+)
+
+#: What an image with no traceable origin reports. Never silently treated as
+#: "probably fine": an untraceable image cannot be cleared of leakage.
+UNKNOWN_SOURCE = "UNKNOWN"
+
 
 class GoldenCandidateError(AutoTrainError):
     """Raised when a candidate pass cannot be built."""
@@ -105,6 +133,16 @@ class Candidate:
     blur_score: float | None = None
     duplicate_group: str = ""
     label_path: str = ""
+    #: The pre-augmentation identity this image traces back to. Derived with
+    #: the splitter's own ``_aug_<n>`` convention, which is the only lineage
+    #: this project records; an image that convention cannot explain reports
+    #: UNKNOWN rather than being assumed to be its own original.
+    source_image_id: str = UNKNOWN_SOURCE
+    #: sha256 of the image bytes. Exact identity, for leakage checks.
+    image_sha256: str = ""
+    #: ELIGIBLE, or the single reason it is not.
+    golden_eligible: bool = False
+    eligibility_reason: str = NEEDS_LABEL
 
     def to_row(self) -> dict[str, Any]:
         return {
@@ -129,6 +167,10 @@ class Candidate:
             "saturation": "" if self.saturation is None else f"{self.saturation:.2f}",
             "blur_score": "" if self.blur_score is None else f"{self.blur_score:.2f}",
             "duplicate_group": self.duplicate_group,
+            "source_image_id": self.source_image_id,
+            "image_sha256": self.image_sha256,
+            "golden_eligible": str(self.golden_eligible).lower(),
+            "eligibility_reason": self.eligibility_reason,
         }
 
 
@@ -216,6 +258,67 @@ def group_duplicates(paths: Sequence[Path]) -> dict[Path, str]:
     for path in paths:
         groups.setdefault(path, f"single:{path.name}")
     return groups
+
+
+def source_image_id(image_path: str | Path) -> str:
+    """The pre-augmentation identity an image traces back to.
+
+    Reuses the splitter's own convention --- an ``_aug_<n>`` suffix marks a
+    derivative of the stem before it --- because that is the lineage this
+    project actually records, and a second scheme would disagree with the one
+    that already keeps augmented variants out of each other's splits.
+
+    It is a naming convention, not a recorded fact. Anything that does not
+    look like a station capture reports :data:`UNKNOWN_SOURCE`, so leakage
+    against it has to be treated as unproven rather than ruled out.
+    """
+    stem = Path(image_path).stem
+    if not stem:
+        return UNKNOWN_SOURCE
+    base = re.sub(r"(?:_aug_?\d+)$", "", stem, flags=re.IGNORECASE)
+    return base or UNKNOWN_SOURCE
+
+
+def assess_eligibility(
+    candidate: Candidate,
+    *,
+    schema: ClassSchema,
+    expected_boxes: int,
+    trained_source_ids: frozenset[str] = frozenset(),
+    trained_sha256: frozenset[str] = frozenset(),
+    conflicting_source_ids: frozenset[str] = frozenset(),
+) -> tuple[bool, str]:
+    """Decide whether a candidate could be registered as golden today.
+
+    Ordered so the most disqualifying answer wins. Contamination is checked
+    first because an image the model has already seen is useless as a
+    yardstick however good its labels are, and an unlabelled candidate is
+    reported as needing a label rather than as contaminated, because that is
+    the action its reviewer has to take.
+    """
+    if (
+        candidate.image_sha256 in trained_sha256
+        or candidate.source_image_id in trained_source_ids
+    ):
+        return False, TRAINING_CONTAMINATION
+
+    if candidate.status != READY_TO_REVIEW or not candidate.label_path:
+        return False, NEEDS_LABEL
+
+    unknown = [
+        name for name in candidate.class_counts if name not in schema.names
+    ]
+    if unknown:
+        return False, SCHEMA_MISMATCH
+
+    total = sum(candidate.class_counts.values())
+    if total != expected_boxes or candidate.source_image_id in conflicting_source_ids:
+        return False, LABEL_INCOMPLETE
+
+    if candidate.source_image_id == UNKNOWN_SOURCE:
+        return False, SOURCE_UNKNOWN
+
+    return True, ELIGIBLE
 
 
 def merge_group_evidence(candidates: Sequence[Candidate]) -> list[Candidate]:
@@ -568,6 +671,8 @@ def build_candidates(
     low_confidence_below: float = 0.55,
     per_duplicate_group: int = 2,
     measure_quality: bool = True,
+    trained_source_ids: Iterable[str] = (),
+    trained_sha256: Iterable[str] = (),
 ) -> tuple[list[Candidate], dict[str, Any]]:
     """One candidate pass. Read-only over every input.
 
@@ -640,11 +745,66 @@ def build_candidates(
     ]
 
     candidates = merge_group_evidence(candidates)
+
+    # Lineage and exact identity, then the verdict. Done after merging so a
+    # contaminated copy cannot be hidden behind a clean-looking sibling.
+    trained_sources = frozenset(str(value) for value in trained_source_ids)
+    trained_hashes = frozenset(str(value) for value in trained_sha256)
+    conflicting = _conflicting_label_sources(candidates)
+    resolved: list[Candidate] = []
+    for candidate in candidates:
+        path = Path(candidate.image_path)
+        try:
+            digest = sha256_file(path)
+        except OSError:
+            digest = ""
+        with_identity = _replace(
+            candidate,
+            source_image_id=source_image_id(path),
+            image_sha256=digest,
+        )
+        eligible, reason = assess_eligibility(
+            with_identity,
+            schema=schema,
+            expected_boxes=expected_boxes,
+            trained_source_ids=trained_sources,
+            trained_sha256=trained_hashes,
+            conflicting_source_ids=conflicting,
+        )
+        resolved.append(
+            _replace(
+                with_identity, golden_eligible=eligible, eligibility_reason=reason
+            )
+        )
+    candidates = resolved
+
     kept, dropped = thin_by_group(candidates, per_group=per_duplicate_group)
     summary = summarise(kept, schema)
     summary["thinned_out_as_near_duplicates"] = dropped
     summary["examined_before_thinning"] = len(candidates)
     return kept, summary
+
+
+def _conflicting_label_sources(
+    candidates: Sequence[Candidate],
+) -> frozenset[str]:
+    """Source ids whose labelled copies disagree about what is in the image.
+
+    A handoff job copies its dataset from the one before it, so the same
+    picture is labelled several times. When two of those copies disagree,
+    neither can be trusted as ground truth until a person says which is
+    right --- and this station's own data contains exactly one such image,
+    labelled with six boxes in one job and five in five others.
+    """
+    by_source: dict[str, set[str]] = collections.defaultdict(set)
+    for candidate in candidates:
+        if candidate.status != READY_TO_REVIEW:
+            continue
+        key = source_image_id(candidate.image_path)
+        by_source[key].add(
+            json.dumps(dict(sorted(candidate.class_counts.items())))
+        )
+    return frozenset(key for key, seen in by_source.items() if len(seen) > 1)
 
 
 def _with_quality(candidate: Candidate, quality: Any) -> Candidate:
@@ -728,6 +888,14 @@ def summarise(
         ],
         "confusions": dict(confusions.most_common()),
         "duplicate_groups": len({c.duplicate_group for c in candidates}),
+        "by_eligibility": dict(
+            collections.Counter(c.eligibility_reason for c in candidates)
+        ),
+        "golden_eligible": sum(1 for c in candidates if c.golden_eligible),
+        "unique_source_images": len({c.source_image_id for c in candidates}),
+        "unknown_lineage": sum(
+            1 for c in candidates if c.source_image_id == UNKNOWN_SOURCE
+        ),
         "by_day": dict(sorted(by_day.items())),
         "by_model_version": dict(by_model),
         "quality": quality,
@@ -754,6 +922,10 @@ CSV_COLUMNS = (
     "saturation",
     "blur_score",
     "duplicate_group",
+    "source_image_id",
+    "image_sha256",
+    "golden_eligible",
+    "eligibility_reason",
 )
 
 
@@ -864,3 +1036,47 @@ Deliberately not decided here. `summary.json` has the counts; the split
 between representative and hard cases, and how many of each, is a judgement
 about what this station's evaluation should mean.
 """
+
+
+def read_training_provenance(path: str | Path) -> tuple[set[str], set[str]]:
+    """Read what a training run actually consumed, for leakage checks.
+
+    ``training_provenance.json`` is written by the splitter and lists every
+    image that reached train, val or test with its sha256. Using it rather
+    than re-deriving the set from a dataset directory means the check is
+    against what was trained, not against what someone believes was trained.
+
+    Returns ``(source_image_ids, sha256s)``. The source ids come from the
+    filenames, which is where this project records the link between an
+    augmented image and the capture it came from --- so a golden image is
+    excluded when any of its derivatives was trained on, not only when the
+    exact file was.
+    """
+    file = Path(path)
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise GoldenCandidateError(
+            f"Could not read training provenance {file}: {exc}. Refusing to "
+            "assume the run trained on nothing: that would clear every "
+            "candidate of contamination on the strength of a missing file."
+        ) from exc
+
+    images = payload.get("images")
+    if not isinstance(images, list):
+        raise GoldenCandidateError(
+            f"{file} has no image list; it cannot say what was trained on."
+        )
+
+    sources: set[str] = set()
+    hashes: set[str] = set()
+    for entry in images:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("file_name") or entry.get("source_path") or "")
+        if name:
+            sources.add(source_image_id(name))
+        digest = str(entry.get("sha256") or "")
+        if digest:
+            hashes.add(digest)
+    return sources, hashes

@@ -31,6 +31,7 @@ from picture_tool.autotrain.class_schema import (  # noqa: E402
 )
 from picture_tool.autotrain.golden_candidates import (  # noqa: E402
     build_candidates,
+    read_training_provenance,
     write_report,
 )
 from picture_tool.autotrain.paths import AutoTrainPaths  # noqa: E402
@@ -70,6 +71,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=2,
         help="How many candidates to keep from each near-identical group.",
+    )
+    parser.add_argument(
+        "--trained-provenance",
+        type=Path,
+        action="append",
+        default=None,
+        help="A training_provenance.json from a run whose data must stay out "
+        "of the golden set. Repeatable. Golden has to be held out from every "
+        "model it will ever judge, including the smoke runs.",
     )
     parser.add_argument(
         "--no-quality",
@@ -117,6 +127,19 @@ def main(argv: list[str] | None = None) -> int:
         len(labelled_roots),
     )
 
+    trained_sources: set[str] = set()
+    trained_hashes: set[str] = set()
+    for provenance in args.trained_provenance or []:
+        sources, hashes = read_training_provenance(provenance)
+        trained_sources |= sources
+        trained_hashes |= hashes
+        LOGGER.info(
+            "%s: %d trained image(s) over %d source(s)",
+            provenance,
+            len(hashes),
+            len(sources),
+        )
+
     candidates, summary = build_candidates(
         schema=schema,
         review_manifests=manifests,
@@ -127,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         low_confidence_below=args.low_confidence_below,
         per_duplicate_group=args.per_duplicate_group,
         measure_quality=not args.no_quality,
+        trained_source_ids=trained_sources,
+        trained_sha256=trained_hashes,
     )
 
     written = write_report(candidates, summary, out)
@@ -141,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     if summary["coverage_gaps"]:
         LOGGER.warning("  coverage gaps         : %s", summary["coverage_gaps"])
     LOGGER.info("  per class (instances) : %s", summary["per_class"])
+    LOGGER.info("  golden eligible       : %s", summary["golden_eligible"])
+    LOGGER.info("  by eligibility        : %s", summary["by_eligibility"])
+    LOGGER.info("  unique source images  : %s", summary["unique_source_images"])
+    LOGGER.info("  unknown lineage       : %s", summary["unknown_lineage"])
     top = list(summary["confusions"].items())[:5]
     LOGGER.info("  top confusions        : %s", dict(top))
     for name, path in written.items():

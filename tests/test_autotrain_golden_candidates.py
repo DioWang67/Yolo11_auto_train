@@ -578,3 +578,190 @@ def test_an_edited_golden_image_stops_the_set_passing(tmp_path):
 
     status = golden.resolve(str(root), dataset.manifest_sha256)
     assert not status.is_passing
+
+
+# ---------------------------------------------------------------------------
+# Source lineage and eligibility
+
+
+def test_an_augmented_image_traces_back_to_its_original():
+    """Reuses the splitter's own convention rather than inventing a second."""
+    from picture_tool.autotrain.golden_candidates import source_image_id
+
+    assert source_image_id("yolo_Cable1_A_142300_aug_3.png") == "yolo_Cable1_A_142300"
+    assert source_image_id("yolo_Cable1_A_142300.jpg") == "yolo_Cable1_A_142300"
+
+
+def test_an_unnameable_image_reports_unknown_lineage():
+    from picture_tool.autotrain.golden_candidates import UNKNOWN_SOURCE, source_image_id
+
+    assert source_image_id("") == UNKNOWN_SOURCE
+
+
+def _eligible_candidate(tmp_path, **overrides):
+    from picture_tool.autotrain.golden_candidates import ELIGIBLE  # noqa: F401
+
+    base = dict(
+        sample_id="g0",
+        image_path=str(tmp_path / "g0.jpg"),
+        label_path=str(tmp_path / "g0.txt"),
+        status=READY_TO_REVIEW,
+        group=REPRESENTATIVE,
+        source="handoff:job1",
+        class_counts={"Black": 2, "Green": 1, "Orange": 1, "Red": 1, "Yellow": 1},
+        source_image_id="yolo_Cable1_A_1",
+        image_sha256="deadbeef",
+    )
+    base.update(overrides)
+    return Candidate(**base)
+
+
+def _assess(candidate, **kwargs):
+    from picture_tool.autotrain.golden_candidates import assess_eligibility
+
+    return assess_eligibility(
+        candidate, schema=SCHEMA, expected_boxes=EXPECTED_BOXES, **kwargs
+    )
+
+
+def test_a_complete_traceable_uncontaminated_label_is_eligible(tmp_path):
+    from picture_tool.autotrain.golden_candidates import ELIGIBLE
+
+    assert _assess(_eligible_candidate(tmp_path)) == (True, ELIGIBLE)
+
+
+def test_the_exact_image_having_been_trained_on_is_contamination(tmp_path):
+    from picture_tool.autotrain.golden_candidates import TRAINING_CONTAMINATION
+
+    eligible, reason = _assess(
+        _eligible_candidate(tmp_path), trained_sha256=frozenset({"deadbeef"})
+    )
+
+    assert (eligible, reason) == (False, TRAINING_CONTAMINATION)
+
+
+def test_an_augmentation_of_the_image_having_been_trained_on_is_contamination(tmp_path):
+    """The case a byte hash cannot see, and the one that actually happens.
+
+    Training augments before it splits, so what reaches the model is a flipped,
+    brightened derivative whose bytes match nothing. The source id is what
+    connects them.
+    """
+    from picture_tool.autotrain.golden_candidates import TRAINING_CONTAMINATION
+
+    eligible, reason = _assess(
+        _eligible_candidate(tmp_path),
+        trained_source_ids=frozenset({"yolo_Cable1_A_1"}),
+        trained_sha256=frozenset({"a-completely-different-hash"}),
+    )
+
+    assert (eligible, reason) == (False, TRAINING_CONTAMINATION)
+
+
+def test_a_production_image_without_boxes_is_not_eligible(tmp_path):
+    from picture_tool.autotrain.golden_candidates import NEEDS_LABEL
+
+    candidate = _eligible_candidate(
+        tmp_path, status=NEEDS_ANNOTATION, label_path="", class_counts={}
+    )
+
+    assert _assess(candidate) == (False, NEEDS_LABEL)
+
+
+def test_a_human_correction_alone_does_not_make_ground_truth(tmp_path):
+    """A corrected prediction says one box was wrong, not that all are right.
+
+    The row carries corrections and a verified class per detected box, and
+    still has no statement about what the model failed to detect.
+    """
+    from picture_tool.autotrain.golden_candidates import NEEDS_LABEL
+
+    candidate = _eligible_candidate(
+        tmp_path,
+        status=NEEDS_ANNOTATION,
+        label_path="",
+        reasons=(REASON_CORRECTION,),
+        corrections=("Red->Orange",),
+        class_counts={"Black": 2, "Green": 1, "Orange": 1, "Red": 1, "Yellow": 1},
+    )
+
+    assert _assess(candidate) == (False, NEEDS_LABEL)
+
+
+def test_a_box_count_that_disagrees_with_the_station_is_incomplete(tmp_path):
+    from picture_tool.autotrain.golden_candidates import LABEL_INCOMPLETE
+
+    candidate = _eligible_candidate(
+        tmp_path,
+        class_counts={"Black": 1, "Green": 1, "Orange": 1, "Red": 1, "Yellow": 1},
+    )
+
+    assert _assess(candidate) == (False, LABEL_INCOMPLETE)
+
+
+def test_copies_that_disagree_about_their_labels_are_incomplete(tmp_path):
+    """This station's own data contains exactly one such image."""
+    from picture_tool.autotrain.golden_candidates import LABEL_INCOMPLETE
+
+    eligible, reason = _assess(
+        _eligible_candidate(tmp_path),
+        conflicting_source_ids=frozenset({"yolo_Cable1_A_1"}),
+    )
+
+    assert (eligible, reason) == (False, LABEL_INCOMPLETE)
+
+
+def test_a_class_the_schema_cannot_explain_is_a_mismatch(tmp_path):
+    from picture_tool.autotrain.golden_candidates import SCHEMA_MISMATCH
+
+    candidate = _eligible_candidate(
+        tmp_path, class_counts={"Black": 2, "Green": 1, "Orange": 1, "Red": 1, "Blue": 1}
+    )
+
+    assert _assess(candidate) == (False, SCHEMA_MISMATCH)
+
+
+def test_an_untraceable_image_is_not_quietly_accepted(tmp_path):
+    """Unknown lineage cannot be cleared of leakage, so it is not eligible."""
+    from picture_tool.autotrain.golden_candidates import (
+        SOURCE_UNKNOWN,
+        UNKNOWN_SOURCE,
+    )
+
+    candidate = _eligible_candidate(tmp_path, source_image_id=UNKNOWN_SOURCE)
+
+    assert _assess(candidate) == (False, SOURCE_UNKNOWN)
+
+
+def test_unreadable_provenance_is_refused_rather_than_treated_as_empty(tmp_path):
+    """An empty answer here would clear every candidate of contamination."""
+    from picture_tool.autotrain.golden_candidates import (
+        GoldenCandidateError,
+        read_training_provenance,
+    )
+
+    with pytest.raises(GoldenCandidateError, match="Refusing to assume"):
+        read_training_provenance(tmp_path / "missing.json")
+
+
+def test_provenance_yields_both_source_ids_and_hashes(tmp_path):
+    from picture_tool.autotrain.golden_candidates import read_training_provenance
+
+    path = tmp_path / "training_provenance.json"
+    path.write_text(
+        json.dumps(
+            {
+                "images": [
+                    {"file_name": "cap_1_aug_0.png", "sha256": "aaa"},
+                    {"file_name": "cap_1_aug_1.png", "sha256": "bbb"},
+                    {"file_name": "cap_2.jpg", "sha256": "ccc"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    sources, hashes = read_training_provenance(path)
+
+    assert sources == {"cap_1", "cap_2"}
+    assert hashes == {"aaa", "bbb", "ccc"}
