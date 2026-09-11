@@ -269,3 +269,66 @@ hash 05f915927011ba63db6d16d535e714c014b53f3f6602391688536aa5b3119df9
 - **本機沒有真實產線紀錄**（`Result/` 是空的），所以「產線紀錄帶不帶 `class_names`」
   是從產生端程式碼確認的（`yolo11_inference/core/yolo_inference_model.py:441`，
   註解明寫 ordered names 是訓練資料契約的一部分），不是從真實紀錄檔。
+
+---
+
+## 7. Golden dataset v1 候選（2026-09-11）
+
+### 先更正一件事
+
+先前 §6 寫「本機沒有真實產線紀錄（`Result/` 空）」是**錯的**——查錯目錄了。
+真實產線輸出在 **workspace 根目錄**的 `Result/`：43 個日期目錄、2095 張 Cable1/A 原圖、
+2196 份 config snapshot。`collect` 對它實跑過，2096 筆紀錄、0 筆無法讀取。
+
+順帶解答 §6 留下的問題：2196 份 snapshot 中 **1392 份有 `model_info.class_names`、
+804 份沒有**（較舊、`model_version` 為 None 那批）。第 4 順位來源覆蓋率 63%。
+
+### 最重要的發現：production 紀錄不能直接當真值
+
+production 存的是「模型**找到**的框 + 人工對每個框的判定」。漏掉的物件不會留下任何痕跡。
+
+```
+每列偵測框數（共 2607 列）：
+   0 框  935 列      ← 完全漏檢
+ 1-5 框  214 列      ← 部分漏檢
+   6 框 1247 列      ← 預期（2 Black + 各 1）
+  7+ 框  211 列      ← 多檢
+
+低於 6 框：1149 列（44.1%）
+```
+
+拿它當 golden 真值 = **把每一個 false negative 都算成正確**。所以候選分兩種 status：
+`ready_to_review`（71 張，有人工框）與 `needs_annotation`（production，需先標註）。
+
+### 工具
+
+| 檔案 | 用途 |
+| --- | --- |
+| `src/picture_tool/autotrain/golden_candidates.py` | 選候選、去重、統計、報告 |
+| `scripts/golden_candidates.py` | CLI 進入點 |
+
+```powershell
+python scripts/golden_candidates.py --out runs/golden_candidates/v1
+```
+
+唯讀。production 影像只被引用，不複製、不移動、不修改。
+
+### 實跑結果（Cable1/A）
+
+1730 檢視 → 582 去重 → **1148 候選**（71 ready_to_review + 1077 needs_annotation；
+871 hard_case + 277 representative）。五種 hard case 全部有樣本，無 coverage gap。
+
+`ready_to_review` 恰為 71，與獨立量到的唯一已標註影像數相符——這個數字是修掉一個缺陷
+後才對的：handoff 會把 production 影像複製進 job，同一張圖同時以「已標註」與
+「production 證據」出現，原本的排序會丟掉有真值的那份。現在先**合併證據**再去重。
+
+### 去重是兩層的
+
+sha256 抓重複複製的檔案（本專案 510 個檔案只有 71 張唯一影像），dHash 抓「人眼看來相同
+但位元不同」的。**精確重複只留 1 份**（兩份同一個檔案不是兩個樣本），近重複可留多份
+（那真的是不同照片）。
+
+### 尚未做
+
+Step 8 的 evaluator 雙組指標（representative / hard_case 分開算）尚未實作。
+golden manifest 已經有 `groups` 欄位可承載這個分組，evaluator 端還沒接。
