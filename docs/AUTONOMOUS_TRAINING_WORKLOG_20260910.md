@@ -93,9 +93,10 @@ python scripts\validate_workspace.py --root .
 python scripts\generate_color_conformance.py --check
 ```
 
-### 兩件**沒有**驗證的事
+### 沒有驗證的事
 
-- **從來沒有跑過一次真的 YOLO 訓練。** 所有測試都注入假的 runner／validator。
+- ~~從來沒有跑過一次真的 YOLO 訓練。~~ **2026-09-11 跑過了**，見 §3(2)。
+  改用 `python scripts/autotrain_smoke.py --fresh` 重跑。
 - **CLI 本機一次都沒執行過。** `typer` 在本機三個 python 環境都沒安裝
   （系統 3.11、`anomalib_env`、`yolo_anomalib`），所以 `test_autotrain_cli.py`
   本機一律 skip。CI 的 `requirements-dev.txt` 有 `typer==0.21.0`，在那裡才會跑。
@@ -126,17 +127,35 @@ package 之前，否則中間那個 commit 自己是壞的；console script 指�
 
 `yolo11_inference` 的 golden sample 那批**仍未提交**，本次同樣沒碰。
 
-### (2) 跑一次真的訓練（最大的未知）
+### ~~(2) 跑一次真的訓練~~ —— 已完成（2026-09-11），挖出三個缺陷
 
-目前 `trainer.py` 與既有 `run_pipeline` 的介面只在假 runner 下驗證過。真跑一次會遇到
-的疑點：
+用 `scripts/autotrain_smoke.py` 跑通了：真實 operator handoff job 的 46 張已標註影像
+→ 增生 → 切分 → CPU 1 epoch，從真實 champion 續訓，產出 challenger。
 
-- `build_candidate_config()` 產出的 config 能否通過 `validate_config_schema`。
-- `dataset_splitter` 的 `minimum_source_groups`（val ≥5、test ≥10 組獨立原圖）——
-  一開始樣本少會直接卡住，這是既有的安全下限，不要為了跑通把它調低。
-- `_resolve_run_dir()` 對 ultralytics `exist_ok=False` 自動遞增目錄的假設。
+**假 runner 測試抓不到、只有真跑才會出現的三個缺陷**（都已修）：
 
-建議先用一小批已標註資料、`epochs: 1`、`device: cpu` 跑通，再談品質。
+| commit | 缺陷 |
+| --- | --- |
+| `3a77dab` | 版本庫的唯讀位元經 `copy2` 傳染給工作副本，**續跑必定 `PermissionError`**，還會蓋掉原始失敗原因 |
+| `7ea5985` | `read_champion()` 三處路徑／欄位名與 `deploy.py` 實際寫出的不符，**真實站別上從來無法開始訓練** |
+| `6e57de5` | `build_candidate_config()` 留下失效的 `position_validation.sample_dir`，每個任務都吐 schema 警告 |
+
+`3a109ed` 另外補上 `TrainingResult.trained_this_run`。
+
+**原先列的三個疑點，結論與預期不同：**
+
+- `validate_config_schema` **不是**通過，而是 `run_pipeline` 用 `strict=False` 呼叫，
+  失敗降級成警告繼續跑。清掉 `sample_dir` 後只剩 `dataset_dir` 那項，屬順序性
+  （split 目錄要到 `dataset_splitter` 才建），跑到 `yolo_train` 時已乾淨，不需處理。
+- `minimum_source_groups` 沒有卡住（46 張原圖足夠）。
+- `_resolve_run_dir()` 的「重跑會變成 `candidate2`」**至今仍未被觸發**：重跑時
+  `skip_yolo_train` 會先把整個 run 跳掉，根本不會產生新目錄。要真的觸發它，
+  得讓 dataset 或 config 改變。
+
+### (2b) 還沒做：一次完整 cycle
+
+上面只驗證了 `train_candidate` 這一段。`run_training_cycle` 的七個步驟串起來跑一次
+還沒做過，而 `collect` / `select` 依賴真實產線紀錄，`evaluate` 依賴 golden（見 (3)）。
 
 ### (3) 決定 golden dataset
 
@@ -166,6 +185,17 @@ fail-closed，不是 bug。
 
 ## 4. 坑（都是查過才知道的）
 
+- **重跑一次不代表重訓一次。** `skip_yolo_train` 比對 `dataset_hash` 與 `config_hash`，
+  相符就把整條 run 跳掉（增生／lint／切分／訓練全跳），而且只寫在 log 裡。
+  看 `TrainingResult.trained_this_run`，不要看有沒有產出權重。
+- **`_class_names()` 的 fallback 在真實站別上會失敗。** 它找
+  `models/<產品>/<站別>/yolo/config.yaml` 的 `class_names` 或 `names`，
+  但 Cable1/A 兩個都沒有，只有 `expected_items`
+  （`['Red','Green','Orange','Yellow','Black','Black']` —— 站別的預期項目清單，
+  順序不同且有重複，**不是**模型類別表，不要拿來用）。正確的類別順序在
+  handoff job 自己的 `data.yaml`（`['Black','Green','Orange','Red','Yellow']`）。
+  **尚未確認**收集到的產線紀錄帶不帶 `class_names`；若不帶，train 步驟會丟
+  `CycleError`。跑完整 cycle 前先確認這件事。
 - **`tests/conftest.py` 的隔離 workspace 是 session 級的。** dataset 版本號、pool、
   registry 會跨測試累積，斷言變順序相依。`test_autotrain_orchestrator.py` 與
   `test_autotrain_service.py` 因此**每個測試自建一份 `WorkspacePaths`** 指向 `tmp_path`。
