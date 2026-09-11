@@ -18,14 +18,14 @@ git -C yolo11_inference branch --show-current
 #   應為 fix/restore-color-verification-and-duplicate-suppression
 ```
 
-### 這個工作樹裡有**兩批互不相干**的未提交工作
+### 這個工作樹裡有**兩批互不相干**的工作
 
 `git add -A` 會把它們黏成一坨，**不要這樣做**。
 
-| 位置 | 內容 | 誰的 |
+| 位置 | 內容 | 狀態 |
 | --- | --- | --- |
-| `Yolo11_auto_train` | `autotrain/` 全套 + 2 個既有檔案的小改動 | 本次工作 |
-| `yolo11_inference` | golden sample 開線檢查（8 個未追蹤檔 + 5 個修改） | **先前既有的工作，本次完全沒碰** |
+| `Yolo11_auto_train` | `autotrain/` 全套 + 2 個既有檔案的小改動 | **已提交**（2026-09-11，見 §3(1)），未 push |
+| `yolo11_inference` | golden sample 開線檢查（8 個未追蹤檔 + 5 個修改） | **仍未提交**，先前既有的工作，本次完全沒碰 |
 
 `yolo11_inference` 的 `git status` 在本次工作開始前與結束後**逐字相同**，
 其 2247 個測試也全數通過。那批工作請獨立處理。
@@ -64,6 +64,9 @@ git -C yolo11_inference branch --show-current
 
 ## 2. 驗證到哪（2026-09-10）
 
+提交前於 2026-09-11 重跑確認，training 端數字與下表逐項相同
+（1268 passed / 6 skipped、ruff 與 mypy 全綠、coverage 82.08%）。
+
 | 項目 | 結果 |
 | --- | --- |
 | training 全套 | 1268 passed / 6 skipped |
@@ -101,16 +104,27 @@ python scripts\generate_color_conformance.py --check
 
 ## 3. 下一步，依價值排序
 
-### (1) 先把工作提交（最高優先）
+### ~~(1) 先把工作提交~~ —— 已完成（2026-09-11）
 
-現在全部未提交。建議拆成獨立 commit，**不要**和 `yolo11_inference` 的 golden sample
-工作混在一起。建議切法：
+已提交，未 push（沿用本 workspace 政策）。
 
-- `feat(autotrain): add the parallel autonomous training path`（新 package + 設定 + 測試 + 文件）
-- `chore(autotrain): register the console script`（`pyproject.toml`）
-- `feat(lock): add an autotrain store lock`（`dataset_manifest_lock.py`）
+| commit | 內容 |
+| --- | --- |
+| `5f0eed7` | `feat(lock): add an autotrain store lock` |
+| `0d6fda5` | `feat(autotrain): add the parallel autonomous training path` |
+| `c683afc` | `chore(autotrain): register the console script` |
 
-沿用本 workspace 政策：**commit 但不 push**。
+workspace 端 `bd81783` 只推進 `Yolo11_auto_train` 一個 pointer（不是慣例的
+「advance both」——因為本次對 `yolo11_inference` 零修改，它沒有東西可推進），
+另有 `8e01450` 把 workspace 根目錄的 `.coverage` 加進 `.gitignore`。
+
+**順序不可對調。** `autotrain/` 會 `import autotrain_store_lock`，所以鎖必須排在
+package 之前，否則中間那個 commit 自己是壞的；console script 指向
+`picture_tool.autotrain.cli:app`，必須排在 package 之後。這三個 commit 各自都能單獨
+跑測試（已確認 `test_autotrain_cli.py` 是直接 import typer 的 `app` 物件、
+不經過安裝的 console script，也沒有任何測試斷言 entry point 清單）。
+
+`yolo11_inference` 的 golden sample 那批**仍未提交**，本次同樣沒碰。
 
 ### (2) 跑一次真的訓練（最大的未知）
 
