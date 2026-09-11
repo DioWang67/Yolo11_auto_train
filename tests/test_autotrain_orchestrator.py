@@ -401,7 +401,33 @@ def test_a_cycle_with_nothing_labelled_blocks_and_says_so(
     assert result.report_path.is_file()
 
 
+def test_a_bare_station_blocks_before_cutting_a_dataset_version(
+    paths, config, tmp_path
+):
+    """Nothing deployed and nothing collected means no class contract.
+
+    It stops at the dataset step rather than at training because a dataset
+    version is immutable: one cut here would permanently record class ids
+    whose meaning nothing states.
+    """
+    _seed_verified_pool(paths, tmp_path)
+
+    result = run_training_cycle(
+        config, paths, cycle_id="cycle_test_noschema", runner=_FakeRunner()
+    )
+
+    assert result.status == BLOCKED
+    assert "No class schema is available" in result.blocked_reason
+    assert result.state.step(STEP_DATASET)["status"] == "BLOCKED"
+
+
 def test_a_station_with_no_champion_blocks_before_training(paths, config, tmp_path):
+    """With the contract known but nothing deployed, training is what blocks."""
+    model_dir = paths.production_model_dir(PRODUCT, AREA)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "config.yaml").write_text(
+        yaml.safe_dump({"class_names": CLASSES}), encoding="utf-8"
+    )
     _seed_verified_pool(paths, tmp_path)
 
     result = run_training_cycle(

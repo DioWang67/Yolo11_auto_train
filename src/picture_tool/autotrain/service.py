@@ -35,7 +35,15 @@ from picture_tool.autotrain.labeling import verified_samples
 from picture_tool.autotrain.metrics import ModelMetrics, compare
 from picture_tool.autotrain.orchestrator import TrainingCycle, run_training_cycle
 from picture_tool.autotrain.paths import AutoTrainPaths
-from picture_tool.autotrain.registry import CandidateRegistry, read_champion
+from picture_tool.autotrain.class_schema import (
+    resolve_class_schema,
+    schema_from_station_config,
+)
+from picture_tool.autotrain.registry import (
+    CandidateRegistry,
+    read_champion,
+    station_class_schema,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -203,6 +211,17 @@ class AutoTrainService:
             ],
             source="autotrain-pool",
             label_source="human-verified",
+            class_schema=resolve_class_schema(
+                [
+                    station_class_schema(
+                        self.paths.production_model_dir(self.product, self.area)
+                    ),
+                    schema_from_station_config(
+                        self.paths.production_model_dir(self.product, self.area)
+                    ),
+                ],
+                context=f"{self.product}/{self.area}",
+            ),
             description=description,
         )
         return version.to_dict()

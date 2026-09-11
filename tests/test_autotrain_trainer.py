@@ -25,6 +25,16 @@ from picture_tool.autotrain.trainer import (
     prepare_work_dir,
     train_candidate,
 )
+from picture_tool.autotrain.class_schema import (
+    ClassSchemaError,
+    normalize_class_names,
+)
+
+#: The real Cable1/A contract, in the order the station's champion and
+#: every handoff manifest record it.
+SCHEMA = normalize_class_names(
+    ["Black", "Green", "Orange", "Red", "Yellow"], source="test"
+)
 
 BASE_CONFIG = {
     "pipeline": {"tasks": [{"name": "yolo_train", "enabled": True}]},
@@ -62,7 +72,12 @@ def _dataset_version(tmp_path: Path, ids=("a", "b")):
         samples.append(
             LabelledSample(sample_id=sample_id, image_path=image, label_path=label)
         )
-    return store.create(samples, source="pool", label_source="operator")
+    return store.create(
+        samples,
+        source="pool",
+        label_source="operator",
+        class_schema=SCHEMA,
+    )
 
 
 class _FakeRunner:
@@ -92,7 +107,7 @@ def _train(tmp_path, runner=None, **overrides):
         "work_dir": tmp_path / "cycle" / "work",
         "model_version": "Cable1_A_v1.3.0-candidate",
         "base_model": str(tmp_path / "champion.pt"),
-        "class_names": ["Red", "Orange"],
+        "class_schema": SCHEMA,
         "runner": runner or _FakeRunner(),
     }
     options.update(overrides)
@@ -239,6 +254,66 @@ def test_position_calibration_stays_out_of_a_challenger_run(tmp_path):
     # Disabled is not enough: the inherited sample_dir names a directory this
     # cycle never builds, and the schema check reports it before every task.
     assert "sample_dir" not in position
+
+
+# ---------------------------------------------------------------------------
+# The class contract
+
+
+def test_a_schema_mismatch_stops_the_trainer_before_it_starts(tmp_path):
+    """Not "fails during"; the pipeline is never invoked at all.
+
+    Training under a different name order costs an epoch and produces a model
+    whose every class id means something else, with metrics that look fine.
+    """
+    version = _dataset_version(tmp_path)
+    reordered = normalize_class_names(
+        ["Green", "Black", "Orange", "Red", "Yellow"], source="other"
+    )
+    runner = _FakeRunner()
+
+    with pytest.raises(CandidateTrainingError, match="disagree"):
+        _train(tmp_path, dataset_version=version, class_schema=reordered, runner=runner)
+
+    assert runner.calls == []
+
+
+def test_a_label_outside_the_schema_stops_the_trainer(tmp_path):
+    """Checked on the working copy the pipeline actually reads.
+
+    The version was cut against five classes and carries a ``3``. Training it
+    under a one-class contract would hand ultralytics an id with no name.
+    """
+    store = DatasetVersionStore(tmp_path / "datasets", product="Cable1", area="A")
+    image = tmp_path / "src" / "a.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"pixels")
+    label = tmp_path / "src" / "a.txt"
+    label.write_text("3 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    version = store.create(
+        [LabelledSample(sample_id="a", image_path=image, label_path=label)],
+        source="pool",
+        label_source="operator",
+        class_schema=SCHEMA,
+    )
+
+    narrow = normalize_class_names(["Black"], source="narrow")
+    # Aligned with the version so that only the label range can object.
+    object.__setattr__(version, "class_schema", narrow)
+    runner = _FakeRunner()
+
+    with pytest.raises(ClassSchemaError, match="outside 0..0"):
+        _train(tmp_path, dataset_version=version, class_schema=narrow, runner=runner)
+
+    assert runner.calls == []
+
+
+def test_the_challenger_records_the_contract_it_trained_under(tmp_path):
+    result = _train(tmp_path)
+
+    assert result.class_schema is not None
+    assert result.class_schema.names == SCHEMA.names
+    assert result.to_dict()["class_schema"]["schema_hash"] == SCHEMA.schema_hash
 
 
 # ---------------------------------------------------------------------------

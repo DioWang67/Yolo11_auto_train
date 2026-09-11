@@ -36,6 +36,7 @@ from typing import Any, Callable, Mapping, Sequence
 import yaml
 
 from picture_tool.autotrain import AutoTrainError
+from picture_tool.autotrain.class_schema import ClassSchema, validate_label_class_ids
 from picture_tool.autotrain.dataset_versions import DatasetVersion
 
 LOGGER = logging.getLogger(__name__)
@@ -73,6 +74,9 @@ class TrainingResult:
     class_names: tuple[str, ...]
     tasks: tuple[str, ...]
     config_path: Path
+    #: The contract those names came from, carried so a later comparison can
+    #: check compatibility without re-deriving it.
+    class_schema: ClassSchema | None = None
     #: False when the pipeline's skip cache reused an earlier attempt's
     #: weights instead of training. The weights are still correct for this
     #: dataset and config --- that is what the cache checks --- but they were
@@ -92,6 +96,9 @@ class TrainingResult:
             "dataset_content_id": self.dataset_content_id,
             "base_model": self.base_model,
             "class_names": list(self.class_names),
+            "class_schema": (
+                self.class_schema.to_dict() if self.class_schema else None
+            ),
             "tasks": list(self.tasks),
             "config_path": str(self.config_path),
             "trained_this_run": self.trained_this_run,
@@ -246,7 +253,7 @@ def train_candidate(
     work_dir: Path,
     model_version: str,
     base_model: str,
-    class_names: Sequence[str],
+    class_schema: ClassSchema,
     epochs: int = 50,
     imgsz: int = 640,
     batch: int = 4,
@@ -263,15 +270,35 @@ def train_candidate(
     """
     log = logger or LOGGER
     requested = assert_no_forbidden_tasks(tasks)
+    class_names = list(class_schema.names)
     if not base_model:
         raise CandidateTrainingError(
             "No base model resolved. A challenger continues from the deployed "
             "champion so it keeps the classes the line detects today."
         )
 
+    if (
+        dataset_version.class_schema is not None
+        and not dataset_version.class_schema.agrees_with(class_schema)
+    ):
+        raise CandidateTrainingError(
+            "Refusing to train: the dataset version and the resolved class "
+            "schema disagree.\n"
+            f"  dataset version {dataset_version.version}: "
+            f"{dataset_version.class_schema.describe()}\n"
+            f"  training against:  {class_schema.describe()}\n"
+            "  The labels store class ids, so training them under a different "
+            "name order produces a model that is wrong in a way its metrics "
+            "cannot show."
+        )
+
     work_dir.mkdir(parents=True, exist_ok=True)
     candidate_dir.mkdir(parents=True, exist_ok=True)
     prepare_work_dir(dataset_version, work_dir)
+    # Re-checked on the working copy rather than trusted from the version:
+    # this is the directory the pipeline actually reads, and an id outside the
+    # schema would otherwise reach ultralytics as a silent off-by-one class.
+    validate_label_class_ids(work_dir / "raw" / "labels", class_schema)
 
     run_project = work_dir / "runs"
     run_name = "candidate"
@@ -333,6 +360,7 @@ def train_candidate(
         dataset_content_id=dataset_version.content_id,
         base_model=base_model,
         class_names=tuple(class_names),
+        class_schema=class_schema,
         tasks=requested,
         config_path=config_path,
         trained_this_run=trained_this_run,

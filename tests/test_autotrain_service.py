@@ -22,6 +22,7 @@ from picture_tool.workspace_paths import WorkspacePaths
 
 PRODUCT = "Cable1"
 AREA = "A"
+CLASSES = ("Black", "Green", "Orange", "Red", "Yellow")
 
 
 @pytest.fixture()
@@ -47,7 +48,15 @@ def paths(tmp_path) -> AutoTrainPaths:
         inference_artifacts=root.resolve(),
         manifest_path=None,
     )
-    return AutoTrainPaths.from_workspace(workspace)
+    resolved = AutoTrainPaths.from_workspace(workspace)
+    # A station that states its class contract. Without one, every write path
+    # here fails closed on purpose --- see the dedicated test below.
+    model_dir = resolved.production_model_dir(PRODUCT, AREA)
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "config.yaml").write_text(
+        yaml.safe_dump({"class_names": list(CLASSES)}), encoding="utf-8"
+    )
+    return resolved
 
 
 @pytest.fixture()

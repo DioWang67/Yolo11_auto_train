@@ -29,8 +29,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-import yaml
-
 from picture_tool.autotrain import AutoTrainError
 from picture_tool.autotrain import golden as golden_module
 from picture_tool.autotrain import promotion as promotion_module
@@ -39,6 +37,7 @@ from picture_tool.autotrain.candidate_pool import CandidatePool
 from picture_tool.autotrain.collector import collect_production_records
 from picture_tool.autotrain.config import AutoTrainConfig
 from picture_tool.autotrain.dataset_versions import (
+    DatasetVersion,
     DatasetVersionStore,
     LabelledSample,
 )
@@ -52,7 +51,17 @@ from picture_tool.autotrain.registry import (
     REJECTED,
     TRAINED,
     CandidateRegistry,
+    ChampionModel,
     read_champion,
+    read_champion_class_schema,
+)
+from picture_tool.autotrain.class_schema import (
+    SOURCE_RECORDED,
+    ClassSchema,
+    ClassSchemaError,
+    resolve_class_schema,
+    schema_from_json_field,
+    schema_from_station_config,
 )
 from picture_tool.autotrain.selectors import run_selectors
 from picture_tool.autotrain.trainer import train_candidate
@@ -330,20 +339,36 @@ class TrainingCycle:
             )
             for sample in usable
         ]
+        # Resolved before the version is cut, not after: the version records
+        # the contract its labels were written against, and one built without
+        # it stores class ids whose meaning would have to be guessed later.
+        # Blocked rather than failed --- a station with nothing deployed and
+        # nothing collected yet has no contract to state, which is a stage to
+        # wait at, not a crash. It stops here rather than at training because
+        # a dataset version is immutable: one cut now would record class ids
+        # with no recoverable meaning.
+        try:
+            schema = self._class_schema()
+        except ClassSchemaError as exc:
+            self._block(STEP_DATASET, str(exc))
+            return ""
         version = self.dataset_store.create(
             samples,
             source="autotrain-pool",
             label_source="human-verified",
+            class_schema=schema,
             description=f"cycle {self.cycle_id}",
             split_policy={"splitter": "picture_tool.split.dataset_splitter"},
         )
         self.state.data["dataset_version"] = version.version
         self.state.data["dataset_content_id"] = version.content_id
+        self.state.data["class_schema"] = schema.to_dict()
         self._finish(
             STEP_DATASET,
             version=version.version,
             content_id=version.content_id,
             samples=len(version.sample_ids),
+            class_schema_hash=schema.schema_hash,
         )
         return version.version
 
@@ -366,6 +391,21 @@ class TrainingCycle:
             return ""
         self.state.data["champion"] = champion.to_dict()
 
+        # Champion, dataset and production records must already agree on what
+        # a class id means before anything is trained. A mismatch here is not
+        # a warning: the two models would be measured against each other on
+        # metrics whose per-class numbers refer to different classes.
+        try:
+            schema = self._class_schema(dataset=version, champion=champion)
+        except ClassSchemaError as exc:
+            detail = (
+                f"{exc}\n  dataset version: {version.version}\n"
+                f"  champion version: {champion.model_version or '(unversioned)'}"
+            )
+            self._fail(STEP_TRAIN, detail)
+            raise CycleError(detail) from exc
+        self.state.data["class_schema"] = schema.to_dict()
+
         base_model = champion.training_weight_path or champion.weights_path
         model_version = f"{self.product}_{self.area}_{self.cycle_id}_candidate"
         registry = self.registry
@@ -375,6 +415,7 @@ class TrainingCycle:
             dataset_content_id=version.content_id,
             parent_model=champion.model_version,
             cycle_id=self.cycle_id,
+            class_schema=schema,
             training_config={
                 "epochs": self.config.training.epochs,
                 "imgsz": self.config.training.imgsz,
@@ -391,7 +432,7 @@ class TrainingCycle:
                 work_dir=self.directory / "work",
                 model_version=model_version,
                 base_model=base_model,
-                class_names=self._class_names(),
+                class_schema=schema,
                 epochs=self.config.training.epochs,
                 imgsz=self.config.training.imgsz,
                 batch=self.config.training.batch,
@@ -528,29 +569,62 @@ class TrainingCycle:
 
     # -- helpers ----------------------------------------------------------------
 
-    def _class_names(self) -> tuple[str, ...]:
-        """Class list from the deployed model, so the contract cannot drift."""
-        records = self.state.data.get("records") or []
-        for record in records:
-            names = record.get("class_names") or []
-            if names:
-                return tuple(str(name) for name in names)
-        model_config = (
-            self.paths.production_model_dir(self.product, self.area) / "config.yaml"
+    def _recorded_class_schema(self) -> ClassSchema | None:
+        """The class contract as stated by collected production records.
+
+        Inference writes ``model_info.class_names`` into every inspection from
+        the loaded model's own ``names``, so this is a report of the champion's
+        contract rather than an independent one --- useful when the checkpoint
+        cannot be opened, and a cross-check when it can.
+        """
+        for record in self.state.data.get("records") or []:
+            schema = schema_from_json_field(
+                record.get("class_names"), source=SOURCE_RECORDED
+            )
+            if schema is not None:
+                return schema
+        return None
+
+    def _champion_class_schema(
+        self, champion: ChampionModel | None = None
+    ) -> ClassSchema | None:
+        """The class contract read from the deployed checkpoint itself."""
+        model = champion or read_champion(
+            self.paths.production_model_dir(self.product, self.area)
         )
-        if model_config.is_file():
-            try:
-                payload = yaml.safe_load(model_config.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, yaml.YAMLError):
-                payload = None
-            if isinstance(payload, dict):
-                names = payload.get("class_names") or payload.get("names")
-                if isinstance(names, (list, tuple)) and names:
-                    return tuple(str(name) for name in names)
-        raise CycleError(
-            "Could not determine the class list for this station. A challenger "
-            "trained on a different class order would be incomparable to the "
-            "champion."
+        if model is None:
+            return None
+        return read_champion_class_schema(model)
+
+    def _class_schema(
+        self,
+        *,
+        dataset: DatasetVersion | None = None,
+        champion: ChampionModel | None = None,
+    ) -> ClassSchema:
+        """Decide what this station's class ids mean, or refuse to proceed.
+
+        Precedence is dataset version, then champion checkpoint, then what
+        production records report --- but precedence only decides which source
+        is *named* in the result. Every source that is present must agree, and
+        a disagreement stops the cycle rather than picking a winner.
+
+        The station ``config.yaml`` is deliberately not consulted. It carries
+        ``expected_items``, which is the multiset of items the station expects
+        to see --- differently ordered, and repeating entries --- and reading
+        it as a class list would train a model whose every prediction is
+        mislabelled while every metric still looks healthy.
+        """
+        return resolve_class_schema(
+            [
+                dataset.class_schema if dataset is not None else None,
+                self._champion_class_schema(champion),
+                schema_from_station_config(
+                    self.paths.production_model_dir(self.product, self.area)
+                ),
+                self._recorded_class_schema(),
+            ],
+            context=f"{self.product}/{self.area}",
         )
 
     def _training_sample_ids(self) -> tuple[str, ...]:
