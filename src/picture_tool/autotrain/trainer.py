@@ -73,6 +73,13 @@ class TrainingResult:
     class_names: tuple[str, ...]
     tasks: tuple[str, ...]
     config_path: Path
+    #: False when the pipeline's skip cache reused an earlier attempt's
+    #: weights instead of training. The weights are still correct for this
+    #: dataset and config --- that is what the cache checks --- but they were
+    #: not produced now, and ``metrics`` then carries the earlier run's
+    #: ``trained_at``. A cycle report recommending a promotion should be able
+    #: to say which of the two happened.
+    trained_this_run: bool = True
     metrics: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,6 +94,7 @@ class TrainingResult:
             "class_names": list(self.class_names),
             "tasks": list(self.tasks),
             "config_path": str(self.config_path),
+            "trained_this_run": self.trained_this_run,
             "metrics": dict(self.metrics),
         }
 
@@ -283,6 +291,7 @@ def train_candidate(
 
     args = _pipeline_args(config_path, args_overrides)
     execute = runner or _default_runner()
+    weights_before = _run_weight_mtimes(run_project)
     log.info(
         "Training challenger %s on %s with tasks %s",
         model_version,
@@ -298,6 +307,14 @@ def train_candidate(
 
     run_dir = _resolve_run_dir(run_project, run_name)
     weights = _resolve_weights(run_dir)
+    trained_this_run = weights_before.get(weights) != weights.stat().st_mtime_ns
+    if not trained_this_run:
+        log.warning(
+            "Challenger %s reuses weights from an earlier attempt: the "
+            "pipeline's skip cache matched this dataset and config, so no "
+            "training ran in this attempt.",
+            model_version,
+        )
     destination = candidate_dir / "weights" / weights.name
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(weights, destination)
@@ -313,6 +330,7 @@ def train_candidate(
         class_names=tuple(class_names),
         tasks=requested,
         config_path=config_path,
+        trained_this_run=trained_this_run,
         metrics=_read_run_metrics(run_dir),
     )
 
@@ -393,6 +411,24 @@ def _force_colour_safe_augmentation(augmentation: dict[str, Any]) -> None:
     operations.setdefault("hue", {})["range"] = [1, 1]
     operations.setdefault("flip", {})["probability"] = 0.0
     operations.setdefault("perspective", {})["scale"] = [0, 0]
+
+
+def _run_weight_mtimes(project: Path) -> dict[Path, int]:
+    """Snapshot the weights already present under a run project.
+
+    Compared against afterwards to tell a real training run from one the
+    pipeline's skip cache satisfied with an earlier attempt's output. Done by
+    comparing the file against *itself* before and after rather than against
+    the wall clock, so it does not depend on the filesystem's timestamp
+    granularity agreeing with ``time.time()``.
+    """
+    if not project.is_dir():
+        return {}
+    return {
+        weight: weight.stat().st_mtime_ns
+        for weight in project.glob("*/weights/*.pt")
+        if weight.is_file()
+    }
 
 
 def _resolve_run_dir(project: Path, name: str) -> Path:

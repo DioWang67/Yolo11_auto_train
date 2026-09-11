@@ -304,6 +304,37 @@ def test_the_challenger_weights_land_in_the_candidate_directory(tmp_path):
     assert result.dataset_version == "dataset_v001"
 
 
+def test_a_real_run_reports_that_it_trained(tmp_path):
+    result = _train(tmp_path)
+
+    assert result.trained_this_run is True
+    assert result.to_dict()["trained_this_run"] is True
+
+
+def test_weights_reused_by_the_skip_cache_are_reported_as_not_trained(tmp_path):
+    """The pipeline's skip cache can satisfy a run without training at all.
+
+    On a retry with an unchanged dataset and config the pipeline reuses the
+    earlier attempt's weights. They are still correct -- that is what the
+    cache checks -- but they are not this attempt's work, and a cycle report
+    recommending a promotion should be able to say which of the two happened.
+    """
+    version = _dataset_version(tmp_path)
+    first = _train(tmp_path, dataset_version=version)
+
+    class Skipping(_FakeRunner):
+        """Writes nothing, the way a fully cached pipeline run does."""
+
+        def __call__(self, tasks, config, logger, args):
+            self.calls.append((list(tasks), config, args))
+
+    second = _train(tmp_path, dataset_version=version, runner=Skipping())
+
+    assert first.trained_this_run is True
+    assert second.trained_this_run is False
+    assert second.weight_sha256 == first.weight_sha256
+
+
 def test_a_training_failure_is_reported_without_touching_the_champion(tmp_path):
     champion = tmp_path / "champion.pt"
     champion.write_bytes(b"champion-weights")
