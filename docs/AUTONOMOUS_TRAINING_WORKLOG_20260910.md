@@ -695,3 +695,30 @@ source-safe val 的 179 個檔案裡**有 58 個是 champion 當初訓練用過�
 
 不改 production model／inference／trainer、不部署、不註冊 golden、
 不因為數值好而產生 `PROMOTION_CANDIDATE`。
+
+---
+
+## 13. Known risk：Vision gateway 是內網明文 HTTP（2026-09-14）
+
+`bootstrap/vision_client.py` 呼叫的公司 gateway 位於 `http://<company-gateway>:12808`，
+**沒有 TLS**。已實測確認，過程中未關閉、未繞過任何 TLS 設定（驗證全程維持預設）：
+
+| 探測 | 結果 |
+| --- | --- |
+| `https://<company-gateway>:12808` | `SSL: WRONG_VERSION_NUMBER` —— 該埠說明文 HTTP，不是 TLS |
+| TLS handshake on 12808 | 同上，握手失敗 |
+| `https://<company-gateway>:443` | 連線被拒，沒有 HTTPS listener |
+
+**風險**：API key 以 `x-api-key` header 明文送出，production 影像以 base64 明文送出。
+在內網同網段上可被被動側錄。這是**基礎設施層級**的問題，不是這段程式碼能修的——
+程式端已經做到不 hard-code key、不寫進 log/provenance/commit，但傳輸本身無法自保。
+
+**不要做的事**：不要為了讓 HTTPS「看起來能通」而設 `verify=False`、
+自訂 `ssl.SSLContext(check_hostname=False)` 或塞自簽憑證繞過。
+那會把「已知的明文」換成「假裝加密」，更糟。
+
+**償還路徑**：請 IT 在 gateway 前面加 TLS termination，然後把 `ANTHROPIC_BASE_URL`
+改成 `https://`。程式端零修改——endpoint 本來就是設定。
+
+在那之前，這條路徑只適合內網、只適合非機密影像。Cable1/A 的產線影像是否算機密，
+是需要你們判斷的事，我沒有替你們判斷。
