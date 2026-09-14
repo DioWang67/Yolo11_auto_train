@@ -225,6 +225,56 @@ picture-tool-autotrain golden register D:\golden\Cable1_A `
 python scripts\autotrain_group_smoke.py --fresh > runs\group_smoke.log 2>&1
 ```
 
+### 6.2 Review Pack —— 交給人去標的那一疊
+
+候選 pass 會產出一千多列。沒有人會標一千張，所以那份清單**實際上不可執行**，
+而不可執行的清單就是 golden set 永遠建不起來的原因。Review pack 把它收斂成
+一疊人做得完的影像，並且逐張說明為什麼被挑中。
+
+```powershell
+python scripts\golden_review_pack.py --out runs\review_pack\v1 `
+  --trained-provenance runs\autotrain_smoke\work\split\training_provenance.json
+```
+
+它**不建立 golden set、不註冊任何東西、不產生任何標註**，
+每一列都以 `NEEDS_LABEL` 離開。
+
+三件跟「取前兩百列」不一樣的事：
+
+**以 source 計，不以檔案計。** 同一張拍攝會以多份檔案存在（handoff job 互相複製、
+增生寫出 `_aug_<n>`、production 以不同路徑保存）。按檔案數會得到「200 列其實只有
+40 張照片」的一疊。所有計數都以 `source_image_id` 為鍵。
+
+**訓練過的直接移除，不是標記。** 候選報告會保留被污染的列並附上原因，那對「給人看的
+報告」是對的；對「即將花好幾天標註的一疊」是錯的——標一張永遠不能當尺的影像是白做。
+衍生檔跟著它的 source 一起被排除。**handoff job 的資料集會自動納入排除**，
+因為部署中的 champion 就是從那條路徑訓練出來的。
+
+**近重複用「分散」而不是「刪光」。** 同一個治具整天被拍，感知叢集很大且多半冗餘，
+但不是完全冗餘。叢集降到一張會丟掉真實變異，全留則整疊都是同一張照片。
+所以每個叢集貢獻數張，用 farthest-point 在既有量測（時間、亮度、飽和度、模糊、
+信心、框數）上挑出彼此**最不像**的幾張。`--per-cluster` 控制上限。
+
+三個分組：
+
+| 分組 | 意義 |
+| --- | --- |
+| `red_orange_critical` | 有人把 Red/Orange 的判定改掉，或其驗證數量與站別期望不符 |
+| `hard_case` | 漏檢／多檢／低信心／人工修正／品質離群 |
+| `representative` | 產線正常運作的樣子 |
+
+`red_orange_critical` 不是憑感覺分出來的：實跑 29 份 manifest，`Red->Orange`
+是全站最大宗的人工修正（109 次）。分組依據只用**已記錄的證據**
+（修正紀錄、驗證後的各類數量），不從信心值反推——低信心框的類別沒有被帶到這一層，
+猜它屬於哪一類會讓影像因為一個假設而進入關鍵組。
+
+`selected_reasons` 欄逐張說明理由。`cluster_diversity_pick` 表示這張是被挑來
+**跟它的近重複不一樣**的，看起來平凡不代表可以刪。
+
+影像預設會**複製**進 pack（`--no-copy-images` 可關）。這不是方便而已：
+production 的 retention cleanup 會在 30 天後刪掉 PASS 影像，
+只存路徑的 pack 會在人標到一半時爛掉。
+
 > 註：本站既有的 `station_data/yolo11_inference/acceptance/` 驗收集是天然的候選 ——
 > 它有人工真值、不可變快照，且文件明訂不可進訓練集。但它是「整體檢測組合」層級的
 > OK/NG 真值，不是 YOLO 框標註，要轉用需要另做指標對應。這是人的決定，不在本階段。

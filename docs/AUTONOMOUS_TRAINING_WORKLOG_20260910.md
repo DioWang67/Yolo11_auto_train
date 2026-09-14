@@ -472,3 +472,76 @@ modifies the golden directory」，在真實路徑下不成立。
 §3 的排序不變（(2b) 完整 cycle、(3) 決定 golden dataset、(4) 人在迴圈）。
 分組這件事真正剩下的只有一件：**第一次有真實 golden set 之後**，
 看 hard_case 與 representative 的實際差距，再決定要不要把它變成閘門規則。
+
+---
+
+## 9. Golden Review Pack v1（2026-09-14）
+
+分組評測到此視為驗證完成，不再擴功能。這一節是接手 review pack 的部分。
+
+### 做了什麼
+
+| 檔案 | 內容 |
+| --- | --- |
+| `src/picture_tool/autotrain/review_pack.py` | **新** —— 排除、source 收斂、分組、多樣性挑選、配額、輸出 |
+| `scripts/golden_review_pack.py` | **新** —— CLI 進入點，負責所有影像 I/O |
+| `tests/test_autotrain_review_pack.py` | **新**，37 個測試 |
+| `golden_candidates.py` | `thin_by_group(per_group=None)`：保留近重複叢集，讓 pack 自己挑 |
+
+輸出：`runs/review_pack/v1/`（`review_pack.csv` + `summary.json` + `REVIEW.md` + `images/` 250 張）。
+**不註冊 golden、不自動標註、不接 LLM、不碰 production inference／model／trainer。**
+
+### 兩個只有真資料才會暴露的缺陷
+
+**(1) 關鍵組被淹沒。** 第一版 `red_orange_critical` 是 721/1135（63%）。原因：
+數量規則只看「Red 或 Orange 的驗證數量 ≠ 期望」，而這個站別有 **935 列 production
+是零框**（模型什麼都沒找到），每一列的 Red 數量都是 0。那是漏檢，不是顏色混淆。
+現在數量訊號**只在總框數等於期望值時**成立——也就是模型抓到六個、但 Red/Orange
+分配錯了，那才是替換。關鍵組降到 311。修正組合成 `hard_case`。
+
+**(2) 訓練影像從兩道檢查中間漏過去。** 第一版產出的 250 張裡，
+**有 5 張與 handoff 訓練影像感知上完全相同**，sha 與 source-id 兩道檢查都沒攔到。
+
+原因值得記：handoff 副本是**重新編碼且改名**的。
+
+```
+handoff    : 17b1fad3-yolo_Cable1_A_142254.jpg
+production : yolo_Cable1_A_142252_433429_4f905ddf33c3.jpg
+```
+
+兩種命名結構沒有共同部分，所以 `source_image_id` 的 lineage 比對在這兩者之間
+**不是比不到，是結構上不可能比到**。我一度把「source 重疊 = 0」當成獨立性的證據，
+那個零其實是命名格式的產物。
+
+加了第三道：dHash 比對，用 repo 既有的 `difference_hash`（不另寫一套，否則會與
+既有去重不一致）。實跑攔下 8 列 production 候選。
+
+**dHash 是較粗的訊號**——同一個治具的兩張不同照片可能同雜湊，這個站別確實會發生
+（250 張裡有 20 組內部近重複）。所以它 fail-closed 施用並單獨記一個排除理由：
+少收幾張可用候選不痛不癢，放一張模型記過的影像進尺，尺就沒意義了。
+
+### 三道排除的分工（缺一不可）
+
+| 檢查 | 抓什麼 | 為什麼不夠 |
+| --- | --- | --- |
+| sha256 | 被複製的同一個檔案 | 重新編碼就失效 |
+| source lineage | 增生衍生檔（`_aug_<n>`） | 命名體系不同就失效 |
+| dHash | 重新編碼＋改名的同一張照片 | 較粗，會誤傷；故 fail-closed |
+
+### 近重複用分散而不是刪光
+
+每個感知叢集最多貢獻 `--per-cluster`（預設 3）張，用 farthest-point 在既有量測
+（時間、亮度、飽和度、模糊、信心、框數）上挑彼此最不像的。第一張挑「最有料」的
+那張，所以叢集即使只剩一個名額也交出最值得看的。
+
+實跑：**只稀釋掉 28 列**。因為這批 production 資料本來就少有近重複
+（250 張裡 196 張完全沒有近鄰）。機制在，但這批資料沒怎麼用到它。
+
+### 尚未做／已知限制
+
+- **champion v1.0.6 自己的訓練 provenance 本機沒有任何紀錄**（deploy manifest 48 個
+  key 沒有 dataset 欄位，`ChampionModel.dataset_id` 是空的）。所以「與訓練無交集」
+  的強度上限就是「與 12 個 handoff job 資料集 + smoke run provenance 無交集」。
+  要更強，得請 `deploy.py` 把訓練 dataset id 寫進 manifest。
+- pack 內部仍有 20 組近重複（`--per-cluster 3` 允許的），人工複核時可再收斂。
+- 本節工作**尚未提交**。
