@@ -963,6 +963,68 @@ def write_report(
     return {"csv": csv_path, "summary": json_path, "readme": readme_path}
 
 
+def read_group_assignments(report: str | Path) -> dict[str, str]:
+    """Read ``image_sha256 -> group`` back out of a candidate report.
+
+    This is the join between the candidate pass and
+    :func:`picture_tool.autotrain.golden.register`, and the key matters: a
+    row's ``sample_id`` is the image's *filename stem*, while a golden set
+    identifies a sample by the sha256 of its bytes. Joining on ``sample_id``
+    would match nothing at all, and would do it silently, so this function
+    only ever reads ``image_sha256``.
+
+    Reading the CSV rather than re-deriving the classification keeps one
+    source of truth: the group a reviewer saw in the report is the group that
+    ends up in the manifest. Rows with no recorded sha256 are untraceable and
+    are dropped rather than guessed at.
+
+    ``report`` may be the report directory or the CSV inside it.
+    """
+    path = Path(report).expanduser()
+    if path.is_dir():
+        path = path / "candidates.csv"
+    if not path.is_file():
+        raise GoldenCandidateError(f"Candidate report not found: {path}")
+
+    assignments: dict[str, str] = {}
+    conflicts: set[str] = set()
+    try:
+        # utf-8-sig: write_report emits a BOM so Excel opens it correctly, and
+        # without this the first column name arrives as "﻿sample_id".
+        with open(path, "r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None or "image_sha256" not in reader.fieldnames:
+                raise GoldenCandidateError(
+                    f"{path} has no image_sha256 column; it is not a candidate "
+                    "report written by this tool."
+                )
+            for row in reader:
+                digest = str(row.get("image_sha256") or "").strip()
+                group = str(row.get("group") or "").strip()
+                if not digest or not group:
+                    continue
+                previous = assignments.get(digest)
+                if previous is not None and previous != group:
+                    conflicts.add(digest)
+                assignments[digest] = group
+    except OSError as exc:
+        raise GoldenCandidateError(f"Candidate report could not be read: {exc}") from exc
+
+    if conflicts:
+        # The same bytes classified two ways means the report was concatenated
+        # from two passes. Picking one silently would make the split arbitrary.
+        raise GoldenCandidateError(
+            f"{path} assigns {len(conflicts)} image(s) to more than one group; "
+            "re-run the candidate pass instead of merging reports."
+        )
+    if not assignments:
+        raise GoldenCandidateError(
+            f"{path} contains no usable group assignments (every row lacked an "
+            "image_sha256 or a group)."
+        )
+    return assignments
+
+
 def _review_text(summary: Mapping[str, Any]) -> str:
     schema = summary.get("class_schema") or {}
     names = schema.get("names") or []

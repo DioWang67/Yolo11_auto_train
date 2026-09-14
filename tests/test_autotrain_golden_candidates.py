@@ -25,9 +25,11 @@ from picture_tool.autotrain.golden_candidates import (
     REPRESENTATIVE,
     Candidate,
     DetectionEvidence,
+    GoldenCandidateError,
     build_candidates,
     classify,
     group_duplicates,
+    read_group_assignments,
     read_review_manifests,
     summarise,
     thin_by_group,
@@ -765,3 +767,156 @@ def test_provenance_yields_both_source_ids_and_hashes(tmp_path):
 
     assert sources == {"cap_1", "cap_2"}
     assert hashes == {"aaa", "bbb", "ccc"}
+
+
+# ---------------------------------------------------------------------------
+# Reading the split back out, for `golden register --groups`
+
+
+def _report_with(tmp_path, candidates):
+    out = tmp_path / "report"
+    write_report(candidates, summarise(candidates, SCHEMA), out)
+    return out
+
+
+def test_the_split_is_read_back_keyed_by_image_content_hash(tmp_path):
+    """The load-bearing detail: a row's sample_id is its *filename stem*,
+    while a golden set identifies a sample by the sha256 of its bytes.
+    Joining on sample_id would match nothing, and would do it silently."""
+    candidates = [
+        Candidate(
+            sample_id="s0",
+            image_path=str(_write_image(tmp_path / "img" / "s0.jpg")),
+            status=NEEDS_ANNOTATION,
+            group=HARD_CASE,
+            source="production:PASS",
+            image_sha256="a" * 64,
+        ),
+        Candidate(
+            sample_id="s1",
+            image_path=str(_write_image(tmp_path / "img" / "s1.jpg")),
+            status=READY_TO_REVIEW,
+            group=REPRESENTATIVE,
+            source="handoff:job",
+            image_sha256="b" * 64,
+        ),
+    ]
+
+    assignments = read_group_assignments(_report_with(tmp_path, candidates))
+
+    assert assignments == {"a" * 64: HARD_CASE, "b" * 64: REPRESENTATIVE}
+    assert "s0" not in assignments
+
+
+def test_either_the_report_directory_or_the_csv_is_accepted(tmp_path):
+    candidates = [
+        Candidate(
+            sample_id="s0",
+            image_path=str(_write_image(tmp_path / "img" / "s0.jpg")),
+            status=NEEDS_ANNOTATION,
+            group=HARD_CASE,
+            source="production:PASS",
+            image_sha256="a" * 64,
+        )
+    ]
+    out = _report_with(tmp_path, candidates)
+
+    assert read_group_assignments(out) == read_group_assignments(
+        out / "candidates.csv"
+    )
+
+
+def test_rows_with_no_recorded_hash_are_dropped_not_guessed(tmp_path):
+    candidates = [
+        Candidate(
+            sample_id="traceable",
+            image_path=str(_write_image(tmp_path / "img" / "a.jpg")),
+            status=NEEDS_ANNOTATION,
+            group=HARD_CASE,
+            source="production:PASS",
+            image_sha256="a" * 64,
+        ),
+        Candidate(
+            sample_id="untraceable",
+            image_path=str(_write_image(tmp_path / "img" / "b.jpg")),
+            status=NEEDS_ANNOTATION,
+            group=REPRESENTATIVE,
+            source="production:PASS",
+            image_sha256="",
+        ),
+    ]
+
+    assignments = read_group_assignments(_report_with(tmp_path, candidates))
+
+    assert assignments == {"a" * 64: HARD_CASE}
+
+
+def test_one_image_in_two_groups_is_refused(tmp_path):
+    """Concatenated reports would make the split arbitrary."""
+    out = tmp_path / "report"
+    out.mkdir()
+    with open(out / "candidates.csv", "w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["sample_id", "group", "image_sha256"])
+        writer.writerow(["s0", HARD_CASE, "a" * 64])
+        writer.writerow(["s0-again", REPRESENTATIVE, "a" * 64])
+
+    with pytest.raises(GoldenCandidateError, match="more than one group"):
+        read_group_assignments(out)
+
+
+def test_a_csv_that_is_not_a_candidate_report_is_refused(tmp_path):
+    out = tmp_path / "report"
+    out.mkdir()
+    (out / "candidates.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+
+    with pytest.raises(GoldenCandidateError, match="no image_sha256 column"):
+        read_group_assignments(out)
+
+
+def test_a_missing_report_is_refused(tmp_path):
+    with pytest.raises(GoldenCandidateError, match="not found"):
+        read_group_assignments(tmp_path / "nope")
+
+
+def test_a_report_with_no_usable_rows_is_refused(tmp_path):
+    out = tmp_path / "report"
+    out.mkdir()
+    with open(out / "candidates.csv", "w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["sample_id", "group", "image_sha256"])
+        writer.writerow(["s0", "", ""])
+
+    with pytest.raises(GoldenCandidateError, match="no usable group assignments"):
+        read_group_assignments(out)
+
+
+def test_the_split_read_back_registers_a_real_set(tmp_path):
+    """End to end: the group a reviewer saw is the group in the manifest."""
+    image = _write_image(tmp_path / "img" / "s0.jpg")
+    import hashlib
+
+    digest = hashlib.sha256(image.read_bytes()).hexdigest()
+    candidates = [
+        Candidate(
+            sample_id="s0",
+            image_path=str(image),
+            status=READY_TO_REVIEW,
+            group=HARD_CASE,
+            source="handoff:job",
+            image_sha256=digest,
+        )
+    ]
+    out = _report_with(tmp_path, candidates)
+
+    chosen = tmp_path / "golden"
+    chosen.mkdir()
+    (chosen / "s0.jpg").write_bytes(image.read_bytes())
+    dataset = golden.register(
+        chosen,
+        class_schema=SCHEMA,
+        registered_by="engineer",
+        groups=read_group_assignments(out),
+    )
+
+    assert dataset.group_counts() == {HARD_CASE: 1}

@@ -14,6 +14,7 @@ import pytest
 
 from picture_tool.autotrain import golden
 from picture_tool.autotrain.class_schema import normalize_class_names
+from picture_tool.autotrain.golden_candidates import HARD_CASE, REPRESENTATIVE
 from picture_tool.autotrain.golden import (
     CONTAMINATED,
     INVALID,
@@ -267,3 +268,103 @@ def test_status_serialises_for_reports(tmp_path):
     assert payload["status"] == OK
     assert payload["image_count"] == 2
     assert payload["root"] == str(root.resolve())
+
+
+# ---------------------------------------------------------------------------
+# Groups: the representative / hard_case split carried with the set
+
+
+def _sha(payload: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(payload).hexdigest()
+
+
+def test_groups_are_recorded_against_the_image_content_hash(tmp_path):
+    contents = {"a.jpg": b"image-a", "b.jpg": b"image-b"}
+    root = _golden_dir(tmp_path, contents)
+    groups = {
+        _sha(b"image-a"): HARD_CASE,
+        _sha(b"image-b"): REPRESENTATIVE,
+    }
+
+    dataset = golden.register(
+        root, class_schema=SCHEMA, registered_by="engineer", groups=groups
+    )
+
+    assert dataset.group_counts() == {
+        HARD_CASE: 1,
+        REPRESENTATIVE: 1,
+    }
+    assert dataset.sample_ids_in_group(HARD_CASE) == (_sha(b"image-a"),)
+    assert dataset.ungrouped_sample_ids == ()
+
+
+def test_assignments_for_images_outside_the_set_are_dropped(tmp_path):
+    """A candidate report covers far more images than a reviewer keeps."""
+    root = _golden_dir(tmp_path, {"a.jpg": b"image-a"})
+    groups = {
+        _sha(b"image-a"): HARD_CASE,
+        _sha(b"never-chosen"): REPRESENTATIVE,
+    }
+
+    dataset = golden.register(
+        root, class_schema=SCHEMA, registered_by="engineer", groups=groups
+    )
+
+    assert dataset.group_counts() == {HARD_CASE: 1}
+    payload = json.loads(dataset.manifest_path.read_text(encoding="utf-8"))
+    assert list(payload["groups"]) == [_sha(b"image-a")]
+
+
+def test_groups_that_match_nothing_are_refused(tmp_path):
+    """Matching nothing means the wrong file, or the wrong join key."""
+    root = _golden_dir(tmp_path, {"a.jpg": b"image-a"})
+
+    with pytest.raises(GoldenDatasetError, match="match an image in this directory"):
+        golden.register(
+            root,
+            class_schema=SCHEMA,
+            registered_by="engineer",
+            groups={"deadbeef": HARD_CASE},
+        )
+
+
+def test_ungrouped_samples_are_counted_not_hidden(tmp_path):
+    root = _golden_dir(
+        tmp_path, {"a.jpg": b"image-a", "b.jpg": b"image-b", "c.jpg": b"image-c"}
+    )
+
+    dataset = golden.register(
+        root,
+        class_schema=SCHEMA,
+        registered_by="engineer",
+        groups={_sha(b"image-a"): HARD_CASE},
+    )
+
+    assert len(dataset.ungrouped_sample_ids) == 2
+    status = golden.resolve(str(root), dataset.manifest_sha256)
+    assert status.to_dict()["ungrouped"] == 2
+    assert status.to_dict()["groups"] == {HARD_CASE: 1}
+
+
+def test_groups_survive_a_resolve(tmp_path):
+    root = _golden_dir(tmp_path, {"a.jpg": b"image-a"})
+    dataset = golden.register(
+        root,
+        class_schema=SCHEMA,
+        registered_by="engineer",
+        groups={_sha(b"image-a"): HARD_CASE},
+    )
+
+    resolved = golden.resolve(str(root), dataset.manifest_sha256)
+
+    assert resolved.dataset is not None
+    assert resolved.dataset.groups == {_sha(b"image-a"): HARD_CASE}
+
+
+def test_an_unsplit_set_reports_no_groups(tmp_path):
+    root, dataset = _registered(tmp_path)
+
+    assert dataset.group_counts() == {}
+    assert len(dataset.ungrouped_sample_ids) == 2

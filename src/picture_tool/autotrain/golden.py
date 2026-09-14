@@ -19,8 +19,17 @@ Three properties are enforced once configured:
   being a fixed yardstick.
 * **Uncontaminated** --- no golden sample may appear in a training dataset
   version. Evaluating on data the model trained on measures memorisation.
-* **Never written** --- nothing here modifies the golden directory after
-  registration.
+* **Never written** --- nothing in this subsystem modifies the golden
+  directory after registration.
+
+  One caveat, confirmed against ultralytics 8.3.156 rather than assumed:
+  validating the set makes *ultralytics* write its own label cache
+  (``labels/<split>.cache``) beside the labels. It is derived data, it does
+  not touch any registered image, and :func:`verify_content` hashes only the
+  images, so the set still resolves ``OK``. But "the directory is byte-for-byte
+  untouched" is not true of the real evaluation path, and a caller comparing
+  whole-tree snapshots will see it. Placing a golden set on read-only storage
+  is therefore safe but will make ultralytics warn on every run.
 """
 
 from __future__ import annotations
@@ -88,6 +97,36 @@ class GoldenDataset:
     def image_count(self) -> int:
         return len(self.sample_ids)
 
+    @property
+    def ungrouped_sample_ids(self) -> tuple[str, ...]:
+        """Registered samples carrying no group label.
+
+        Reported rather than hidden: per-group metrics cover only what is
+        labelled, so a caller that does not know how many samples fall
+        outside both groups cannot tell whether the two subsets describe the
+        set or a corner of it.
+        """
+        return tuple(
+            sample_id for sample_id in self.sample_ids if sample_id not in self.groups
+        )
+
+    def group_counts(self) -> dict[str, int]:
+        """How many registered samples carry each group label."""
+        counts: dict[str, int] = {}
+        for sample_id in self.sample_ids:
+            label = self.groups.get(sample_id)
+            if label:
+                counts[label] = counts.get(label, 0) + 1
+        return counts
+
+    def sample_ids_in_group(self, group: str) -> tuple[str, ...]:
+        """Registered sample ids carrying ``group``, in manifest order."""
+        return tuple(
+            sample_id
+            for sample_id in self.sample_ids
+            if self.groups.get(sample_id) == group
+        )
+
 
 @dataclass(frozen=True)
 class GoldenStatus:
@@ -115,6 +154,10 @@ class GoldenStatus:
             "contaminated_samples": list(self.contaminated_samples),
             "image_count": self.dataset.image_count if self.dataset else 0,
             "root": str(self.dataset.root) if self.dataset else "",
+            "groups": self.dataset.group_counts() if self.dataset else {},
+            "ungrouped": (
+                len(self.dataset.ungrouped_sample_ids) if self.dataset else 0
+            ),
         }
 
 
@@ -142,6 +185,10 @@ def register(
     dataset version. These labels store class ids, and a yardstick whose ids
     mean something different from the model's is worse than no yardstick --- it
     reports confident numbers about the wrong classes.
+
+    ``groups`` maps a sample id --- the sha256 of the image bytes --- to
+    ``representative`` or ``hard_case``. Only assignments describing an image
+    actually present are recorded; see :func:`_intersect_groups`.
     """
     directory = Path(root).expanduser().resolve()
     if not directory.is_dir():
@@ -166,6 +213,8 @@ def register(
             f"No images found under {directory}; nothing to register."
         )
 
+    resolved_groups = _intersect_groups(groups, images)
+
     payload = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "registered_at": datetime.now(timezone.utc).isoformat(),
@@ -174,7 +223,7 @@ def register(
         "images": {sample_id: relative for sample_id, relative in sorted(images.items())},
         "image_count": len(images),
         "class_schema": class_schema.to_dict(),
-        "groups": {key: str(value) for key, value in sorted((groups or {}).items())},
+        "groups": dict(sorted(resolved_groups.items())),
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
     manifest_path.write_text(serialized, encoding="utf-8")
@@ -189,7 +238,7 @@ def register(
         registered_at=str(payload["registered_at"]),
         description=description,
         class_schema=class_schema,
-        groups=dict(groups or {}),
+        groups=resolved_groups,
     )
 
 
@@ -333,6 +382,36 @@ def contamination(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _intersect_groups(
+    groups: Mapping[str, str] | None, images: Mapping[str, str]
+) -> dict[str, str]:
+    """Keep only the group labels that describe an image actually present.
+
+    A candidate report covers far more images than a reviewer keeps, so most
+    of its assignments legitimately fall away here. Recording them anyway
+    would make the manifest claim the set contains samples it does not.
+
+    Matching nothing at all is different in kind: it means the wrong file was
+    passed, or the join key was wrong, and the set would then register with no
+    split while looking like it had one. That is refused.
+    """
+    if not groups:
+        return {}
+    matched = {
+        sample_id: str(label).strip()
+        for sample_id, label in groups.items()
+        if sample_id in images and str(label).strip()
+    }
+    if not matched:
+        raise GoldenDatasetError(
+            f"None of the {len(groups)} supplied group assignments match an "
+            "image in this directory. Group keys are the sha256 of the image "
+            "bytes; check that the assignments come from a candidate report "
+            "covering these images."
+        )
+    return matched
 
 
 def _hash_images(root: Path) -> dict[str, str]:
