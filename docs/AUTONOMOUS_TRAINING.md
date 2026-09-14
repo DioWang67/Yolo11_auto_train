@@ -174,6 +174,57 @@ picture-tool-autotrain golden check
 要讓 golden set 能算 detection 指標，目錄裡需要一份 `data.yaml` 與標註；
 沒有時會跳過 golden 比較並記錄原因，而不是假裝跑過。
 
+### 6.1 representative / hard_case 分組
+
+一個整體分數答不了這個問題：challenger 在日常影像上變好、在難例上變差，
+整體數字仍可能上升。所以 golden set 可以帶一份分組，評測時**分開量**。
+
+分組來自候選報告（`scripts/golden_candidates.py` 產出的 `candidates.csv`），
+註冊時一起帶進去：
+
+```powershell
+picture-tool-autotrain golden register D:\golden\Cable1_A `
+  --registered-by <姓名> `
+  --groups runs\golden_candidates\v1
+```
+
+對應鍵是**影像內容的 SHA-256**（報告裡的 `image_sha256` 欄），不是 `sample_id`
+（那是檔名 stem）。所以從候選池挑出來複製到別處、改了檔名，分組仍然對得上。
+報告涵蓋的影像通常遠多於你實際留下的，對不到的會自動捨棄；
+**一張都對不到則拒絕註冊**——那代表帶錯檔案或接錯鍵，
+若默默註冊成「無分組」，它看起來會像一個有分組的集合。
+
+輸出會同時報 `groups`（各組張數）與 `ungrouped`（沒有分組標籤的張數）。
+沒帶 `--groups` 就是不分組，golden 比較照舊只有整體一組。
+
+評測端對每一組**各跑一次 champion 與 challenger**（所以一組多兩次 val）。
+子集是一份影像路徑清單，golden 目錄不會被複製、搬移或寫入。
+下列情況回報原因而不是給數字：
+
+| 狀態 | 何時 |
+| --- | --- |
+| `INSUFFICIENT` | 該組張數低於 `golden.min_group_samples`（預設 10） |
+| `NO_LABELS` | 該組沒有任何標註可定位（ultralytics 以 `images` → `labels` 路徑對應） |
+| `FAILED` | 沒有 `data.yaml`、描述檔無法解析、影像不在磁碟上，或該組驗證拋錯 |
+
+`NO_LABELS` 特別重要：版面不對時若照算，每個物件都會被算成漏檢，
+然後把那個當成 recall 崩盤發佈出去。
+
+分組數字**目前只進報告，不進 promotion 閘門**——在第一次真跑量到數字之前，
+任何門檻都只是猜的。
+
+> **golden 目錄會多出一個檔案。** 評測時 ultralytics 會自己在標註目錄旁寫下
+> `labels/<split>.cache`（對 8.3.156 實測確認，不是推測）。那是衍生資料，
+> 不動任何已註冊影像，`verify_content` 只雜湊影像，所以狀態仍是 `OK`。
+> 但「golden 目錄逐位元不變」在真實路徑下**不成立**，用整棵樹快照比對的人會看到它。
+> golden set 放在唯讀儲存上是安全的，只是 ultralytics 每次都會警告寫不進去。
+
+要重跑這段對真實 ultralytics 的驗證（不需要正式 golden set，會自建拋棄式 fixture）：
+
+```powershell
+python scripts\autotrain_group_smoke.py --fresh > runs\group_smoke.log 2>&1
+```
+
 > 註：本站既有的 `station_data/yolo11_inference/acceptance/` 驗收集是天然的候選 ——
 > 它有人工真值、不可變快照，且文件明訂不可進訓練集。但它是「整體檢測組合」層級的
 > OK/NG 真值，不是 YOLO 框標註，要轉用需要另做指標對應。這是人的決定，不在本階段。
@@ -247,6 +298,9 @@ Champion 永遠是 `yolo11_inference/models/<產品>/<站別>/yolo/` 指到的�
 
 - Cycle 佔用 GPU，可能拖慢同機推論。用 `training.device` 指定其他裝置，或錯開排程。
 - Golden 比較需要 golden 目錄內有 `data.yaml` 與標註；只有影像時會跳過該比較。
+- 分組評測的代價是每組多兩次 val（一組 champion、一組 challenger）。兩組就是
+  golden 段從 2 次變 6 次。要省，就不要帶 `--groups`。
+- 分組指標只出現在報告裡，promotion 閘門還沒用它。
 - 四個保留 selector（`model_disagreement`、`class_imbalance`、`embedding_novelty`、
   `distribution_drift`）已在設定與註冊表中預留，但**啟用會被拒絕**，各自缺什麼寫在
   `selectors/_planned.py`。

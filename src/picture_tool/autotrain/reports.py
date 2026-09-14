@@ -63,6 +63,8 @@ def render_text(
     lines.append(f"Golden Dataset:  {golden_status}")
     if evaluation is not None and evaluation.golden.detail:
         lines.append(f"  {evaluation.golden.detail}")
+    if evaluation is not None:
+        lines.extend(_golden_lines(evaluation))
 
     lines.append("")
     if decision is None:
@@ -131,6 +133,37 @@ def write_reports(
         encoding="utf-8",
     )
     return text_path, json_path
+
+
+def _golden_lines(evaluation: EvaluationReport) -> list[str]:
+    """Render the golden numbers, overall and per group.
+
+    Shown together on purpose. The overall golden score is the headline, but
+    a challenger that gains on ``representative`` while losing ``hard_case``
+    can raise it --- and that is the trade the split exists to expose, so
+    neither half is legible without the other.
+    """
+    lines: list[str] = []
+    if evaluation.golden_comparison is not None:
+        lines.append("  Golden overall:")
+        for item in evaluation.golden_comparison.overall:
+            lines.append(f"    {_label(item.name):<18}{_delta(item)}")
+
+    for group in evaluation.golden_groups:
+        header = f"  Golden [{group.group}] ({group.sample_count} samples):"
+        if not group.is_measured or group.comparison is None:
+            # The reason, never a blank or a zero: an unmeasured group and a
+            # steady one must not read the same way.
+            lines.append(f"{header} {group.status}")
+            if group.detail:
+                lines.append(f"    {group.detail}")
+            continue
+        lines.append(header)
+        for item in group.comparison.overall:
+            lines.append(f"    {_label(item.name):<18}{_delta(item)}")
+        for item in group.comparison.per_class_recall:
+            lines.append(f"    {item.name + ' Recall':<18}{_delta(item)}")
+    return lines
 
 
 def _label(name: str) -> str:

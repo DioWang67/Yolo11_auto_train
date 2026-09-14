@@ -21,6 +21,7 @@ from picture_tool.autotrain.class_schema import (
     schema_from_station_config,
 )
 from picture_tool.autotrain.config import AutoTrainConfig
+from picture_tool.autotrain.golden_candidates import read_group_assignments
 from picture_tool.autotrain.labeling import (
     export_request,
     import_request,
@@ -244,6 +245,14 @@ def golden_register(
     registered_by: str = typer.Option(..., help="Who is registering this set."),
     description: str = typer.Option("", help="What this set covers."),
     overwrite: bool = typer.Option(False, help="Replace an existing registration."),
+    groups: Optional[str] = typer.Option(
+        None,
+        help=(
+            "Candidate report (directory or candidates.csv) whose "
+            "representative/hard_case split should be recorded with this set. "
+            "Without it the set is registered unsplit."
+        ),
+    ),
     config: Optional[str] = typer.Option(None, help="Path to the settings file."),
     product: str = typer.Option("", help="Station product."),
     area: str = typer.Option("", help="Station area."),
@@ -266,11 +275,15 @@ def golden_register(
             ],
             context=f"{service.product}/{service.area}",
         )
+        assignments = (
+            read_group_assignments(groups) if groups else None
+        )
         dataset = golden_module.register(
             path,
             registered_by=registered_by,
             class_schema=schema,
             description=description,
+            groups=assignments,
             overwrite=overwrite,
         )
         _echo_json(
@@ -279,6 +292,12 @@ def golden_register(
                 "image_count": dataset.image_count,
                 "manifest_sha256": dataset.manifest_sha256,
                 "class_schema": schema.to_dict(),
+                "groups": dataset.group_counts(),
+                # Counted, not assumed: per-group metrics only describe the
+                # samples that carry a label, so a set that is mostly
+                # ungrouped must say so at the moment it is registered.
+                "ungrouped": len(dataset.ungrouped_sample_ids),
+                "group_assignments_read": len(assignments) if assignments else 0,
                 "next": "put dataset_path and manifest_sha256 in the settings file",
             }
         )

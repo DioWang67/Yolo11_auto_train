@@ -328,7 +328,147 @@ sha256 抓重複複製的檔案（本專案 510 個檔案只有 71 張唯一影�
 但位元不同」的。**精確重複只留 1 份**（兩份同一個檔案不是兩個樣本），近重複可留多份
 （那真的是不同照片）。
 
-### 尚未做
+### ~~尚未做~~ —— 已完成（2026-09-14），見 §8
 
-Step 8 的 evaluator 雙組指標（representative / hard_case 分開算）尚未實作。
-golden manifest 已經有 `groups` 欄位可承載這個分組，evaluator 端還沒接。
+---
+
+## 8. 分組評測（2026-09-14）
+
+### 先更正一件事
+
+§7 說「evaluator 雙組指標尚未實作，golden manifest 已經有 `groups` 欄位可承載」。
+前半對，後半誤導：`groups` 欄位存在，但**整條鏈斷在三個地方**，所以那個欄位在
+實務上永遠是空的——`golden register` 從來沒有把分組傳進去。
+
+| 環節 | 當時狀態 |
+| --- | --- |
+| `golden_candidates.py` 算出每張的 `group` | 有 |
+| `golden register` 寫進 manifest | **無**（`cli.py` 沒傳 `groups=`） |
+| `GoldenDataset.groups` | 有欄位，恆為空 |
+| evaluator 分組量測 | **無** |
+| report 顯示 | **無** |
+
+順帶查到：`golden_comparison`（整體 golden 比較）**算出來但沒有任何人讀**，
+只進了 `to_dict()`。花了兩次 val 的錢，報告與決策都沒用到。現在報告會印了。
+
+### 做了什麼
+
+| 檔案 | 內容 |
+| --- | --- |
+| `golden_candidates.py` | `read_group_assignments()`：從 `candidates.csv` 讀回分組 |
+| `golden.py` | `register` 將分組與實際影像取交集；`group_counts` / `ungrouped_sample_ids` / `sample_ids_in_group` |
+| `cli.py` | `golden register --groups <報告目錄或 csv>` |
+| `evaluator.py` | `GroupEvaluation` + `_evaluate_golden_groups`，每組各跑一次 champion/challenger |
+| `config.py` | `golden.min_group_samples`（預設 10） |
+| `reports.py` | 印出 golden 整體與各組 |
+| `tests/test_autotrain_reports.py` | **新檔**——報告渲染先前完全沒有測試 |
+
+### 最容易踩的一個點：join key
+
+候選報告的 `sample_id` 是**檔名 stem**（`golden_candidates.py` 裡是 `image.stem`），
+golden 的 `sample_ids` 是**影像 bytes 的 sha256**。用 `sample_id` 去 join
+**一張都對不到，而且是靜靜地對不到**。所以 `read_group_assignments()` 只讀
+`image_sha256` 欄，永遠不讀 `sample_id`。
+
+衍生的設計：一張都對不到時**拒絕註冊**。對不到多數是正常的（報告涵蓋 1148 張，
+留下的遠少於此），但全部對不到代表帶錯檔案或接錯鍵——若默默註冊成無分組，
+它看起來會像一個有分組的集合。
+
+### 子集怎麼做的，以及為什麼
+
+ultralytics `val()` 只給整體聚合，拿不到 per-image 拆解，所以分組只能**各跑一次**。
+子集是一份**影像絕對路徑清單 txt**，另寫一份 `data.yaml`
+把 `val` 指過去、`path` 設為 golden root、移除 `train`/`test`，
+其餘（特別是 `names`）從 golden 的 `data.yaml` **原樣繼承**——
+在這裡重算 names 等於多開一個讓 class 契約出錯的地方。
+
+golden 目錄完全不被複製、搬移或寫入（有測試守這件事）。
+
+**代價**：golden 段的 val 次數從 2 變 6（整體 2 + 每組 2 × 2）。
+替代方案是從整體那一次推估分組分數——那是算術，不是量測。
+
+### 四個「回報原因而不是給數字」的狀態
+
+| 狀態 | 何時 | 為什麼不給數字 |
+| --- | --- | --- |
+| `INSUFFICIENT` | 張數 < `golden.min_group_samples` | 少量樣本的 rate 以整張為單位跳動，看起來卻像量測 |
+| `NO_LABELS` | 該組沒有任何標註可定位 | 版面不對時照算，會把每個物件算成漏檢並發佈成 recall 崩盤 |
+| `FAILED` | 無 `data.yaml`／描述檔無法解析／影像不在磁碟／驗證拋錯 | — |
+| （無分組） | manifest 沒有 groups | 回傳空 tuple，不是回傳「兩組都 0」 |
+
+`NO_LABELS` 的判斷是複製 ultralytics 的 `images` → `labels` 路徑規則，
+**刻意複製而不是 import**：這段要在任何 ultralytics import 之前就能跑
+（pytest 下禁止載入）。判準是「**至少一張**能定位到標註」——
+要求每張都有會誤殺合法的背景圖，一張都不要求則擋不住版面錯誤。
+
+### 沒有進 promotion 閘門（使用者決定）
+
+分組指標目前只進報告。理由是現在**還沒有任何 golden set 被註冊**，
+門檻只能用猜的，而這個 repo 的閘門一向是從量測定出來的確定性數值。
+等第一次真跑有數字再定。`PromotionConfig` 沒有新增欄位。
+
+### 驗證
+
+`1384 passed / 6 skipped`（前次 1381）、ruff 全綠、mypy 全綠、coverage 82.36%（gate 80）。
+`yolo11_inference` 本次完全沒碰。
+
+**`golden register --groups` 的 CLI 路徑本機仍一次都沒執行過**——`typer` 在本機
+三個 python 環境仍然都沒有，`test_autotrain_cli.py` 一律 skip（新增的三個也是）。
+CLI 以外的邏輯都有測試涵蓋，包含「從候選報告讀回分組 → 註冊 → manifest
+帶著分組」的端到端那一段，以及下面的真跑。
+
+### 對真實 ultralytics 跑過了（2026-09-14），又挖到一個缺陷
+
+`scripts/autotrain_group_smoke.py`（新增）。它**不建立正式 golden set**：
+在 `runs/autotrain_group_smoke/` 下自建一份標記為 `SMOKE/TEST-ONLY` 的拋棄式
+fixture，champion 與 challenger 都是**複製**出來的副本，production 權重全程沒被開啟。
+
+素材：最新 handoff job 的 46 張已標註影像——26 張進 fixture
+（hard_case 12／representative 12／`tiny_smoke` 2，最後一組刻意低於門檻），
+其餘 20 張當主 split。ultralytics 8.3.156、torch 2.4.1+cpu、imgsz 320。
+
+**第一個缺陷（我寫的，真跑才會出現）**：`_write_group_descriptor` 原本
+`payload.pop("train")`，本意是「不讓分組被拿去對訓練影像評分」。但 ultralytics 的
+`check_det_dataset` **要求 `train` 與 `val` 兩個 key 都在**，少一個直接
+`SyntaxError`。也就是說**每一組在真實環境下都會是 `FAILED`**，而假 validator
+從不解析那份 yaml，所以 1384 個測試全綠。
+
+修法不是把 `train` 放回原值（那才真的會指向訓練影像），而是**指向同一份子集清單**：
+格式要求滿足了，「這份描述檔不可能指名真訓練集」的性質也保住。
+回歸測試：`test_the_subset_keeps_a_train_key_pointing_at_the_subset`。
+
+**第二個發現（不是缺陷，是文件不實）**：ultralytics 會在標註目錄旁寫
+`labels/<split>.cache`。`golden.py` 原本明寫「Never written --- nothing here
+modifies the golden directory」，在真實路徑下不成立。
+影響評估：衍生資料、不動任何已註冊影像、`verify_content` 只雜湊影像，
+所以狀態仍是 `OK`。**這一點早於本次改動就存在**——既有的整體 golden 比較
+同樣會觸發它，只是從來沒人真跑過所以沒發現。已改成據實描述。
+
+**結果**：
+
+| 項目 | 結果 |
+| --- | --- |
+| `evaluation_status` | `COMPLETED` |
+| 子集 `data.yaml` 被 ultralytics 接受 | 是（修掉 `train` 之後） |
+| `hard_case` | `MEASURED`，12 張，champion mAP50 0.9950 |
+| `representative` | `MEASURED`，12 張，champion mAP50 0.9938 |
+| `tiny_smoke` | `INSUFFICIENT`，2 張，**完全沒有呼叫 val** |
+| per-class | 五類全數回收（Black/Green/Orange/Red/Yellow） |
+| 標註真的有解析到 | 每組 72 instances，與離線數標註檔算出的 72 相符 |
+| production 權重 | sha256 前後相同 |
+| golden 目錄 | 多出 `labels/val.cache`，無既有檔案被改 |
+
+**標註張數那一列是這次最有價值的檢查**：子集若定位不到標註，ultralytics 仍會跑完
+並回傳一組漂亮的 0，看起來與「模型全漏檢」無法區分。所以腳本先離線數一次
+標註框數，再跟 ultralytics 自己報的 instances 對。72 = 12 張 × 6 框，
+且 Black 是 24（其他各 12）——正好是 §4 記的「站別實體上預期兩條黑線」。
+
+**不構成缺陷但要知道**：充當 challenger 的 `runs/Cable1/train/weights/best.pt`
+在 conf 0.4 下什麼都測不到，三組 mAP50 全是 0.0。所以本次真跑驗證的是**管路**，
+不是任何模型表現；delta 數字沒有意義。
+
+### 下一步
+
+§3 的排序不變（(2b) 完整 cycle、(3) 決定 golden dataset、(4) 人在迴圈）。
+分組這件事真正剩下的只有一件：**第一次有真實 golden set 之後**，
+看 hard_case 與 representative 的實際差距，再決定要不要把它變成閘門規則。

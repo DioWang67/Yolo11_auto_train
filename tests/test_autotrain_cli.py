@@ -102,6 +102,88 @@ def test_golden_register_locks_a_directory(golden_dir):
     assert (golden_dir / "golden_manifest.json").is_file()
 
 
+def test_golden_register_records_the_split_from_a_candidate_report(
+    golden_dir, tmp_path
+):
+    """The reviewer's own classification, carried through by content hash."""
+    import csv
+    import hashlib
+
+    digest = hashlib.sha256((golden_dir / "a.jpg").read_bytes()).hexdigest()
+    report = tmp_path / "report"
+    report.mkdir()
+    with open(
+        report / "candidates.csv", "w", encoding="utf-8-sig", newline=""
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["sample_id", "group", "image_sha256"])
+        writer.writerow(["a", "hard_case", digest])
+        # An image the reviewer did not keep; it must not reach the manifest.
+        writer.writerow(["b", "representative", "b" * 64])
+
+    result = runner.invoke(
+        app,
+        [
+            "golden",
+            "register",
+            str(golden_dir),
+            "--registered-by",
+            "engineer",
+            "--groups",
+            str(report),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["groups"] == {"hard_case": 1}
+    assert payload["ungrouped"] == 0
+    assert payload["group_assignments_read"] == 2
+
+
+def test_golden_register_refuses_a_report_that_matches_nothing(golden_dir, tmp_path):
+    """Silently registering unsplit would look like a set that has a split."""
+    import csv
+
+    report = tmp_path / "report"
+    report.mkdir()
+    with open(
+        report / "candidates.csv", "w", encoding="utf-8-sig", newline=""
+    ) as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["sample_id", "group", "image_sha256"])
+        writer.writerow(["other", "hard_case", "c" * 64])
+
+    result = runner.invoke(
+        app,
+        [
+            "golden",
+            "register",
+            str(golden_dir),
+            "--registered-by",
+            "engineer",
+            "--groups",
+            str(report),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "match an image in this directory" in result.output
+    assert not (golden_dir / "golden_manifest.json").exists()
+
+
+def test_golden_register_without_groups_registers_unsplit(golden_dir):
+    result = runner.invoke(
+        app,
+        ["golden", "register", str(golden_dir), "--registered-by", "engineer"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["groups"] == {}
+    assert payload["group_assignments_read"] == 0
+
+
 def test_golden_register_requires_an_owner(golden_dir):
     result = runner.invoke(app, ["golden", "register", str(golden_dir)])
 
