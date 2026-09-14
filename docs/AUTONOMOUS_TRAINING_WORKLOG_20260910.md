@@ -624,3 +624,74 @@ manifest 早就有 `dataset_id`、`dataset_image_count`、`training_job_id`、
 
 **沒有做的事**：不改現有 production model、不重新部署、不重寫舊 manifest、
 不改 production inference 行為。舊 champion 的 provenance 不硬追。
+
+---
+
+## 12. Historical replay（2026-09-14）
+
+驗證 AutoTrain 能否接管既有人工 dataset 走完
+Dataset → Train → Evaluate → Registry → Report。**不是**驗證模型好壞。
+
+`scripts/autotrain_historical_replay.py` + `tests/test_autotrain_historical_replay.py`。
+
+### 歷史 dataset 是追出來的，不是猜的
+
+champion manifest 的 `dataset_hash 4fec918397fe` → `runs/Cable1/A/train10/last_run_metadata.json`
+（同一個 hash）→ `dataset_dir` =
+`data/.operator_handoff/jobs/20260727T060103Z-e6d896ebb9/dataset/Cable1/A/split`，
+`trained_at 2026-07-27T16:03:28`。用日期猜大概也會猜到同一個，但「大概」不是 provenance。
+
+### Dataset 實況
+
+882 physical / 882 unique sha（**零** exact duplicate）/ **46 distinct source** /
+836 augmented（約 19×）/ 314 unique dHash。train 585、val 98、test 199。
+
+**source 層級乾淨**：46 個 source 沒有任何一個跨 split。`_aug_<n>` 慣例有效。
+
+**dHash 層級有洩漏**：9 組跨 split 近重複，涉及 141 個檔案、8 個 source。
+這些是**不同的原始拍攝**在 8×8 灰階下無法區分。注意這是冗餘的證據，
+不是同一張照片的證明——這個站別確實會有不同照片同雜湊。
+
+### 真跑
+
+從 champion `.training.pt` 續訓 1 epoch、imgsz 320、CPU，`trained_this_run: True`，
+產出 `runs/historical_replay/registry/Cable1_A_historical_replay/weights/best.pt`。
+原始 dataset 前後 1769 個檔案雜湊**逐檔相同**（0 added / 0 removed / 0 changed）。
+
+### 一個只有真跑才會撞到的坑
+
+第一次失敗在 `yolo_augmentation`：albumentations `std_range=(0, 6)` 超出新版要求的 0–1。
+原因不是 albumentations，是**我用了 `training_project/config.yaml` 當 base config，
+而訓練專案根目錄根本沒有這個檔案**——`load_config` 於是落到打包預設值，那份是舊格式。
+既有 cycle 走 `_load_base_pipeline_config`（挑 `configs/default_pipeline.yaml`），改用同一支即通。
+**教訓**：replay 要沿用 cycle 自己的每一個載入路徑，換一個就不是同一條路。
+
+### 指標，以及為什麼不能拿來歸因
+
+全部標記 `NON_INDEPENDENT`，decision 在任何量測之前就寫死為
+`NOT_PROMOTABLE_NON_INDEPENDENT`。
+
+| val set | champion mAP50-95 | challenger mAP50-95 |
+| --- | --- | --- |
+| 原始 historical val（98） | 0.8160 | 0.8160 |
+| source-safe val（179） | 0.7399 | 0.7481 |
+
+precision/recall 在兩邊對兩個模型**全部是 1.0000**。
+
+**一個看似合理但錯誤的歸因，必須寫下來免得被重複**：
+「原始 val 因近重複洩漏而虛高」聽起來能解釋 0.076 的差距，但查證後方向不對——
+source-safe val 的 179 個檔案裡**有 58 個是 champion 當初訓練用過的**
+（另有 100 個來自原始 test）。它對 champion 反而**更**污染，分數卻更低。
+所以這 0.076 不能歸因於洩漏；兩個 val set 在大小（98 vs 179）與組成上都不同，
+這個設計**無法分離洩漏效應**。要分離，得在 champion 訓練前就把整個 family 留出來，
+而 champion 已經固定，回頭做不到。
+
+**這次真正立得住的 dataset quality 結論**：原始 val **完全無法區分兩個不同的模型**
+——precision、recall、mAP50、mAP50-95 四項的 delta 全是 0.0000，
+而同樣兩個模型在另一個切分上是有差距的。一個讓兩個不同模型拿到相同分數的 val set
+沒有在量測任何東西。加上 44% 的檔案與近重複相連，這份 val 不適合當升級判準。
+
+### 沒有做的事
+
+不改 production model／inference／trainer、不部署、不註冊 golden、
+不因為數值好而產生 `PROMOTION_CANDIDATE`。
