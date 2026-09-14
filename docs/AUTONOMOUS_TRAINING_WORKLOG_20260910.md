@@ -722,3 +722,59 @@ source-safe val 的 179 個檔案裡**有 58 個是 champion 當初訓練用過�
 
 在那之前，這條路徑只適合內網、只適合非機密影像。Cable1/A 的產線影像是否算機密，
 是需要你們判斷的事，我沒有替你們判斷。
+
+---
+
+## 14. YOLO26 可行性探測（2026-09-14）
+
+**結論：部署管路接得上，五道閘門全過。** 在隔離環境
+`D:/tmp/yolo26-probe/`（ultralytics 8.4.150 / torch 2.14.0+cpu / cv2 5.0.0）實測，
+**主環境維持 `ultralytics==8.3.156` 未動**。
+
+| 閘門 | 結果 |
+| --- | --- |
+| 取得 `yolo26n.pt` | OK，80 classes、task=detect |
+| export ONNX | OK，opset 18，9.4 MB |
+| `cv2.dnn.readNetFromONNX` | **OK** ←（原本預期最可能失敗的一關） |
+| 單一輸出 tensor | OK，`(1, 84, 8400)` |
+| PT vs ONNX 數值一致 | OK，max abs err 0.00131，allclose(1e-3/1e-4) |
+
+`runtime_pair_deployment` 的三個假設——OpenCV DNN 讀得動、單一輸出、raw tensor
+逐點可比——**全部成立，不需要動那支部署硬閘門**。
+（保留：用的是 1e-3/1e-4，repo 自己的容差沒查，換版時要用實際設定再跑。）
+
+### 一個先前寫錯、實測推翻的判斷
+
+§13 之前的口頭評估說「NMS-free 會讓 `iou_thres` 變成失效參數」。
+**對這個專案用的匯出路徑不成立**：YOLO26 的**預設 ONNX 匯出仍是傳統
+`(1, 84, 8400)` 頭**，與 YOLO11 同形狀，仍需 NMS。NMS-free 是 end-to-end 模式的
+性質，不是預設匯出的性質。所以 `iou_thres` 照舊有作用，
+`yolo_inference_model.py` 那段不需要改。
+
+當時是從 release note 推論就講成確定，沒有實測。這條記在這裡，
+因為「從 release note 推論架構影響」這個錯誤很容易再犯。
+
+### 仍然成立的三個成本
+
+1. `ultralytics` 要 8.3.156 → 8.4.x，**升級本身要獨立驗證那 1487 個測試**
+   （本 session 已示範過升級代價：albumentations `std_range` 格式變更，
+   打包預設值沒跟上，真跑才炸）。
+2. **champion 續訓會斷**：架構不同，無法從 YOLO11 checkpoint 續訓；
+   換版那次必須從 YOLO26 預訓練權重重來，`parent_model` 血緣語意要重新定義。
+3. 門檻要重新校準（`conf_thres` 0.4、promotion gate、bootstrapper 的 0.60）。
+
+### 下一步該做哪個實驗（評估，不是已執行）
+
+**不要**拿 review pack 那 250 張當「測試集」。它們沒有人工真值，
+能得到的只有「YOLO26 與顏色證據的一致率」，而**一致率不是準確率**——
+兩者看同一批像素，在同一批資料上訓練出來的模型很可能與顏色門檻學到同一套
+光照偏差，一起錯而看起來像同意。這與 §12 那個「看似合理但方向相反」的
+歸因是同一類陷阱。
+
+**該做的是**：YOLO11 與 YOLO26 各自從預訓練權重、在 §12 建好的
+**source-safe split**（train 703 / val 179，family 不跨界，有人工標註）上
+訓練與評測。兩邊訓練／驗證資料相同、都沒看過 val、有真值，
+所以 mAP 與 per-class recall 是實測；Red/Orange 的 per-class 數字直接可比。
+限制是 882 張源自 46 個 source capture，基數小，差距要夠大才有意義。
+
+**共同前置**：先做 ultralytics 升級驗證。升級若弄壞既有管路，後面都不用談。
