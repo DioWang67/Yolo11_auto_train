@@ -19,6 +19,13 @@ import yaml
 
 from picture_tool.autotrain import AutoTrainDisabledError, AutoTrainError
 
+#: Floor for a per-group golden score. Below this many samples the evaluator
+#: reports INSUFFICIENT instead of a number: a rate over a handful of images
+#: moves in whole-sample steps while still reading like a measurement.
+#: Lives here rather than in the evaluator so that the default and the
+#: configurable setting cannot drift apart.
+DEFAULT_MIN_GROUP_SAMPLES = 10
+
 #: Location of the settings file inside the training project.
 DEFAULT_CONFIG_RELPATH = Path("configs") / "autonomous_training.yaml"
 
@@ -80,6 +87,8 @@ class GoldenConfig:
 
     dataset_path: str = ""
     manifest_sha256: str = ""
+    #: Floor for a per-group score; see :data:`DEFAULT_MIN_GROUP_SAMPLES`.
+    min_group_samples: int = DEFAULT_MIN_GROUP_SAMPLES
 
     @property
     def is_configured(self) -> bool:
@@ -214,6 +223,13 @@ class AutoTrainConfig:
                 manifest_sha256=str(
                     golden_raw.get("manifest_sha256", "") or ""
                 ).strip(),
+                min_group_samples=_as_int(
+                    golden_raw.get(
+                        "min_group_samples", DEFAULT_MIN_GROUP_SAMPLES
+                    ),
+                    "golden.min_group_samples",
+                    minimum=1,
+                ),
             ),
             training=TrainingConfig(
                 base_model=str(training_raw.get("base_model", "champion")).strip()

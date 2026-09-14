@@ -491,6 +491,7 @@ class TrainingCycle:
                 imgsz=self.config.training.imgsz,
                 device=self.config.training.device,
                 batch=self.config.training.batch,
+                min_group_samples=self.config.golden.min_group_samples,
                 validator=self.validator,
             )
         except Exception as exc:  # noqa: BLE001 - recorded, then re-raised

@@ -12,6 +12,7 @@ import yaml
 from picture_tool.autotrain import AutoTrainDisabledError
 from picture_tool.autotrain.config import (
     DEFAULT_CONFIG_RELPATH,
+    DEFAULT_MIN_GROUP_SAMPLES,
     PLANNED_SELECTORS,
     AutoTrainConfig,
     AutoTrainConfigError,
@@ -209,6 +210,24 @@ def test_golden_is_configured_when_a_path_is_given(tmp_path):
 
     assert config.golden.is_configured is True
     assert config.golden.manifest_sha256 == "ab"
+
+
+def test_the_group_floor_has_a_default_and_is_overridable(tmp_path):
+    """A group score over a handful of images reads like a measurement."""
+    default = AutoTrainConfig.load(_write(tmp_path, _enabled_payload()))
+    assert default.golden.min_group_samples == DEFAULT_MIN_GROUP_SAMPLES
+
+    payload = _enabled_payload(golden={"min_group_samples": 25})
+    config = AutoTrainConfig.load(_write(tmp_path, payload))
+
+    assert config.golden.min_group_samples == 25
+
+
+def test_a_group_floor_below_one_is_refused(tmp_path):
+    payload = _enabled_payload(golden={"min_group_samples": 0})
+
+    with pytest.raises(AutoTrainConfigError, match="min_group_samples"):
+        AutoTrainConfig.load(_write(tmp_path, payload))
 
 
 def test_promotion_defaults_match_the_existing_deployment_gate(tmp_path):
