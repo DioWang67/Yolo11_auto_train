@@ -545,3 +545,82 @@ production : yolo_Cable1_A_142252_433429_4f905ddf33c3.jpg
   要更強，得請 `deploy.py` 把訓練 dataset id 寫進 manifest。
 - pack 內部仍有 20 組近重複（`--per-cluster 3` 允許的），人工複核時可再收斂。
 - 本節工作**尚未提交**。
+
+---
+
+## 10. 人工標註匯入與 Golden v1 流程（2026-09-14）
+
+Review pack selection 自此凍結為 v1，除非發現 correctness bug 不再調整。
+真正的 blocker 是 ground truth，不是選樣演算法。
+
+### 新增
+
+| 檔案 | 內容 |
+| --- | --- |
+| `src/picture_tool/autotrain/label_review.py` | **新** —— 五狀態、驗證、核可、coverage、staging |
+| `tests/test_autotrain_label_review.py` | **新**，36 個測試 |
+| `cli.py` | `golden validate-labels` / `approve-labels` / `reject-labels` / `coverage` / `register-from-review` |
+
+### 這個模組存在的理由只有一句
+
+**一個 label 檔不是一次核可。** 一整個目錄的 `.txt` 只證明有人畫了框。
+所以驗證從內容推出狀態（`NEEDS_LABEL` / `LABELED` / `NEEDS_REVIEW`），
+人做出決定（`APPROVED` / `REJECTED`），**兩者都到齊**才是 golden eligible。
+
+### 三個不明顯但重要的設計
+
+**核可綁定內容雜湊。** 每個決定記下當時的影像與標註 sha256。核可後改標註，
+核可不會跟著走——退回 `NEEDS_REVIEW` 並標 `approval_stale`。
+沒有這個，approve-then-edit 是敞開的。這是 golden manifest 上鎖那套邏輯往前挪一步。
+
+**身分用影像 sha256 與 review pack 對接，不是檔名。** 人一定會改名、改副檔名、
+改大小寫。反過來這也讓「不在 pack 裡的影像」被抓出來——pack 正是做污染檢查的地方，
+繞過它塞進來的影像等於沒檢查過。
+
+**`register-from-review` 不採信任何 cache。** 全部從磁碟重跑：影像/標註雜湊、
+source lineage、class schema、訓練污染、group、核可狀態。
+昨天的核可說的是「有人看過那些位元」，不是「那些位元還在、還乾淨」。
+
+### 框數不符不自動修
+
+回報 `label_incomplete` 並轉 `NEEDS_REVIEW`，訊息指名缺哪一類（`Yellow 0/1`）。
+語法驗證沿用與 operator handoff **同一支** `validate_yolo_label_text`
+（涵蓋欄位數、數值、class id 範圍、NaN/inf、座標邊界、寬高 > 0），
+兩條路不可能對「什麼叫合法標註」有不同意見。
+
+### 真檔案上驗過
+
+用 review pack 裡 3 張真影像跑完整條：標 2 張 → `LABELED` 2 →
+核可 → `APPROVED` 2、eligible 2 → **竄改其中一份標註 → 該張退回 `NEEDS_REVIEW`
+並標 `approval_stale`** → 還原重核 → stage 2 張 → `golden.register` 回報 `OK`，
+群組 `{red_orange_critical: 2}`、ungrouped 0，coverage 誠實回報三組全 `INSUFFICIENT`。
+（該 scratch golden 已刪除，避免被誤認為正式註冊。）
+
+## 11. Forward-only provenance（2026-09-14）
+
+### 先更正 §8 的一句話
+
+§8 說「deploy manifest 完全沒有 class 欄位」——**class 那部分對，dataset 那部分錯**。
+manifest 早就有 `dataset_id`、`dataset_image_count`、`training_job_id`、
+`training_provenance`、`provenance_confidence`、`dataset_hash`、`training_config_hash`。
+問題是 **v1.0.6 這些值全是 `None`**——欄位在，值沒填。差別很重要：
+不是要加欄位，是那次 deploy 沒有東西可填。
+
+### 改了什麼（都是 forward-only）
+
+| 位置 | 內容 |
+| --- | --- |
+| `tasks/deploy.py` | manifest 新增 `class_names` 與 `class_schema_hash` |
+| `autotrain/registry.py` | `CandidateModel` 新增 `base_model` 與 `training_provenance` |
+| `autotrain/orchestrator.py` | 訓練後把 provenance 檔的路徑＋sha256＋張數/來源數寫進候選紀錄 |
+
+`class_names` 取自**已驗證的 ONNX/PT pair**——那是唯一對兩個部署產物都交叉檢查過的
+來源。沒有 pair verification 就留 `None`，不從站別 config 猜（那是「預期」不是「契約」）。
+雜湊沿用 `pending_annotations._class_schema_hash`（`autotrain/class_schema.py` 早就這樣做），
+所以 manifest、handoff、autotrain dataset version 三者可以直接比對而不是「大概一樣」。
+
+`training_provenance` 記**雜湊**而不只是路徑：路徑在檔案被改之後仍然解析得到，
+而「這個模型看過哪些影像」正是今天對 champion 無法回答的問題。
+
+**沒有做的事**：不改現有 production model、不重新部署、不重寫舊 manifest、
+不改 production inference 行為。舊 champion 的 provenance 不硬追。

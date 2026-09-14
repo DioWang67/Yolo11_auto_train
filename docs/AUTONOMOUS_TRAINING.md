@@ -275,6 +275,73 @@ python scripts\golden_review_pack.py --out runs\review_pack\v1 `
 production 的 retention cleanup 會在 30 天後刪掉 PASS 影像，
 只存路徑的 pack 會在人標到一半時爛掉。
 
+### 6.3 人工標註 → 驗證 → 核可 → Golden
+
+**有 label 檔不等於已核可。** 一整個目錄的 `.txt` 只證明有人畫了框，
+沒有說框對不對、影像該不該進尺、有沒有人看過。所以驗證從內容推出**狀態**，
+人做出**決定**，兩者都到齊才算數。
+
+| 狀態 | 意義 | 誰決定 |
+| --- | --- | --- |
+| `NEEDS_LABEL` | 還沒有標註檔 | 內容推導 |
+| `LABELED` | 標註完整且通過所有檢查，等人確認 | 內容推導 |
+| `NEEDS_REVIEW` | 有東西要人判斷（框數不符、語法錯、污染、不在 pack 裡） | 內容推導 |
+| `APPROVED` | 人說這是真值 | **人** |
+| `REJECTED` | 人說這張不能用 | **人** |
+
+Golden eligible = `APPROVED` **且**無任何 validation problem。缺一不可。
+
+目錄版面（與 evaluator、golden 註冊一致）：
+
+```
+golden_labeling/v1/
+  images/      ← 從 runs/review_pack/v1/images/ 複製過來
+  labels/      ← 人畫的 YOLO 標註
+  review_state.json   ← 由 approve/reject 指令寫入，不要手改
+```
+
+```powershell
+# 驗證（只驗證，永遠不註冊、不改標註）
+picture-tool-autotrain golden validate-labels golden_labeling\v1 --pack runs\review_pack\v1
+
+# 核可（單張或整組）
+picture-tool-autotrain golden approve-labels golden_labeling\v1 `
+  --pack runs\review_pack\v1 --reviewed-by <姓名> --group red_orange_critical
+
+picture-tool-autotrain golden reject-labels golden_labeling\v1 `
+  --pack runs\review_pack\v1 --reviewed-by <姓名> --sample-id <id> --note "反光看不出來"
+
+# 看目前核可的部分能覆蓋到什麼程度
+picture-tool-autotrain golden coverage golden_labeling\v1 --pack runs\review_pack\v1
+
+# 由已核可的部分組出並鎖定 golden set
+picture-tool-autotrain golden register-from-review golden_labeling\v1 `
+  --pack runs\review_pack\v1 --out golden\v1 --registered-by <姓名>
+```
+
+**驗證項目**：影像有對應標註；YOLO 語法（欄位數、數值、class id 在 schema 範圍、
+座標正規化且有限、寬高 > 0）——沿用與 operator handoff **同一支**
+`validate_yolo_label_text`，兩條路不可能對「什麼叫合法標註」有不同意見；
+class schema hash 相符；source 可追溯；不與已知訓練資料重疊；
+以及框數與站別 `expected_items` 相符。
+
+**框數不符不會被偷偷修掉。** 回報 `label_incomplete` 並轉 `NEEDS_REVIEW`，
+訊息指名是哪一類少了（`Yellow 0/1`），由人決定是標到一半還是這張真的不一樣。
+
+**核可綁定內容雜湊。** 每個決定記下當時的影像與標註 sha256。
+核可之後再改標註，核可不會跟著走——它會失效（`approval_stale`）並退回待審。
+這就是 golden manifest 上鎖那套邏輯往前挪一步，堵住 approve-then-edit。
+
+**身分用影像內容雜湊與 review pack 對接**，不是檔名。人可以隨意改名；
+反過來，不在 pack 裡的影像會被標記——pack 正是做污染檢查的地方。
+
+**`register-from-review` 會把所有檢查從磁碟重跑一遍**，不採信任何先前的驗證結果：
+昨天的核可說的是「有人看過那些位元」，不是「那些位元還在、還乾淨」。
+
+**允許 partial golden**。可以先做完 `red_orange_critical` 就註冊，不必等 250 張全標完。
+但註冊時一定輸出 coverage report，樣本不足的組照 evaluator 的門檻回報 `INSUFFICIENT`，
+不會把單薄的集合說成完整。
+
 > 註：本站既有的 `station_data/yolo11_inference/acceptance/` 驗收集是天然的候選 ——
 > 它有人工真值、不可變快照，且文件明訂不可進訓練集。但它是「整體檢測組合」層級的
 > OK/NG 真值，不是 YOLO 框標註，要轉用需要另做指標對應。這是人的決定，不在本階段。
