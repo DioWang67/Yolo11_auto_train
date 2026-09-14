@@ -21,6 +21,7 @@ from picture_tool.autotrain.class_schema import (
     schema_from_station_config,
 )
 from picture_tool.autotrain.config import AutoTrainConfig
+from picture_tool.autotrain import label_review, review_pack
 from picture_tool.autotrain.golden_candidates import read_group_assignments
 from picture_tool.autotrain.labeling import (
     export_request,
@@ -298,6 +299,258 @@ def golden_register(
                 # ungrouped must say so at the moment it is registered.
                 "ungrouped": len(dataset.ungrouped_sample_ids),
                 "group_assignments_read": len(assignments) if assignments else 0,
+                "next": "put dataset_path and manifest_sha256 in the settings file",
+            }
+        )
+
+    _run(action)
+
+
+def _review_context(config, product, area):
+    """Everything validation needs about the station, resolved once."""
+    service = _service(config, product, area)
+    model_dir = service.paths.production_model_dir(service.product, service.area)
+    champion = read_champion(model_dir)
+    schema = resolve_class_schema(
+        [
+            read_champion_class_schema(champion) if champion else None,
+            schema_from_station_config(model_dir),
+        ],
+        context=f"{service.product}/{service.area}",
+    )
+    return service, model_dir, schema
+
+
+def _expected_counts(model_dir: Path, product: str, area: str) -> dict:
+    """The station's expected object multiset, counted.
+
+    ``expected_items`` lists Black twice because the station has two black
+    wires. It is not a class schema and is never used as one here --- only
+    counted, which is what it is actually for.
+    """
+    import yaml
+
+    config_path = model_dir / "config.yaml"
+    try:
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return {}
+    items = (payload.get("expected_items") or {}).get(product, {}).get(area)
+    if not isinstance(items, list):
+        return {}
+    counts: dict[str, int] = {}
+    for item in items:
+        name = str(item).strip()
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _validate(path, pack, config, product, area):
+    """Run a full validation pass. Never reads a cached result."""
+    service, model_dir, schema = _review_context(config, product, area)
+    pack_samples = label_review.read_pack_samples(pack) if pack else None
+    report = label_review.validate_labels(
+        path,
+        schema=schema,
+        expected_counts=_expected_counts(
+            model_dir, service.product, service.area
+        ),
+        pack_samples=pack_samples,
+        expected_schema_hash=schema.schema_hash,
+    )
+    return service, schema, report
+
+
+@golden_app.command("validate-labels")
+def golden_validate_labels(
+    path: str = typer.Argument(..., help="Directory holding images/ and labels/."),
+    pack: Optional[str] = typer.Option(
+        None,
+        help="The review pack these images came from. Strongly recommended: "
+        "it supplies the group split and is where the contamination checks "
+        "were made, and an image absent from it is flagged.",
+    ),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+    product: str = typer.Option("", help="Station product."),
+    area: str = typer.Option("", help="Station area."),
+):
+    """Check human labels. Validates only --- never registers, never edits."""
+
+    def action():
+        _, _, report = _validate(path, pack, config, product, area)
+        payload = report.to_dict()
+        payload["next"] = (
+            "approve the LABELED samples with 'golden approve-labels'; "
+            "nothing becomes golden until someone does"
+        )
+        _echo_json(payload)
+
+    _run(action)
+
+
+@golden_app.command("approve-labels")
+def golden_approve_labels(
+    path: str = typer.Argument(..., help="Directory holding images/ and labels/."),
+    reviewed_by: str = typer.Option(..., help="Who is approving these."),
+    sample_id: Optional[list[str]] = typer.Option(
+        None, help="Source image id to approve. Repeatable."
+    ),
+    group: Optional[str] = typer.Option(
+        None, help="Approve every clean sample in this group instead."
+    ),
+    note: str = typer.Option("", help="Anything the next reader should know."),
+    pack: Optional[str] = typer.Option(None, help="The review pack."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+    product: str = typer.Option("", help="Station product."),
+    area: str = typer.Option("", help="Station area."),
+):
+    """Record that a person judged these labels correct."""
+
+    def action():
+        _, _, report = _validate(path, pack, config, product, area)
+        targets = list(sample_id or [])
+        if group:
+            targets += [
+                s.source_image_id
+                for s in report.samples
+                if s.group == group and s.state == label_review.LABELED
+            ]
+        if not targets:
+            raise AutoTrainError(
+                "Nothing to approve. Pass --sample-id, or --group to take "
+                "every sample in a group that validation has already cleared."
+            )
+        recorded, refused = label_review.record_decision(
+            path,
+            report,
+            source_image_ids=sorted(set(targets)),
+            state=label_review.APPROVED,
+            reviewed_by=reviewed_by,
+            note=note,
+        )
+        _echo_json({"approved": recorded, "refused": refused})
+
+    _run(action)
+
+
+@golden_app.command("reject-labels")
+def golden_reject_labels(
+    path: str = typer.Argument(..., help="Directory holding images/ and labels/."),
+    reviewed_by: str = typer.Option(..., help="Who is rejecting these."),
+    sample_id: list[str] = typer.Option(..., help="Source image id. Repeatable."),
+    note: str = typer.Option("", help="Why."),
+    pack: Optional[str] = typer.Option(None, help="The review pack."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+    product: str = typer.Option("", help="Station product."),
+    area: str = typer.Option("", help="Station area."),
+):
+    """Record that a person judged these labels unusable."""
+
+    def action():
+        _, _, report = _validate(path, pack, config, product, area)
+        recorded, refused = label_review.record_decision(
+            path,
+            report,
+            source_image_ids=sorted(set(sample_id)),
+            state=label_review.REJECTED,
+            reviewed_by=reviewed_by,
+            note=note,
+        )
+        _echo_json({"rejected": recorded, "refused": refused})
+
+    _run(action)
+
+
+@golden_app.command("coverage")
+def golden_coverage(
+    path: str = typer.Argument(..., help="Directory holding images/ and labels/."),
+    pack: Optional[str] = typer.Option(None, help="The review pack."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+    product: str = typer.Option("", help="Station product."),
+    area: str = typer.Option("", help="Station area."),
+):
+    """What the currently approved samples would cover as a golden set."""
+
+    def action():
+        _, _, report = _validate(path, pack, config, product, area)
+        settings = AutoTrainConfig.load(config)
+        _echo_json(
+            label_review.coverage(
+                report.samples,
+                groups=list(review_pack.PACK_GROUPS),
+                min_group_samples=settings.golden.min_group_samples,
+                critical_group=review_pack.RED_ORANGE_CRITICAL,
+            )
+        )
+
+    _run(action)
+
+
+@golden_app.command("register-from-review")
+def golden_register_from_review(
+    path: str = typer.Argument(..., help="The labelling directory."),
+    out: str = typer.Option(..., help="Where the golden set is assembled."),
+    registered_by: str = typer.Option(..., help="Who is registering this set."),
+    pack: Optional[str] = typer.Option(None, help="The review pack."),
+    description: str = typer.Option("", help="What this set covers."),
+    overwrite: bool = typer.Option(False, help="Replace an existing set."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+    product: str = typer.Option("", help="Station product."),
+    area: str = typer.Option("", help="Station area."),
+):
+    """Assemble and lock a golden set from the approved labels.
+
+    Every check runs again from the files on disk. Nothing is taken from a
+    previous validation: an approval recorded yesterday says a person judged
+    those bytes, not that the bytes are still there or still clean, and the
+    gap between the two is where a contaminated or half-finished sample
+    would get in.
+
+    Partial sets are allowed on purpose --- waiting for all 250 images before
+    any evaluation is possible would stall everything --- so the coverage
+    report says which groups are still INSUFFICIENT rather than describing a
+    thin set as complete.
+    """
+
+    def action():
+        _, schema, report = _validate(path, pack, config, product, area)
+        eligible = report.eligible()
+        if not eligible:
+            raise AutoTrainError(
+                "No sample is both approved and clean. Run "
+                "'golden validate-labels' to see what each one is waiting for."
+            )
+        staged, groups = label_review.stage_approved(
+            report, out, schema=schema, overwrite=overwrite
+        )
+        dataset = golden_module.register(
+            staged,
+            registered_by=registered_by,
+            class_schema=schema,
+            description=description,
+            groups=groups,
+            overwrite=overwrite,
+        )
+        settings = AutoTrainConfig.load(config)
+        report_payload = label_review.coverage(
+            report.samples,
+            groups=list(review_pack.PACK_GROUPS),
+            min_group_samples=settings.golden.min_group_samples,
+            critical_group=review_pack.RED_ORANGE_CRITICAL,
+        )
+        (staged / "coverage.json").write_text(
+            json.dumps(report_payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        _echo_json(
+            {
+                "root": str(dataset.root),
+                "image_count": dataset.image_count,
+                "manifest_sha256": dataset.manifest_sha256,
+                "groups": dataset.group_counts(),
+                "ungrouped": len(dataset.ungrouped_sample_ids),
+                "coverage": report_payload,
                 "next": "put dataset_path and manifest_sha256 in the settings file",
             }
         )
