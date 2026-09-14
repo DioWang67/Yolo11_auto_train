@@ -102,6 +102,16 @@ class CandidateModel:
     updated_at: str = ""
     artifact_path: str = ""
     weight_sha256: str = ""
+    #: The weight this candidate continued from, named explicitly rather
+    #: than left inside training_config where a reader has to know to look.
+    base_model: str = ""
+    #: Immutable reference to what the run actually consumed: the splitter's
+    #: provenance file, its checksum, and the counts it reports. Recorded
+    #: forward-only, because the deployed champion has none and answering
+    #: "was this image trained on" for it is not possible from any record on
+    #: disk. A path alone would not survive the file being edited, so the
+    #: checksum travels with it.
+    training_provenance: Mapping[str, Any] = field(default_factory=dict)
     training_config: Mapping[str, Any] = field(default_factory=dict)
     training_metrics: Mapping[str, Any] = field(default_factory=dict)
     evaluation_metrics: Mapping[str, Any] = field(default_factory=dict)
@@ -128,6 +138,8 @@ class CandidateModel:
             "updated_at": self.updated_at,
             "artifact_path": self.artifact_path,
             "weight_sha256": self.weight_sha256,
+            "base_model": self.base_model,
+            "training_provenance": dict(self.training_provenance),
             "training_config": dict(self.training_config),
             "training_metrics": dict(self.training_metrics),
             "evaluation_metrics": dict(self.evaluation_metrics),
@@ -154,6 +166,10 @@ class CandidateModel:
                 updated_at=str(payload.get("updated_at", "")),
                 artifact_path=str(payload.get("artifact_path", "")),
                 weight_sha256=str(payload.get("weight_sha256", "")),
+                base_model=str(payload.get("base_model", "")),
+                training_provenance=dict(
+                    payload.get("training_provenance") or {}
+                ),
                 training_config=dict(payload.get("training_config") or {}),
                 training_metrics=dict(payload.get("training_metrics") or {}),
                 evaluation_metrics=dict(payload.get("evaluation_metrics") or {}),

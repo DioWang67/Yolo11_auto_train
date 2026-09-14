@@ -26,6 +26,7 @@ from typing import Any, BinaryIO, List, Tuple
 import yaml
 
 from picture_tool.exception_notes import add_exception_note
+from picture_tool.pending_annotations import _class_schema_hash
 from picture_tool.pipeline.core import Task
 from picture_tool.pipeline.utils import detect_existing_weights
 from picture_tool.position.position_gate import (
@@ -2129,6 +2130,20 @@ def run_deploy(config: dict, args: Any) -> None:
             if provenance_source is not None and provenance_source.is_file()
             else None
         )
+        deployed_class_names = (
+            [str(name) for name in pair_verification.comparison.class_names]
+            if pair_verification is not None
+            and pair_verification.comparison.class_names
+            else None
+        )
+        # Reuses the operator handoff's own checksum rather than defining a
+        # third one, so a manifest, a handoff and an autotrain dataset
+        # version can be compared directly instead of approximately.
+        deployed_class_schema_hash = (
+            _class_schema_hash(deployed_class_names)
+            if deployed_class_names
+            else None
+        )
         manifest = {
             "schema_version": 2,
             "deployed_version": _version_str(version),
@@ -2163,6 +2178,18 @@ def run_deploy(config: dict, args: Any) -> None:
             "training_job_id": training_metadata.get("job_id"),
             "training_provenance": provenance_relative,
             "provenance_confidence": "recorded" if provenance_relative else None,
+            # The ordered class contract this weight was trained against.
+            # Forward-only: existing manifests are never rewritten, and
+            # inference does not read these. Until now the contract could
+            # only be recovered by opening the checkpoint, so every consumer
+            # that needed it -- the autotrain evaluator above all -- had to
+            # load torch to answer a question the manifest already knew.
+            # Taken from the verified ONNX/PT pair because that is the one
+            # source cross-checked against both deployed artifacts; absent
+            # verification it stays null rather than being guessed from the
+            # station config, which states an expectation, not a contract.
+            "class_names": deployed_class_names,
+            "class_schema_hash": deployed_class_schema_hash,
             "evaluation_metrics": evaluation_gate.get("metrics", {}),
             "evaluation_gate_passed": evaluation_gate.get("passed"),
             "model_acceptance_gate_passed": (

@@ -20,6 +20,7 @@ Three properties shape the design:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from picture_tool.autotrain import AutoTrainError
+from picture_tool.autotrain.golden_candidates import source_image_id
 from picture_tool.autotrain import golden as golden_module
 from picture_tool.autotrain import promotion as promotion_module
 from picture_tool.autotrain import reports
@@ -449,6 +451,10 @@ class TrainingCycle:
             TRAINED,
             training_metrics=dict(result.metrics),
             weight_sha256=result.weight_sha256,
+            base_model=result.base_model,
+            training_provenance=_training_provenance_record(
+                self.directory / "work" / "split"
+            ),
         )
         self.state.data["challenger"] = result.to_dict()
         self._finish(
@@ -790,6 +796,43 @@ def _parse_iso(value: str) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _training_provenance_record(split_dir: Path) -> dict[str, Any]:
+    """An immutable reference to what this run actually consumed.
+
+    The splitter already writes ``training_provenance.json``; this records
+    where it is, what it hashes to, and the counts it reports. The checksum
+    is the point --- a path alone would still resolve after the file was
+    edited, and "which images did this model see" is precisely the question
+    nobody can answer for the deployed champion today.
+
+    Absence is recorded as such rather than raised on: a candidate whose
+    provenance is missing is still a candidate, it just cannot later clear
+    an image of contamination, and saying so is more useful than failing
+    the run.
+    """
+    path = split_dir / "training_provenance.json"
+    if not path.is_file():
+        return {"recorded": False, "reason": f"{path.name} was not written"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {"recorded": False, "reason": f"unreadable: {exc}"}
+    images = payload.get("images") if isinstance(payload, dict) else None
+    sources = {
+        source_image_id(str(entry.get("file_name") or ""))
+        for entry in images or []
+        if isinstance(entry, dict) and entry.get("file_name")
+    }
+    return {
+        "recorded": True,
+        "path": str(path),
+        "sha256": digest,
+        "image_count": len(images) if isinstance(images, list) else 0,
+        "source_count": len(sources),
+    }
 
 
 def _load_base_pipeline_config(paths: AutoTrainPaths, product: str) -> dict[str, Any]:
