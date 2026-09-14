@@ -371,7 +371,7 @@ def merge_group_evidence(candidates: Sequence[Candidate]) -> list[Candidate]:
 
 
 def thin_by_group(
-    candidates: Sequence[Candidate], *, per_group: int = 2
+    candidates: Sequence[Candidate], *, per_group: int | None = 2
 ) -> tuple[list[Candidate], int]:
     """Keep at most ``per_group`` candidates from each duplicate group.
 
@@ -386,6 +386,12 @@ def thin_by_group(
     Hard cases are kept ahead of representative ones within a group, and the
     lowest-confidence sample ahead of the rest: if the same picture recurs, the
     copy worth reviewing is the one the model struggled with most.
+
+    ``per_group=None`` keeps every perceptual near-duplicate while still
+    collapsing byte-identical copies. It exists for callers that select among
+    look-alikes themselves --- a review pack spreads its choice across a
+    cluster rather than taking the first two, and cannot do that if the
+    cluster has already been cut down to two.
 
     Returns the kept candidates and how many were dropped. Nothing on disk is
     touched --- thinning is a decision about the *list*.
@@ -409,7 +415,12 @@ def thin_by_group(
     dropped = 0
     for candidate in ordered:
         key = candidate.duplicate_group or candidate.sample_id
-        allowed = 1 if key.startswith("sha:") else per_group
+        if key.startswith("sha:"):
+            allowed: float = 1
+        elif per_group is None:
+            allowed = float("inf")
+        else:
+            allowed = per_group
         if seen[key] >= allowed:
             dropped += 1
             continue
@@ -669,7 +680,7 @@ def build_candidates(
     area: str = "A",
     expected_boxes: int = 6,
     low_confidence_below: float = 0.55,
-    per_duplicate_group: int = 2,
+    per_duplicate_group: int | None = 2,
     measure_quality: bool = True,
     trained_source_ids: Iterable[str] = (),
     trained_sha256: Iterable[str] = (),
