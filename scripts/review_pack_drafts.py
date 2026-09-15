@@ -61,7 +61,104 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=PROJECT_ROOT / "runs" / "bootstrap_poc" / "report" / "needs_review.json",
     )
     p.add_argument("--group", default="red_orange_critical")
+    p.add_argument(
+        "--preview",
+        action="store_true",
+        help="Also render the drafted boxes onto the images, plus an enlarged "
+        "strip of the disputed crops. Look at these before trusting a draft.",
+    )
     return p.parse_args(argv)
+
+
+#: BGR. Disputed boxes are the ones worth looking at, so they are the ones
+#: that shout; agreed boxes stay quiet rather than competing for attention.
+AGREED_COLOUR = (0, 190, 0)
+DISPUTED_COLOUR = (0, 0, 235)
+
+
+def _put_label(image, text: str, origin: tuple[int, int], colour) -> None:
+    """Text on a filled plate, because a photo is a terrible background."""
+    import cv2
+
+    scale, thickness = 1.1, 2
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+    x, y = origin
+    y = max(y, th + 6)
+    cv2.rectangle(image, (x, y - th - base - 4), (x + tw + 8, y + 4), colour, -1)
+    cv2.putText(image, text, (x + 4, y - 2), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                (255, 255, 255), thickness, cv2.LINE_AA)
+
+
+def render_preview(image_path: Path, sample: dict, out_dir: Path, stem: str) -> None:
+    """The drafted boxes on the frame, and the disputed ones enlarged.
+
+    Two files because they answer different questions. The frame says whether
+    a box is in the right place and whether one is missing; the crop strip is
+    the only way to judge a colour, since a wire is a few dozen pixels across
+    in a 3072-wide photo.
+    """
+    import cv2
+
+    image = cv2.imread(str(image_path))
+    if image is None:
+        LOGGER.warning("Could not read %s", image_path)
+        return
+    height, width = image.shape[:2]
+    canvas = image.copy()
+    crops = []
+
+    for index, item in enumerate(sample.get("boxes", []), start=1):
+        box = item.get("box", {})
+        cx, cy = float(box.get("cx", 0.0)), float(box.get("cy", 0.0))
+        bw, bh = float(box.get("width", 0.0)), float(box.get("height", 0.0))
+        x1, y1 = int((cx - bw / 2) * width), int((cy - bh / 2) * height)
+        x2, y2 = int((cx + bw / 2) * width), int((cy + bh / 2) * height)
+        disputed = not item.get("agreed", True)
+        colour = DISPUTED_COLOUR if disputed else AGREED_COLOUR
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), colour, 6 if disputed else 3)
+        _put_label(canvas, f"{index} {box.get('class_name')}", (x1, y1 - 6), colour)
+        if disputed:
+            pad_x, pad_y = int((x2 - x1) * 0.6), int((y2 - y1) * 0.25)
+            crop = image[max(0, y1 - pad_y):min(height, y2 + pad_y),
+                         max(0, x1 - pad_x):min(width, x2 + pad_x)]
+            if crop.size:
+                opinions = {
+                    o.get("source"): o
+                    for o in item.get("opinions", [])
+                    if isinstance(o, dict)
+                }
+                crops.append((index, box, opinions, crop))
+
+    scale = min(1.0, 1600 / max(height, width))
+    cv2.imwrite(
+        str(out_dir / f"{stem}.jpg"),
+        cv2.resize(canvas, (int(width * scale), int(height * scale))),
+    )
+
+    if not crops:
+        return
+    target_h = 420
+    tiles = []
+    for index, box, opinions, crop in crops:
+        detector = str(box.get("class_name"))
+        colour_says = (opinions.get("colour") or {}).get("class_name") or "undecided"
+        caption = f"#{index} det {detector} / col {colour_says}"
+        # A crop of a wire is narrow, and a caption clipped at the tile edge
+        # turns "Orange" into "O" -- which is the one word being decided.
+        (text_w, _), _ = cv2.getTextSize(caption, cv2.FONT_HERSHEY_SIMPLEX, 1.1, 2)
+        ch, cw = crop.shape[:2]
+        tile_w = max(1, int(cw * target_h / ch))
+        tile = cv2.resize(crop, (tile_w, target_h))
+        pad = max(0, text_w + 24 - tile_w)
+        tile = cv2.copyMakeBorder(tile, 64, 8, 8, 8 + pad, cv2.BORDER_CONSTANT,
+                                  value=(30, 30, 30))
+        _put_label(tile, caption, (10, 52), DISPUTED_COLOUR)
+        tiles.append(tile)
+    strip = tiles[0] if len(tiles) == 1 else cv2.hconcat(
+        [cv2.copyMakeBorder(t, 0, 0, 0, 12, cv2.BORDER_CONSTANT, value=(30, 30, 30))
+         for t in tiles]
+    )
+    cv2.imwrite(str(out_dir / f"{stem}__disputed.jpg"), strip)
 
 
 def verified_class_ids() -> dict[str, int]:
@@ -165,6 +262,12 @@ def main(argv: list[str] | None = None) -> int:
 
     drafts = args.pack / "labels_draft"
     drafts.mkdir(parents=True, exist_ok=True)
+    # labelImg reads this to show names instead of bare indices, and a name
+    # is the only way a reviewer notices the order is wrong.
+    (drafts / "classes.txt").write_text("\n".join(CLASS_NAMES) + "\n", encoding="utf-8")
+    previews = args.pack / "preview_draft"
+    if args.preview:
+        previews.mkdir(parents=True, exist_ok=True)
     notes_rows = []
     disputed_total = 0
 
@@ -177,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
             continue
         lines, notes = draft_lines(sample, class_ids)
         (drafts / f"{stem}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if args.preview:
+            render_preview(args.pack / row["pack_image"], sample, previews, stem)
         disputed_total += sum(1 for n in notes if "DISPUTED" in n)
         notes_rows.append({"pack_image": stem, "boxes": len(lines),
                            "notes": " | ".join(notes) or "draft agrees with the station"})
