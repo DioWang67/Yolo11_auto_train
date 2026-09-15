@@ -55,8 +55,14 @@ PREPROCESSED_SIDE = 640.0
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--results", type=Path, required=True,
-                   help="A Result/<date>/<product>/<area> directory.")
+    p.add_argument("--results", type=Path, default=None,
+                   help="A Result/<date>/<product>/<area> directory. The "
+                        "reference is then the station detector, not truth.")
+    p.add_argument("--reference-labels", type=Path, default=None,
+                   help="A directory with images/ and labels/ holding "
+                        "hand-drawn YOLO labels. This is the reference that "
+                        "measures accuracy rather than agreement.")
+    p.add_argument("--classes", default="Black,Green,Orange,Red,Yellow")
     p.add_argument("--product", default="Cable1")
     p.add_argument("--area", default="A")
     p.add_argument("--out", type=Path,
@@ -67,7 +73,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--url-env", default="QWEN_URL")
     p.add_argument("--key-env", default="")
     p.add_argument("--model", default="Qwen3.8-27B-GGUF")
-    p.add_argument("--max-tokens", type=int, default=3000)
+    p.add_argument("--max-tokens", type=int, default=6000)
+    p.add_argument("--match-radius", type=float, default=0.02,
+                   help="How near a proposed centre must be to count as the "
+                        "same object, as a fraction of image width.")
     p.add_argument("--describe", default=(
         "Each object is a wire end where it meets its solder pad. Box only "
         "that short segment, not the wire running away from it."),
@@ -88,6 +97,35 @@ def iou(a: Box, b: Box) -> float:
     inter = iw * ih
     union = a.width * a.height + b.width * b.height - inter
     return inter / union if union > 0 else 0.0
+
+
+def labelled_frames(root: Path, names: tuple[str, ...]) -> list[tuple[Path, list[Box]]]:
+    """Frames whose boxes a person drew.
+
+    The only reference that can answer whether the model is right rather than
+    whether it resembles the detector, which is itself the thing under
+    suspicion at this station.
+    """
+    frames: list[tuple[Path, list[Box]]] = []
+    for image in sorted((root / "images").iterdir()):
+        if image.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp"}:
+            continue
+        label = root / "labels" / f"{image.stem}.txt"
+        if not label.is_file():
+            continue
+        boxes = []
+        for line in label.read_text(encoding="utf-8").splitlines():
+            parts = line.split()
+            if len(parts) != 5:
+                continue
+            index, cx, cy, w, h = int(parts[0]), *(float(v) for v in parts[1:])
+            if 0 <= index < len(names):
+                boxes.append(Box(class_name=names[index], cx=cx, cy=cy,
+                                 width=w, height=h, confidence=1.0,
+                                 source="human"))
+        if boxes:
+            frames.append((image, boxes))
+    return frames
 
 
 def reference_frames(root: Path) -> list[tuple[Path, list[Box]]]:
@@ -125,10 +163,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    frames = reference_frames(args.results)
+    names = tuple(n.strip() for n in args.classes.split(",") if n.strip())
+    if args.reference_labels:
+        frames = labelled_frames(args.reference_labels, names)
+        reference_kind = "hand-drawn labels"
+        source_path = args.reference_labels
+    elif args.results:
+        frames = reference_frames(args.results)
+        reference_kind = "station detector"
+        source_path = args.results
+    else:
+        raise SystemExit("Give either --results or --reference-labels.")
+    LOGGER.info("reference: %s (%s)", reference_kind, source_path)
     if not frames:
-        raise SystemExit(f"No frames with both a preprocessed image and detections "
-                         f"under {args.results}")
+        raise SystemExit(f"No usable reference frames under {source_path}")
     random.Random(args.seed).shuffle(frames)
     cut = max(1, int(len(frames) * (1 - args.holdout)))
     fit, held = frames[:cut], frames[cut:]
@@ -142,9 +190,7 @@ def main(argv: list[str] | None = None) -> int:
 
     profile = ProductProfile(
         product=args.product, area=args.area,
-        class_schema=ClassSchema(
-            names=tuple(sorted({b.class_name for _, bs in frames for b in bs})),
-            source="production_records"),
+        class_schema=ClassSchema(names=names, source="station_contract"),
     )
     LOGGER.info("class contract from records: %s", list(profile.class_schema.names))
 
@@ -156,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     source = VisionLLMEvidence(
         vc.HttpVisionLLMClient(cfg),
         prompt=VisionPrompt(object_description=args.describe),
+        match_radius=args.match_radius,
     )
     LOGGER.info("object described as: %s", args.describe)
 
@@ -167,8 +214,15 @@ def main(argv: list[str] | None = None) -> int:
                 LOGGER.warning("Could not read %s", image_path)
                 continue
             before = len(pairs)
-            proposed = source._ask(image, profile)
-            for target, match in zip(reference, match_by_centre(proposed, reference)):
+            try:
+                proposed = source._ask(image, profile)
+            except Exception as exc:  # noqa: BLE001 - one frame must not end a survey
+                LOGGER.error("  %s: %s", image_path.name, str(exc)[:110])
+                continue
+            for target, match in zip(
+                reference,
+                match_by_centre(proposed, reference, radius=args.match_radius),
+            ):
                 if match is not None:
                     pairs.append((match, target))
             LOGGER.info("  %s: %d/%d matched", image_path.name, len(pairs) - before, len(reference))
@@ -178,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
     fit_pairs = proposals(fit)
     calibration = calibrate(
         fit_pairs, product=args.product, area=args.area, sample_images=len(fit),
-        derived_from=str(args.results),
-        notes="reference is the station detector, not hand-drawn ground truth",
+        derived_from=str(source_path),
+        notes=f"reference is {reference_kind}",
     )
     LOGGER.info("width x%.3f  height x%.3f  cx %+.4f  cy %+.4f",
                 calibration.width_scale, calibration.height_scale,
