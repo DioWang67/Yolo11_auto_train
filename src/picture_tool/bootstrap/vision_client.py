@@ -107,6 +107,16 @@ class VisionVerdict:
 
 
 @dataclass(frozen=True)
+class VisionReply:
+    """One parsed answer, before anybody decides what it was supposed to mean."""
+
+    fields: Mapping[str, Any]
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    repaired: bool = False
+    attempts: int = 1
+
+
+@dataclass(frozen=True)
 class VisionRequest:
     """What the reviewer is shown, cheapest useful thing first.
 
@@ -346,7 +356,16 @@ class HttpVisionLLMClient:
             self.config.timeout_per_image_seconds * max(0, image_count)
         )
 
-    def judge(self, request: VisionRequest) -> VisionVerdict:
+    def ask(
+        self, request: VisionRequest, *, require_verdict: bool = True
+    ) -> VisionReply:
+        """Send one request and read the JSON object out of the reply.
+
+        The transport, the retries and the salvage live here; what the reply
+        is *for* does not. ``require_verdict=False`` is how a caller asks for
+        something other than an adjudication --- box coordinates, say ---
+        without having to pretend it wanted a verdict.
+        """
         payload = json.dumps(self._body(request)).encode("utf-8")
         images = len(request.crops) + (request.context_image is not None)
         timeout = self.request_timeout(images)
@@ -361,8 +380,14 @@ class HttpVisionLLMClient:
                 time.sleep(self.config.retry_backoff_seconds * attempt)
                 continue
             try:
-                return _to_verdict(
-                    raw, attempts=attempt, fallback_model=self.config.model
+                parsed = parse_verdict(
+                    extract_text(raw), require_verdict=require_verdict
+                )
+                return VisionReply(
+                    fields=parsed.fields,
+                    repaired=parsed.repaired,
+                    payload=raw,
+                    attempts=attempt,
                 )
             except VisionClientError as exc:
                 # A malformed answer is worth one more try: these services
@@ -375,6 +400,10 @@ class HttpVisionLLMClient:
             f"{request.sample_id}: no usable answer after "
             f"{self.config.max_retries + 1} attempt(s). {last_error}"
         )
+
+    def judge(self, request: VisionRequest) -> VisionVerdict:
+        reply = self.ask(request)
+        return _to_verdict(reply, fallback_model=self.config.model)
 
     def _post(self, payload: bytes, timeout: float | None = None) -> dict[str, Any]:
         # Here rather than in judge(): this is the only place bytes leave the
@@ -524,7 +553,7 @@ class ParsedReply:
     repaired: bool = False
 
 
-def parse_verdict(text: str) -> ParsedReply:
+def parse_verdict(text: str, *, require_verdict: bool = True) -> ParsedReply:
     """Read the JSON object out of the reply, tolerating prose around it.
 
     Most replies are valid JSON and are parsed as such. When one is not, the
@@ -553,13 +582,18 @@ def parse_verdict(text: str) -> ParsedReply:
     try:
         parsed = json.loads(blob)
     except ValueError as exc:
-        return ParsedReply(fields=_salvage_reply(blob, str(exc)), repaired=True)
+        return ParsedReply(
+            fields=_salvage_reply(blob, str(exc), require_verdict=require_verdict),
+            repaired=True,
+        )
     if not isinstance(parsed, dict):
         raise VisionClientError("Reply JSON was not an object.")
     return ParsedReply(fields=parsed)
 
 
-def _salvage_reply(blob: str, parse_error: str) -> dict[str, Any]:
+def _salvage_reply(
+    blob: str, parse_error: str, *, require_verdict: bool = True
+) -> dict[str, Any]:
     """Recover the declared fields from a reply that is not valid JSON.
 
     Refuses to return anything without a ``verdict``: a salvage that yielded
@@ -571,10 +605,15 @@ def _salvage_reply(blob: str, parse_error: str) -> dict[str, Any]:
     for index, match in enumerate(matches):
         stop = matches[index + 1].start() if index + 1 < len(matches) else len(blob)
         fields[match.group(1)] = _coerce_value(blob[match.end() : stop])
-    if "verdict" not in fields:
+    if require_verdict and "verdict" not in fields:
         raise VisionClientError(
             f"Reply JSON did not parse ({parse_error}) and no verdict could "
             f"be recovered from it: {blob[:200]}"
+        )
+    if not fields:
+        raise VisionClientError(
+            f"Reply JSON did not parse ({parse_error}) and nothing could be "
+            f"recovered from it: {blob[:200]}"
         )
     return fields
 
@@ -611,14 +650,13 @@ def _unescape(text: str) -> str:
     return "".join(out)
 
 
-def _to_verdict(
-    payload: Mapping[str, Any], *, attempts: int, fallback_model: str = ""
-) -> VisionVerdict:
+def _to_verdict(reply: VisionReply, *, fallback_model: str = "") -> VisionVerdict:
     # Prefer what the service says answered over what was asked for: a
     # gateway is free to route the request elsewhere, and the record should
     # name the model that actually spoke.
-    reply = parse_verdict(extract_text(payload))
+    payload = reply.payload
     parsed = reply.fields
+    attempts = reply.attempts
     verdict = str(parsed.get("verdict", "")).strip().upper()
     if verdict not in VERDICTS:
         raise VisionClientError(

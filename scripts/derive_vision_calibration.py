@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Measure a vision model's box bias against a station's own records.
+
+The model places box centres well and draws the boxes too small, consistently
+enough that three constants correct them. This derives those constants and,
+because a correction fitted and tested on the same frames proves nothing,
+reports what they do on frames it never saw.
+
+**The reference is the station's detector, not ground truth.** Production
+records say what the detector found, which is what makes them available in
+bulk and also what limits them: a calibration derived this way teaches the
+model to agree with the current detector, inheriting any systematic offset
+the detector has. That is useful --- agreeing with the deployed detector is
+what makes the boxes usable for training against it --- and it is not the
+same as being right. To measure right, point ``--reference`` at hand-drawn
+labels instead.
+
+Nothing here trains, deploys, or writes a dataset. It writes one JSON file.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import logging
+import os
+import random
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from picture_tool.autotrain.class_schema import ClassSchema  # noqa: E402
+from picture_tool.bootstrap.evidence import Box  # noqa: E402
+from picture_tool.bootstrap.profile import ProductProfile  # noqa: E402
+from picture_tool.bootstrap import vision_client as vc  # noqa: E402
+from picture_tool.bootstrap.vision_evidence import (  # noqa: E402
+    VisionLLMEvidence,
+    VisionPrompt,
+    calibrate,
+    match_by_centre,
+)
+
+LOGGER = logging.getLogger("derive_vision_calibration")
+
+#: Detections are recorded in the preprocessed frame's pixel space, while the
+#: same record's image_width/image_height describe the *original*. Anyone
+#: normalising by those fields puts every box in the top-left corner.
+PREPROCESSED_SIDE = 640.0
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--results", type=Path, required=True,
+                   help="A Result/<date>/<product>/<area> directory.")
+    p.add_argument("--product", default="Cable1")
+    p.add_argument("--area", default="A")
+    p.add_argument("--out", type=Path,
+                   default=PROJECT_ROOT / "runs" / "vision_calibration" / "calibration.json")
+    p.add_argument("--holdout", type=float, default=0.5,
+                   help="Fraction of frames kept out of the fit, for reporting.")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--url-env", default="QWEN_URL")
+    p.add_argument("--key-env", default="")
+    p.add_argument("--model", default="Qwen3.8-27B-GGUF")
+    p.add_argument("--max-tokens", type=int, default=3000)
+    p.add_argument("--describe", default=(
+        "Each object is a wire end where it meets its solder pad. Box only "
+        "that short segment, not the wire running away from it."),
+        help="What counts as one object. This is the specification; it must "
+             "not say where objects sit or how big they are.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="List what would be used and exit without calling anything.")
+    return p.parse_args(argv)
+
+
+def iou(a: Box, b: Box) -> float:
+    ax1, ay1 = a.cx - a.width / 2, a.cy - a.height / 2
+    ax2, ay2 = a.cx + a.width / 2, a.cy + a.height / 2
+    bx1, by1 = b.cx - b.width / 2, b.cy - b.height / 2
+    bx2, by2 = b.cx + b.width / 2, b.cy + b.height / 2
+    iw = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    ih = max(0.0, min(ay2, by2) - max(ay1, by1))
+    inter = iw * ih
+    union = a.width * a.height + b.width * b.height - inter
+    return inter / union if union > 0 else 0.0
+
+
+def reference_frames(root: Path) -> list[tuple[Path, list[Box]]]:
+    """Frames that have both a preprocessed image and recorded detections."""
+    frames: list[tuple[Path, list[Box]]] = []
+    for meta in sorted(glob.glob(str(root / "*" / "metadata" / "*" / "*.json"))):
+        stem = os.path.basename(meta).replace("_config_snapshot.json", "")
+        verdict_dir = Path(meta).parents[2]
+        detector = Path(meta).parent.name
+        image = verdict_dir / "preprocessed" / detector / f"{stem}.jpg"
+        if not image.is_file():
+            continue
+        try:
+            payload = json.loads(Path(meta).read_text(encoding="utf-8"))
+        except ValueError:
+            LOGGER.warning("%s is not readable JSON; skipped", meta)
+            continue
+        boxes = []
+        for det in payload.get("detections") or []:
+            bbox = det.get("bbox")
+            name = det.get("class")
+            if not name or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                continue
+            x1, y1, x2, y2 = (float(v) / PREPROCESSED_SIDE for v in bbox)
+            boxes.append(Box(class_name=str(name), cx=(x1 + x2) / 2, cy=(y1 + y2) / 2,
+                             width=x2 - x1, height=y2 - y1,
+                             confidence=float(det.get("confidence", 0.0) or 0.0),
+                             source="detector"))
+        if boxes:
+            frames.append((image, boxes))
+    return frames
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    frames = reference_frames(args.results)
+    if not frames:
+        raise SystemExit(f"No frames with both a preprocessed image and detections "
+                         f"under {args.results}")
+    random.Random(args.seed).shuffle(frames)
+    cut = max(1, int(len(frames) * (1 - args.holdout)))
+    fit, held = frames[:cut], frames[cut:]
+    LOGGER.info("%d frame(s): %d to fit, %d held out", len(frames), len(fit), len(held))
+    if args.dry_run:
+        for image, boxes in frames:
+            LOGGER.info("  %s (%d boxes)", image.name, len(boxes))
+        return 0
+
+    import cv2
+
+    profile = ProductProfile(
+        product=args.product, area=args.area,
+        class_schema=ClassSchema(
+            names=tuple(sorted({b.class_name for _, bs in frames for b in bs})),
+            source="production_records"),
+    )
+    LOGGER.info("class contract from records: %s", list(profile.class_schema.names))
+
+    cfg = vc.openai_compatible_profile(
+        model=args.model, url_env=args.url_env, key_env=args.key_env,
+        requires_credential=bool(args.key_env), max_tokens=args.max_tokens,
+        max_retries=0, timeout_seconds=500.0,
+    )
+    source = VisionLLMEvidence(
+        vc.HttpVisionLLMClient(cfg),
+        prompt=VisionPrompt(object_description=args.describe),
+    )
+    LOGGER.info("object described as: %s", args.describe)
+
+    def proposals(group: list[tuple[Path, list[Box]]]) -> list[tuple[Box, Box]]:
+        pairs: list[tuple[Box, Box]] = []
+        for image_path, reference in group:
+            image = cv2.imread(str(image_path))
+            if image is None:
+                LOGGER.warning("Could not read %s", image_path)
+                continue
+            before = len(pairs)
+            proposed = source._ask(image, profile)
+            for target, match in zip(reference, match_by_centre(proposed, reference)):
+                if match is not None:
+                    pairs.append((match, target))
+            LOGGER.info("  %s: %d/%d matched", image_path.name, len(pairs) - before, len(reference))
+        return pairs
+
+    LOGGER.info("Measuring on %d fit frame(s)", len(fit))
+    fit_pairs = proposals(fit)
+    calibration = calibrate(
+        fit_pairs, product=args.product, area=args.area, sample_images=len(fit),
+        derived_from=str(args.results),
+        notes="reference is the station detector, not hand-drawn ground truth",
+    )
+    LOGGER.info("width x%.3f  height x%.3f  cx %+.4f  cy %+.4f",
+                calibration.width_scale, calibration.height_scale,
+                calibration.cx_shift, calibration.cy_shift)
+
+    report = {"calibration": calibration.to_dict(), "splits": {}}
+    for label, group in (("fit", fit_pairs), ("holdout", proposals(held) if held else [])):
+        if not group:
+            continue
+        raw = [iou(p, r) for p, r in group]
+        fixed = [iou(calibration.apply(p), r) for p, r in group]
+        report["splits"][label] = {
+            "boxes": len(group),
+            "mean_iou_raw": round(sum(raw) / len(raw), 4),
+            "mean_iou_calibrated": round(sum(fixed) / len(fixed), 4),
+            "usable_raw": sum(1 for v in raw if v >= 0.5),
+            "usable_calibrated": sum(1 for v in fixed if v >= 0.5),
+        }
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    calibration.write(args.out)
+    (args.out.parent / "report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    print(json.dumps(report, indent=2, sort_keys=True))
+    LOGGER.info("Wrote %s", args.out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
