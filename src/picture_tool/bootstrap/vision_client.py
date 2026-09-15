@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -52,6 +53,11 @@ class VisionVerdict:
     usage: Mapping[str, Any] = field(default_factory=dict)
     attempts: int = 1
     raw: Mapping[str, Any] = field(default_factory=dict)
+    #: True when the reply was not valid JSON and the fields were recovered
+    #: by :func:`parse_verdict`. Carried all the way to the report: a
+    #: salvaged ``reason`` is a reconstruction, and a reader deciding what to
+    #: trust needs to be told which ones they are.
+    repaired: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +68,7 @@ class VisionVerdict:
             "next_action": self.next_action,
             "usage": dict(self.usage),
             "attempts": self.attempts,
+            "repaired": self.repaired,
         }
 
 
@@ -107,7 +114,15 @@ class VisionEndpointConfig:
         default_factory=lambda: {"anthropic-version": "2023-06-01"}
     )
     max_tokens: int = 800
+    #: Base deadline. The endpoint buffers the whole reply before sending it,
+    #: so this is in practice a generation deadline rather than a stall
+    #: detector.
     timeout_seconds: float = 120.0
+    #: Added per attached image, because generation time grows with the
+    #: number of images and a flat deadline therefore fails the *largest*
+    #: samples first. The 213-sample run aborted on a sample carrying two
+    #: crops and the whole frame; at three images a flat 120s was short.
+    timeout_per_image_seconds: float = 45.0
     #: Retries on transport or protocol failure, not on a verdict of RETRY.
     max_retries: int = 2
     retry_backoff_seconds: float = 2.0
@@ -124,6 +139,8 @@ class VisionEndpointConfig:
             "dialect": self.dialect,
             "max_tokens": self.max_tokens,
             "max_retries": self.max_retries,
+            "timeout_seconds": self.timeout_seconds,
+            "timeout_per_image_seconds": self.timeout_per_image_seconds,
         }
 
 
@@ -205,12 +222,20 @@ class HttpVisionLLMClient:
             "messages": [{"role": "user", "content": blocks}],
         }
 
+    def request_timeout(self, image_count: int) -> float:
+        """The deadline this request is allowed, given how much it carries."""
+        return self.config.timeout_seconds + (
+            self.config.timeout_per_image_seconds * max(0, image_count)
+        )
+
     def judge(self, request: VisionRequest) -> VisionVerdict:
         payload = json.dumps(self._body(request)).encode("utf-8")
+        images = len(request.crops) + (request.context_image is not None)
+        timeout = self.request_timeout(images)
         last_error = ""
         for attempt in range(1, self.config.max_retries + 2):
             try:
-                raw = self._post(payload)
+                raw = self._post(payload, timeout)
             except VisionClientError as exc:
                 last_error = _redact(str(exc), self._key)
                 if attempt > self.config.max_retries:
@@ -231,12 +256,13 @@ class HttpVisionLLMClient:
             f"{self.config.max_retries + 1} attempt(s). {last_error}"
         )
 
-    def _post(self, payload: bytes) -> dict[str, Any]:
+    def _post(self, payload: bytes, timeout: float | None = None) -> dict[str, Any]:
         req = urllib.request.Request(
             self._url, data=payload, headers=self._headers(), method="POST"
         )
+        deadline = self.config.timeout_seconds if timeout is None else timeout
         try:
-            with self._opener(req, timeout=self.config.timeout_seconds) as response:
+            with self._opener(req, timeout=deadline) as response:
                 body = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:400]
@@ -307,8 +333,54 @@ def extract_usage(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def parse_verdict(text: str) -> dict[str, Any]:
-    """Read the JSON object out of the reply, tolerating prose around it."""
+#: The keys the reviewer is asked to return. Salvage recognises these and
+#: nothing else --- a repair free to invent fields would turn a malformed
+#: reply into one that merely looks answered.
+_REPLY_KEYS: tuple[str, ...] = (
+    "verdict",
+    "class",
+    "class_name",
+    "confidence",
+    "reason",
+    "next_action",
+)
+
+_REPLY_KEY_RE = re.compile(
+    '"(' + "|".join(re.escape(key) for key in _REPLY_KEYS) + r')"\s*:\s*'
+)
+
+#: A value ends where the enclosing object's own punctuation begins.
+_TRAILING_PUNCTUATION_RE = re.compile(r"[\s,}]+$")
+
+#: The escapes a reply that failed strict parsing may still carry.
+_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/"}
+
+
+@dataclass(frozen=True)
+class ParsedReply:
+    """The reviewer's fields, and whether they survived strict JSON."""
+
+    fields: Mapping[str, Any]
+    repaired: bool = False
+
+
+def parse_verdict(text: str) -> ParsedReply:
+    """Read the JSON object out of the reply, tolerating prose around it.
+
+    Most replies are valid JSON and are parsed as such. When one is not, the
+    cause seen in practice is an unescaped quote inside ``reason`` --- the
+    reviewer quoting the label it is arguing against --- which ends the
+    string early and makes the remainder unreadable to :func:`json.loads`.
+    Two of the 213 samples in the first full run were lost exactly that way,
+    and a lost sample still cost the tokens it spent.
+
+    A failed parse therefore falls back to :func:`_salvage_reply`, which does
+    not guess at structure: the prompt fixes the set of keys, so each value
+    can be taken to run from its own colon to the next key, whatever quoting
+    happens in between. The result is marked ``repaired``, and stays marked
+    all the way into the report --- a salvaged ``reason`` is a
+    reconstruction, and the reader deciding what to trust has to be told so.
+    """
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.strip("`")
@@ -317,17 +389,71 @@ def parse_verdict(text: str) -> dict[str, Any]:
     start, end = stripped.find("{"), stripped.rfind("}")
     if start < 0 or end <= start:
         raise VisionClientError(f"No JSON object in the reply: {stripped[:200]}")
+    blob = stripped[start : end + 1]
     try:
-        parsed = json.loads(stripped[start : end + 1])
+        parsed = json.loads(blob)
     except ValueError as exc:
-        raise VisionClientError(f"Reply JSON did not parse: {exc}") from None
+        return ParsedReply(fields=_salvage_reply(blob, str(exc)), repaired=True)
     if not isinstance(parsed, dict):
         raise VisionClientError("Reply JSON was not an object.")
-    return parsed
+    return ParsedReply(fields=parsed)
+
+
+def _salvage_reply(blob: str, parse_error: str) -> dict[str, Any]:
+    """Recover the declared fields from a reply that is not valid JSON.
+
+    Refuses to return anything without a ``verdict``: a salvage that yielded
+    only a reason would hand the caller a confident-looking record with no
+    decision in it.
+    """
+    matches = list(_REPLY_KEY_RE.finditer(blob))
+    fields: dict[str, Any] = {}
+    for index, match in enumerate(matches):
+        stop = matches[index + 1].start() if index + 1 < len(matches) else len(blob)
+        fields[match.group(1)] = _coerce_value(blob[match.end() : stop])
+    if "verdict" not in fields:
+        raise VisionClientError(
+            f"Reply JSON did not parse ({parse_error}) and no verdict could "
+            f"be recovered from it: {blob[:200]}"
+        )
+    return fields
+
+
+def _coerce_value(raw: str) -> Any:
+    """One value, read without trusting the quoting inside it."""
+    text = _TRAILING_PUNCTUATION_RE.sub("", raw.strip())
+    if text.startswith('"'):
+        closing = text.rfind('"')
+        return _unescape(text[1:closing] if closing > 0 else text[1:])
+    lowered = text.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    if lowered in ("null", "none", ""):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _unescape(text: str) -> str:
+    """Undo the escapes a half-valid reply may still carry."""
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            out.append(_ESCAPES.get(text[index + 1], "\\" + text[index + 1]))
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def _to_verdict(payload: Mapping[str, Any], *, attempts: int) -> VisionVerdict:
-    parsed = parse_verdict(extract_text(payload))
+    reply = parse_verdict(extract_text(payload))
+    parsed = reply.fields
     verdict = str(parsed.get("verdict", "")).strip().upper()
     if verdict not in VERDICTS:
         raise VisionClientError(
@@ -346,6 +472,7 @@ def _to_verdict(payload: Mapping[str, Any], *, attempts: int) -> VisionVerdict:
         usage=extract_usage(payload),
         attempts=attempts,
         raw=parsed,
+        repaired=reply.repaired,
     )
 
 
