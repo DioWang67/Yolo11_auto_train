@@ -82,6 +82,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Where versions, work files and candidate weights go. Must not "
         "be inside the inference project.",
     )
+    parser.add_argument(
+        "--raw",
+        type=Path,
+        default=None,
+        help="A labelled directory (images/ and labels/) to train instead of "
+        "an operator handoff job. Used for cold-start datasets, which are "
+        "not handoff jobs and must not be written into the handoff tree.",
+    )
+    parser.add_argument(
+        "--base-model",
+        type=Path,
+        default=None,
+        help="Weight to start from. Defaults to continuing from the deployed "
+        "champion; a station that has no champion needs this instead.",
+    )
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--imgsz", type=int, default=320)
     parser.add_argument("--batch", type=int, default=2)
@@ -178,19 +193,33 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Cleared %s", scratch)
 
     data_root = paths.workspace.training_project / "data"
-    job_raw = find_job(data_root, args.product, args.area, args.job)
+    # --raw trains whatever labelled directory it is pointed at. A cold-start
+    # dataset is not an operator handoff job and does not live under one, so
+    # the job lookup has to be skippable rather than worked around by writing
+    # into the handoff tree, which is not this path's to write in.
+    job_raw = (
+        args.raw.expanduser().resolve()
+        if args.raw
+        else find_job(data_root, args.product, args.area, args.job)
+    )
     samples = collect_samples(job_raw)
     LOGGER.info("Using %d labelled samples from %s", len(samples), job_raw)
 
-    champion = read_champion(paths.production_model_dir(args.product, args.area))
-    if champion is None:
-        raise SystemExit(
-            f"No deployed champion for {args.product}/{args.area}; a challenger "
-            "continues from the deployed weight, so there is nothing to train "
-            "from."
-        )
-    base_model = champion.training_weight_path or champion.weights_path
-    LOGGER.info("Continuing from champion weight %s", base_model)
+    if args.base_model:
+        # A station that has no champion yet is the whole point of a cold
+        # start, so the starting weight has to be nameable.
+        base_model = str(args.base_model)
+        LOGGER.info("Starting from %s (no champion continuation)", base_model)
+    else:
+        champion = read_champion(paths.production_model_dir(args.product, args.area))
+        if champion is None:
+            raise SystemExit(
+                f"No deployed champion for {args.product}/{args.area}; a challenger "
+                "continues from the deployed weight, so there is nothing to train "
+                "from. Pass --base-model to start from a pretrained weight instead."
+            )
+        base_model = champion.training_weight_path or champion.weights_path
+        LOGGER.info("Continuing from champion weight %s", base_model)
 
     # The same resolution a cycle performs, against the same sources, plus
     # the job's own data.yaml -- the order its labels were written against.
