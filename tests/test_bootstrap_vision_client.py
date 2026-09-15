@@ -20,15 +20,24 @@ from typing import Any
 import pytest
 
 from picture_tool.bootstrap.vision_client import (
+    CALLS_ALLOWED,
+    CALLS_ENABLED_ENV,
     HttpVisionLLMClient,
+    VisionCallsDisabledError,
     VisionClientError,
     VisionEndpointConfig,
     VisionRequest,
+    extract_usage,
+    openai_compatible_profile,
     parse_verdict,
 )
 
 KEY = "sk-not-a-real-key-0123456789"
-ENVIRON = {"VISION_LLM_URL": "http://endpoint.invalid", "VISION_LLM_API_KEY": KEY}
+ENVIRON = {
+    "VISION_LLM_URL": "http://endpoint.invalid",
+    "VISION_LLM_API_KEY": KEY,
+    CALLS_ENABLED_ENV: CALLS_ALLOWED,
+}
 
 
 class _FakeResponse:
@@ -239,3 +248,222 @@ def test_refuses_to_call_an_endpoint_with_no_credential() -> None:
 def test_refuses_an_endpoint_that_nobody_chose() -> None:
     with pytest.raises(VisionClientError, match="VISION_LLM_URL"):
         HttpVisionLLMClient(VisionEndpointConfig(), environ={"VISION_LLM_API_KEY": KEY})
+
+
+# -- the guard against calls nobody asked for -------------------------------
+
+
+def test_no_call_leaves_the_process_unless_calls_are_enabled() -> None:
+    """The load-bearing protection: default deny, checked at the request."""
+    opener = _RecordingOpener(_reply('{"verdict": "ACCEPT"}'))
+    client = HttpVisionLLMClient(
+        VisionEndpointConfig(),
+        environ={"VISION_LLM_URL": "http://endpoint.invalid", "VISION_LLM_API_KEY": KEY},
+        opener=opener,
+    )
+
+    with pytest.raises(VisionCallsDisabledError, match=CALLS_ENABLED_ENV):
+        client.judge(VisionRequest(sample_id="s", prompt="p"))
+
+    # Not merely refused -- nothing was sent.
+    assert opener.timeouts == []
+
+
+def test_the_guard_is_not_a_visionclienterror() -> None:
+    """So the retry loop cannot swallow it and a report cannot record it.
+
+    Retrying a permission refusal cannot help, and every remaining sample
+    would fail the same way. It has to stop the run.
+    """
+    assert not issubclass(VisionCallsDisabledError, VisionClientError)
+
+
+def test_a_truthy_value_is_not_enough_to_enable_calls() -> None:
+    """An environment that sets flags to "1" wholesale must not enable this."""
+    for value in ("1", "true", "yes", "ALLOW", ""):
+        opener = _RecordingOpener(_reply('{"verdict": "ACCEPT"}'))
+        client = HttpVisionLLMClient(
+            VisionEndpointConfig(),
+            environ={
+                "VISION_LLM_URL": "http://endpoint.invalid",
+                "VISION_LLM_API_KEY": KEY,
+                CALLS_ENABLED_ENV: value,
+            },
+            opener=opener,
+        )
+        with pytest.raises(VisionCallsDisabledError):
+            client.judge(VisionRequest(sample_id="s", prompt="p"))
+        assert opener.timeouts == []
+
+
+def test_permission_is_re_read_not_cached_at_construction() -> None:
+    """A long-lived process must not keep a permission it was granted once."""
+    environ = dict(ENVIRON)
+    opener = _RecordingOpener(_reply('{"verdict": "ACCEPT"}'))
+    client = HttpVisionLLMClient(
+        VisionEndpointConfig(), environ=environ, opener=opener
+    )
+    client.judge(VisionRequest(sample_id="s", prompt="p"))
+    assert len(opener.timeouts) == 1
+
+    environ[CALLS_ENABLED_ENV] = "revoked"
+
+    with pytest.raises(VisionCallsDisabledError):
+        client.judge(VisionRequest(sample_id="s", prompt="p"))
+    assert len(opener.timeouts) == 1
+
+
+# -- talking to an endpoint that has no authentication ----------------------
+
+
+def test_a_keyless_endpoint_needs_saying_so_not_a_placeholder() -> None:
+    profile = openai_compatible_profile(
+        model="some-local-model", url_env="LOCAL_URL", requires_credential=False
+    )
+    opener = _RecordingOpener(_reply('{"verdict": "ACCEPT"}'))
+
+    client = HttpVisionLLMClient(
+        profile,
+        environ={"LOCAL_URL": "http://server.invalid/v1", CALLS_ENABLED_ENV: CALLS_ALLOWED},
+        opener=opener,
+    )
+    client.judge(VisionRequest(sample_id="s", prompt="p"))
+
+    assert opener.timeouts  # the call went out
+    # No credential means no auth header at all, rather than an empty one.
+    assert "authorization" not in client._headers()
+
+
+def test_an_endpoint_with_no_credential_says_so_in_provenance() -> None:
+    recorded = openai_compatible_profile(
+        model="m", url_env="U", requires_credential=False
+    ).to_dict()
+
+    assert recorded["requires_credential"] is False
+
+
+def test_the_profile_carries_no_address_of_its_own() -> None:
+    """An endpoint baked in here is one copy away from a station using it."""
+    recorded = openai_compatible_profile(model="m", url_env="SOME_URL").to_dict()
+
+    assert recorded["url_env"] == "SOME_URL"
+    assert "10." not in json.dumps(recorded)
+    assert recorded["dialect"] == "chat_completions"
+
+
+def test_a_credentialled_endpoint_still_refuses_without_a_key() -> None:
+    with pytest.raises(VisionClientError, match="requires_credential=False"):
+        HttpVisionLLMClient(
+            openai_compatible_profile(
+                model="m", url_env="U", key_env="K", requires_credential=True
+            ),
+            environ={"U": "http://server.invalid/v1"},
+        )
+
+
+# -- reporting across two different services --------------------------------
+
+
+def test_openai_usage_is_counted_under_the_names_the_reports_total() -> None:
+    usage = extract_usage(
+        {"usage": {"prompt_tokens": 158, "completion_tokens": 153}}
+    )
+
+    assert usage["input_tokens"] == 158
+    assert usage["output_tokens"] == 153
+    # The original spelling survives; the record says what the service said.
+    assert usage["prompt_tokens"] == 158
+
+
+def test_anthropic_usage_is_left_exactly_as_it_came() -> None:
+    usage = extract_usage({"usage": {"input_tokens": 10, "output_tokens": 5}})
+
+    assert usage == {"input_tokens": 10, "output_tokens": 5}
+
+
+def test_the_record_names_the_model_that_actually_answered() -> None:
+    """Two reviewers averaged together is a corrupted dataset."""
+    body = json.dumps(
+        {
+            "model": "Qwen3.8-27B-GGUF",
+            "choices": [{"message": {"content": '{"verdict": "REJECT"}'}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+        }
+    )
+    client = _client(_RecordingOpener(body), model="asked-for-something-else")
+
+    verdict = client.judge(VisionRequest(sample_id="s", prompt="p"))
+
+    assert verdict.model == "Qwen3.8-27B-GGUF"
+    assert verdict.to_dict()["model"] == "Qwen3.8-27B-GGUF"
+
+
+def test_a_keyless_endpoint_is_sent_no_credential_from_the_environment() -> None:
+    """A hosted provider's key must not follow the run to somebody's laptop.
+
+    --key-env defaults to a hosted provider's variable, and that variable is
+    routinely exported. Declaring an endpoint keyless has to mean no key
+    leaves the process, not merely that none was asked for.
+    """
+    client = HttpVisionLLMClient(
+        openai_compatible_profile(
+            model="local", url_env="LOCAL_URL", key_env="VISION_LLM_API_KEY",
+            requires_credential=False,
+        ),
+        environ={
+            "LOCAL_URL": "http://server.invalid/v1",
+            "VISION_LLM_API_KEY": KEY,  # exported, and must be ignored
+            CALLS_ENABLED_ENV: CALLS_ALLOWED,
+        },
+        opener=_RecordingOpener(_reply('{"verdict": "ACCEPT"}')),
+    )
+
+    assert KEY not in json.dumps(client._headers())
+    assert "authorization" not in client._headers()
+
+
+def test_a_reply_truncated_before_the_answer_says_so() -> None:
+    """A reasoning model out of budget returns thinking and no answer.
+
+    Reported as truncation rather than "no JSON object", which sent the first
+    real Qwen run chasing a parser bug that was not there.
+    """
+    body = json.dumps(
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": "", "reasoning_content": "still thinking"},
+                }
+            ]
+        }
+    )
+    client = _client(_RecordingOpener(body), max_retries=0)
+
+    with pytest.raises(VisionClientError, match="max_tokens"):
+        client.judge(VisionRequest(sample_id="s", prompt="p"))
+
+
+def test_reasoning_is_never_mistaken_for_the_answer() -> None:
+    """Parsing what the model was merely contemplating would invent verdicts."""
+    body = json.dumps(
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": "",
+                        "reasoning_content": 'maybe {"verdict": "ACCEPT"}?',
+                    },
+                }
+            ]
+        }
+    )
+    client = _client(_RecordingOpener(body), max_retries=0)
+
+    with pytest.raises(VisionClientError):
+        client.judge(VisionRequest(sample_id="s", prompt="p"))
+
+
+def test_the_local_profile_leaves_room_for_reasoning() -> None:
+    assert openai_compatible_profile(model="m", url_env="U").max_tokens >= 2048

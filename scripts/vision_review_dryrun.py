@@ -83,12 +83,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--url-env", default="ANTHROPIC_BASE_URL")
     p.add_argument("--key-env", default="ANTHROPIC_API_KEY")
     p.add_argument("--model", default="claude-opus-5")
+    p.add_argument(
+        "--dialect",
+        choices=("messages", "openai"),
+        default="messages",
+        help="Wire shape. 'openai' targets an OpenAI-compatible server "
+        "(llama.cpp, vLLM, Ollama), which commonly has no authentication.",
+    )
+    p.add_argument(
+        "--no-credential",
+        action="store_true",
+        help="The endpoint has no authentication. Say this explicitly rather "
+        "than setting the key variable to a placeholder; it is recorded.",
+    )
     p.add_argument("--max-retries", type=int, default=2)
+    p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=0,
+        help="Reply budget. Reasoning models spend it thinking before they "
+        "answer, so too small a value returns an empty reply. 0 keeps the "
+        "profile's own default.",
+    )
     p.add_argument(
         "--no-resume",
         action="store_true",
         help="Re-ask every sample, even ones already in results.jsonl. Costs "
         "tokens that have already been spent once.",
+    )
+    p.add_argument(
+        "--allow-mixed-models",
+        action="store_true",
+        help="Permit appending this model's verdicts to a file that already "
+        "holds another model's. Off by default.",
     )
     p.add_argument(
         "--summary-only",
@@ -177,12 +204,27 @@ def main(argv: list[str] | None = None) -> int:
     if not batch:
         raise SystemExit("No reviewable samples with boxes.")
 
-    config = vc.VisionEndpointConfig(
-        url_env=args.url_env,
-        key_env=args.key_env,
-        model=args.model,
-        max_retries=args.max_retries,
-    )
+    if args.dialect == "openai":
+        config = vc.openai_compatible_profile(
+            model=args.model,
+            url_env=args.url_env,
+            # Do not even name a credential variable for a keyless endpoint.
+            # --key-env defaults to a hosted provider's, and that key must not
+            # follow the run to somebody else's server.
+            key_env="" if args.no_credential else args.key_env,
+            requires_credential=not args.no_credential,
+            max_retries=args.max_retries,
+            **({"max_tokens": args.max_tokens} if args.max_tokens else {}),
+        )
+    else:
+        config = vc.VisionEndpointConfig(
+            url_env=args.url_env,
+            key_env=args.key_env,
+            model=args.model,
+            max_retries=args.max_retries,
+            requires_credential=not args.no_credential,
+            **({"max_tokens": args.max_tokens} if args.max_tokens else {}),
+        )
 
     out = args.out.expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -205,6 +247,31 @@ def main(argv: list[str] | None = None) -> int:
             results_path.name,
             len(pending),
             retries,
+        )
+
+    # Two reviewers in one file is fine if the file says which is which, and
+    # a corrupted dataset if it does not. Records written before the model
+    # was recorded only warn -- that is the state being migrated away from --
+    # but a different named model is an active mistake and stops the run.
+    answered_models = Counter(
+        str(r.get("model") or "") for r in recorded.values() if r.get("verdict")
+    )
+    # Unrecorded counts as foreign. Records written before the model field
+    # existed cannot vouch for themselves, and the file this guard was
+    # written for is full of them -- letting those through unchallenged would
+    # miss the exact case it exists to catch.
+    foreign = {m or "(unrecorded)": n for m, n in answered_models.items() if m != args.model}
+    if foreign and not args.allow_mixed_models:
+        raise SystemExit(
+            f"{results_path} already holds verdicts from "
+            f"{', '.join(f'{m} x{n}' for m, n in sorted(foreign.items()))}, "
+            f"and this run would add {args.model}. Verdicts from two "
+            "reviewers are a comparison when kept apart and a corrupted "
+            "dataset when averaged together, and records marked "
+            "(unrecorded) predate the model field so they cannot say which "
+            "they came from.\n"
+            "Give the new model its own --out directory, or pass "
+            "--allow-mixed-models if mixing them really is the intent."
         )
 
     if args.summary_only:
@@ -275,6 +342,16 @@ def main(argv: list[str] | None = None) -> int:
             # to end the run tidily. Records already appended are on disk
             # either way.
             verdict = client.judge(request)
+        except vc.VisionCallsDisabledError as exc:
+            # Not recorded as a failed sample: every remaining sample would
+            # fail identically, and 122 copies of a permission refusal is not
+            # a report. Stop, and say how to proceed deliberately.
+            raise SystemExit(
+                f"{exc}\n\n"
+                f"To allow this one run:\n"
+                f"  {vc.CALLS_ENABLED_ENV}={vc.CALLS_ALLOWED} python "
+                f"scripts/vision_review_dryrun.py ..."
+            ) from None
         except KeyboardInterrupt:
             interrupted = True
             LOGGER.warning("Interrupted before %s was answered", sample["sample_id"])
