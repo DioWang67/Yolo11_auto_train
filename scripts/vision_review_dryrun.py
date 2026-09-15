@@ -13,6 +13,13 @@ reviewer needs -- the scores, the counts, the station's expectations -- is
 text, which costs a fraction of an image.
 
 Nothing here can change a dataset. It writes verdicts to a report and stops.
+
+Every verdict is appended to ``results.jsonl`` the moment it arrives, before
+the next request goes out, and a later run skips the samples already recorded
+there. The first full run over 213 samples was interrupted at 81 and left
+nothing but a log line per sample, so the tokens it had already spent bought
+nothing the second run could reuse. A record that is only written at the end
+is a record that does not survive the run being stopped.
 """
 
 from __future__ import annotations
@@ -20,7 +27,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -75,7 +84,51 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--key-env", default="ANTHROPIC_API_KEY")
     p.add_argument("--model", default="claude-opus-5")
     p.add_argument("--max-retries", type=int, default=2)
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Re-ask every sample, even ones already in results.jsonl. Costs "
+        "tokens that have already been spent once.",
+    )
+    p.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Rebuild dryrun.json from the records already on disk and exit "
+        "without contacting the endpoint. Spends nothing.",
+    )
     return p.parse_args(argv)
+
+
+def load_recorded(path: Path) -> dict[str, dict]:
+    """Verdicts already on disk, keyed by sample id.
+
+    Unreadable lines are skipped rather than fatal: a run killed mid-write
+    can leave a partial last line, and that is not a reason to refuse to
+    reuse the hundreds of records in front of it.
+    """
+    if not path.exists():
+        return {}
+    recorded: dict[str, dict] = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            LOGGER.warning("%s line %d is not readable JSON; skipping it", path, number)
+            continue
+        sample_id = record.get("sample_id")
+        if sample_id:
+            recorded[str(sample_id)] = record
+    return recorded
+
+
+def append_record(path: Path, record: dict) -> None:
+    """Commit one verdict to disk before the next request is made."""
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def disputed_boxes(sample: dict, limit: int) -> list[dict]:
@@ -130,16 +183,43 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         max_retries=args.max_retries,
     )
-    client = vc.HttpVisionLLMClient(config)
-    LOGGER.info("Endpoint configured from %s / %s", args.url_env, args.key_env)
 
     out = args.out.expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
-    results = []
-    totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
-    failures = 0
+    results_path = out / "results.jsonl"
 
-    for index, sample in enumerate(batch, start=1):
+    recorded = {} if args.no_resume else load_recorded(results_path)
+    # Only an answered sample is finished. A sample that errored is
+    # unfinished work, and is asked again -- the three that failed in the
+    # first full run failed on defects that have since been fixed, and a
+    # resume that skipped them would make those fixes unreachable.
+    pending = [
+        s for s in batch if not (recorded.get(s["sample_id"]) or {}).get("verdict")
+    ]
+    if recorded:
+        retries = sum(1 for s in pending if s["sample_id"] in recorded)
+        LOGGER.info(
+            "%d of %d already answered in %s; %d to ask (%d of them retries)",
+            len(batch) - len(pending),
+            len(batch),
+            results_path.name,
+            len(pending),
+            retries,
+        )
+
+    if args.summary_only:
+        LOGGER.info("Summary only: not contacting the endpoint")
+        pending = []
+
+    # Built only when there is something to ask, so a finished run can be
+    # re-summarised from its own records without a credential.
+    client = None
+    if pending:
+        client = vc.HttpVisionLLMClient(config)
+        LOGGER.info("Endpoint configured from %s / %s", args.url_env, args.key_env)
+
+    interrupted = False
+    for index, sample in enumerate(pending, start=1):
         boxes = disputed_boxes(sample, args.max_crops)
         crops = []
         for item in boxes:
@@ -174,48 +254,77 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info(
             "%d/%d %s: %d crop(s)%s",
             index,
-            len(batch),
+            len(pending),
             sample["sample_id"],
             len(crops),
             " + whole frame" if context else "",
         )
+        common = {
+            "sample_id": sample["sample_id"],
+            "crops_sent": len(crops),
+            "whole_frame_sent": context is not None,
+            "bootstrap_reasons": sample.get("reasons", []),
+            # Where this record came from, so a reader can tell a live answer
+            # from one reconstructed after the fact.
+            "fidelity": "live",
+        }
+        assert client is not None  # built above whenever `pending` is non-empty
         try:
+            # The request is where an interrupt lands in practice --- crop
+            # encoding is local and quick --- so catching it here is enough
+            # to end the run tidily. Records already appended are on disk
+            # either way.
             verdict = client.judge(request)
+        except KeyboardInterrupt:
+            interrupted = True
+            LOGGER.warning("Interrupted before %s was answered", sample["sample_id"])
+            break
         except vc.VisionClientError as exc:
-            failures += 1
             LOGGER.error("%s: %s", sample["sample_id"], exc)
-            results.append(
-                {"sample_id": sample["sample_id"], "error": str(exc), "verdict": None}
-            )
+            record = {**common, "error": str(exc), "verdict": None}
+            append_record(results_path, record)
+            recorded[sample["sample_id"]] = record
             continue
-        for key in totals:
-            totals[key] += int(verdict.usage.get(key, 0) or 0)
-        results.append(
-            {
-                "sample_id": sample["sample_id"],
-                "crops_sent": len(crops),
-                "whole_frame_sent": context is not None,
-                "bootstrap_reasons": sample.get("reasons", []),
-                **verdict.to_dict(),
-            }
-        )
+        record = {**common, **verdict.to_dict()}
+        append_record(results_path, record)
+        recorded[sample["sample_id"]] = record
         LOGGER.info(
-            "   -> %s %s (%s)", verdict.verdict, verdict.class_name, verdict.reason[:80]
+            "   -> %s %s%s (%s)",
+            verdict.verdict,
+            verdict.class_name,
+            " [repaired]" if verdict.repaired else "",
+            verdict.reason[:80],
         )
 
+    # The summary is derived from the durable records, not from this run's
+    # own tally, so it reads the same whether the work took one run or five.
+    results = [recorded[s["sample_id"]] for s in batch if s["sample_id"] in recorded]
     answered = [r for r in results if r.get("verdict")]
     counts = {v: sum(1 for r in answered if r["verdict"] == v) for v in vc.VERDICTS}
+    totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+    for record in answered:
+        usage = record.get("usage") or {}
+        for key in totals:
+            totals[key] += int(usage.get(key, 0) or 0)
+    # Mean over the records that actually carry usage: recovered records have
+    # none, and dividing by them would understate the real per-sample cost.
+    metered = [r for r in answered if r.get("usage")]
     summary = {
         "built_at": datetime.now(timezone.utc).isoformat(),
         # Names only. The key itself is never recorded anywhere.
         "endpoint": config.to_dict(),
         "samples_attempted": len(batch),
         "samples_answered": len(answered),
-        "failures": failures,
+        "samples_outstanding": len(batch) - len(results),
+        "failures": sum(1 for r in results if r.get("error")),
+        "interrupted": interrupted,
         "verdicts": counts,
+        "repaired_replies": sum(1 for r in answered if r.get("repaired")),
+        "fidelity": dict(Counter(r.get("fidelity", "unknown") for r in results)),
         "token_usage_total": totals,
+        "token_usage_metered_samples": len(metered),
         "token_usage_mean_per_sample": {
-            key: round(value / max(1, len(answered)), 1) for key, value in totals.items()
+            key: round(value / max(1, len(metered)), 1) for key, value in totals.items()
         },
         "results": results,
     }
