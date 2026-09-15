@@ -981,3 +981,88 @@ typer／fastapi／uvicorn／dvc，而 `requirements-dev.txt` 裡也有。
 
 在那之前 pin 維持 `8.3.156`，三處（`pyproject.toml`、
 `requirements/requirements.in`、兩份 lock）一致，沒有半吊子狀態。
+
+---
+
+## 18. 第二個 vision endpoint（Qwen，本機 llama.cpp）與它的閘門（2026-09-15）
+
+### 端點實況（實測，不是照文件抄）
+
+| 項目 | 值 |
+| --- | --- |
+| 服務端 | **llama.cpp**（`owned_by: llamacpp`, build b10438） |
+| 模型 | `Qwen3.8-27B-GGUF`，27.3B，Q4_K_M，17.1 GB |
+| context | `n_ctx` 65536（訓練上限 262144） |
+| 認證 | **完全沒有** |
+| dialect | OpenAI `chat_completions` |
+| 多模態 | **真的可用** |
+
+**位址不寫進 repo**，跟 §13 的那台一樣走環境變數。理由見下。
+
+### 有做對照組
+
+合成圖（綠板 + 兩條色線），把上下兩條的顏色互換三次：orange → orange、
+black → black、red → red，換圖答案就跟著換。**它是真的在看圖**，不是照 prompt 猜。
+
+速度：1024px 整圖 6.1s、2 crop + 整圖 6.7s。同樣那個形狀在 §13 那台 120s 都不夠。
+
+### 保護：預設拒絕，而不是靠設定保持正確
+
+新增 `PICTURE_TOOL_VISION_CALLS`，**值必須等於 `allow`**，否則任何請求都不會離開行程。
+
+- **檢查點在請求發出處**（`_post`），不在建構子——之後才寫的呼叫端也繞不過。
+- **每次重讀環境變數**，長命行程不會一直握著曾經拿到的許可。
+- **值是一個詞不是 `1`**：會把旗標統一設成 `1` 的部署環境，不該順手打開這個。
+- 拒絕時丟 `VisionCallsDisabledError`，**刻意不繼承 `VisionClientError`**——
+  後者是重試迴圈會接、呼叫端會記成「這筆失敗」的類別，而這兩件事都不對：
+  重試救不了，而且剩下每一筆都會一樣失敗。**122 份同樣的拒絕不是報告。**
+
+同樣的精神在 `trainer.assert_no_forbidden_tasks`：保證不能取決於某個 YAML 維持正確。
+
+### 一個自己寫出來又抓到的憑證外洩
+
+`--no-credential` 第一版仍然讓 `key_env` 預設成 `ANTHROPIC_API_KEY`，而那個變數在本機
+**是設著的**。結果會是：把 Anthropic 的 key 當成 `Bearer` token、用**明文 HTTP**、
+送到**別人的**內網伺服器。
+
+修法是結構性的：**宣告 `requires_credential=False` 就代表沒有任何 key 離開行程**，
+不管環境裡有什麼。不是「沒去要」而已。腳本那層也不再為無認證端點指定 key 變數。
+
+profile 也**不帶自己的位址**——寫死在檔案裡的端點，離「某個站別指到它」只差一次複製。
+
+### 真跑三筆挖到的事（假資料不會挖到）
+
+第一次跑 3 筆，**2 筆失敗**，訊息是 `No JSON object in the reply:`（後面是空的）。
+原因不是解析器：**它是 reasoning model，`max_tokens` 是拿來先想再答的**，
+800 被推理吃光，`content` 就是空字串。實測確認：`finish_reason: length`、
+`content: ''`、reasoning 516 字。成功那筆用掉 760/800，本來就貼著上限。
+
+三處修正：profile 預設 `max_tokens` 提到 2048；**空字串不再被當成答案**；
+截斷改回報「被 `max_tokens` 截斷，請調高，重試只會一樣截斷」。
+
+**`reasoning_content` 永遠不拿來解析**——去讀模型只是在盤算的東西，會憑空生出 verdict。
+
+修完重跑：**3/3 answered、0 failures**，而且先前失敗那 2 筆是自動被當成未完成工作重問的。
+
+### 記錄「哪個模型答的」，並拒絕混
+
+`VisionVerdict` 加 `model`，取自**服務端回報的**而不是我們要求的（gateway 可以改路由）。
+腳本在 resume 時比對：檔案裡若有別的模型（**包含「沒記錄」**）就停下來。
+既有那 91 筆全是「沒記錄」，正是這道閘門要抓的情況；放行等於漏掉它存在的理由。
+
+**兩個 reviewer 分開放是比較，混在一起平均是資料汙染。**
+
+usage 也對齊了：OpenAI 的 `prompt_tokens`/`completion_tokens` 映到報表在加總的
+`input_tokens`/`output_tokens`，**兩種拼法都留**，記錄仍說得出服務端原本回了什麼。
+
+### 這次沒有證明的事
+
+Qwen 對已有 claude 判決的 3 筆重疊樣本：**verdict 3/3 相同（都 REJECT），
+但 class 只有 1/3 相同**（Orange/Orange 同；Orange vs Red、Green vs Black 不同）。
+
+**n=3，這不是測量，只是一個訊號。**而且就算 n 夠大，兩個模型互相同意也**不是準確率**
+——§14 已經寫過這個陷阱。分歧的樣本值得優先人工標，因為那是資訊量最高的地方；
+但誰對誰錯，沒有真值就是答不了。
+
+合成圖測試同理：大塊純色、乾淨背景，**比真實工作簡單太多**。
+它證明的是「看得到、叫得出顏色、JSON 穩」，不是「判得準」。
