@@ -26,6 +26,7 @@ from typing import Any, Mapping, Sequence
 
 from picture_tool.bootstrap.evidence import Box, BoxOpinion
 from picture_tool.bootstrap.profile import ProductProfile
+from picture_tool.bootstrap.vision_evidence import SOURCE_NAME as VISION_SOURCE
 from picture_tool.bootstrap.sample_quality import (
     QUALITY_FAIL,
     QUALITY_SUSPECT,
@@ -52,6 +53,8 @@ R_NO_INDEPENDENT_EVIDENCE = "no_independent_evidence"
 R_COLOUR_DISAGREEMENT = "detector_colour_disagreement"
 R_CRITICAL_DISAGREEMENT = "critical_pair_disagreement"
 R_COLOUR_AMBIGUOUS = "colour_evidence_ambiguous"
+R_VISION_DISAGREEMENT = "detector_vision_disagreement"
+R_INDEPENDENT_CONSENSUS = "independent_sources_agree_against_detector"
 R_NEAR_DUPLICATE = "near_duplicate_unresolved"
 R_EXACT_DUPLICATE = "exact_duplicate"
 R_ALL_CHECKS_AGREE = "all_evidence_agrees"
@@ -89,6 +92,11 @@ class BoxDecision:
     agreed: bool
     disagreement: str = ""
     critical: bool = False
+    #: Set when every independent source that had an opinion disagreed with
+    #: the detector *and* named the same class. That is a different thing
+    #: from one source objecting, and the difference is what a reviewer
+    #: needs: it is a proposed answer, not merely a doubt.
+    consensus_class: str = ""
 
     def opinion(self, source: str) -> BoxOpinion | None:
         for item in self.opinions:
@@ -103,6 +111,7 @@ class BoxDecision:
             "agreed": self.agreed,
             "disagreement": self.disagreement,
             "critical": self.critical,
+            "consensus_class": self.consensus_class,
         }
 
 
@@ -275,10 +284,35 @@ def decide(
                 for box in critical
             )
         )
+    # Reported before the plainer disagreements, because it is the strongest
+    # thing the evidence can say: two sources that never saw each other's
+    # answer produced the same one, and it is not the detector's.
+    consensus = [box for box in decisions if box.consensus_class]
+    if consensus:
+        reasons.append(R_INDEPENDENT_CONSENSUS)
+        details.append(
+            ", ".join(
+                f"colour and vision both read {box.consensus_class} where the "
+                f"detector read {box.box.class_name}"
+                for box in consensus
+            )
+        )
+
+    vision_only = [
+        box
+        for box in decisions
+        if box.disagreement == R_VISION_DISAGREEMENT and not box.consensus_class
+    ]
+    if vision_only:
+        reasons.append(R_VISION_DISAGREEMENT)
+        details.append(f"{len(vision_only)} box(es) the vision model read differently")
+
     plain_disagreements = [
         box
         for box in decisions
-        if not box.agreed and not box.critical and box.disagreement != R_COLOUR_AMBIGUOUS
+        if not box.agreed
+        and not box.critical
+        and box.disagreement not in (R_COLOUR_AMBIGUOUS, R_VISION_DISAGREEMENT)
     ]
     if plain_disagreements:
         reasons.append(R_COLOUR_DISAGREEMENT)
@@ -324,9 +358,11 @@ def _weigh_boxes(
             if index < len(readings)
         )
         colour = next((o for o in opinions if o.source == "colour"), None)
+        vision = next((o for o in opinions if o.source == VISION_SOURCE), None)
         agreed = True
         disagreement = ""
         critical = False
+        consensus = ""
         if colour is not None:
             margin = _margin(colour.scores)
             if (
@@ -340,6 +376,19 @@ def _weigh_boxes(
                 agreed = False
                 disagreement = R_COLOUR_DISAGREEMENT
                 critical = profile.is_confusable(box.class_name, colour.class_name)
+        # The vision model can only add doubt, never remove it. Its accuracy
+        # against ground truth is unmeasured, and AUTO_ACCEPT is reached by
+        # having no reasons at all, so letting it clear an objection would
+        # loosen a gate on the strength of evidence nobody has checked.
+        if vision is not None and vision.class_name:
+            if vision.class_name != box.class_name:
+                agreed = False
+                disagreement = disagreement or R_VISION_DISAGREEMENT
+                critical = critical or profile.is_confusable(
+                    box.class_name, vision.class_name
+                )
+                if colour is not None and colour.class_name == vision.class_name:
+                    consensus = vision.class_name
         results.append(
             BoxDecision(
                 box=box,
@@ -347,6 +396,7 @@ def _weigh_boxes(
                 agreed=agreed,
                 disagreement=disagreement,
                 critical=critical,
+                consensus_class=consensus,
             )
         )
     return tuple(results)

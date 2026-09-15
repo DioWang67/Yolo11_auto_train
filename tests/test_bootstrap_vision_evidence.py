@@ -290,3 +290,80 @@ def test_an_undecided_opinion_is_not_counted_as_agreement() -> None:
 def test_mismatched_opinion_lists_are_refused() -> None:
     with pytest.raises(EvidenceError, match="line up"):
         compare_opinions([BoxOpinion(source="a", class_name="Red", confidence=1.0)], [])
+
+
+# -- the vision model inside the decision ------------------------------------
+
+from picture_tool.bootstrap.auto_label import (  # noqa: E402
+    AUTO_ACCEPT,
+    NEEDS_REVIEW,
+    R_INDEPENDENT_CONSENSUS,
+    R_VISION_DISAGREEMENT,
+    decide,
+)
+from picture_tool.bootstrap.sample_quality import QUALITY_PASS, SampleQuality  # noqa: E402
+
+
+def _decide(box_class: str, colour: str, vision: str | None):
+    """One box, three sources, and whatever the bootstrapper makes of it."""
+    boxes = [box(box_class, 0.35)]
+    sources = {
+        "detector": [BoxOpinion(source="detector", class_name=box_class, confidence=0.9)],
+        "colour": [BoxOpinion(source="colour", class_name=colour, confidence=0.9,
+                              scores={colour: 0.8, "Other": 0.1})],
+    }
+    if vision is not None:
+        sources[SOURCE_NAME] = [
+            BoxOpinion(source=SOURCE_NAME, class_name=vision, confidence=0.9)
+        ]
+    return decide(
+        sample_id="s", image_path="s.jpg", boxes=boxes,
+        opinions_by_source=sources,
+        quality=SampleQuality(sample_id="s", image_path="s.jpg", status=QUALITY_PASS),
+        profile=ProductProfile(
+            product="Cable1", area="A",
+            class_schema=ClassSchema(names=NAMES, source="t"),
+            expected_counts={box_class: 1},
+            confusion_pairs=(("Red", "Orange"),),
+        ),
+    )
+
+
+def test_two_independent_sources_agreeing_is_reported_as_a_proposed_answer() -> None:
+    """The red_orange_critical case: both non-detector sources say Orange."""
+    result = _decide("Red", colour="Orange", vision="Orange")
+
+    assert result.decision == NEEDS_REVIEW
+    assert R_INDEPENDENT_CONSENSUS in result.reasons
+    assert result.boxes[0].consensus_class == "Orange"
+    assert "detector read Red" in result.detail
+
+
+def test_one_source_objecting_is_not_reported_as_consensus() -> None:
+    result = _decide("Red", colour="Red", vision="Orange")
+
+    assert R_VISION_DISAGREEMENT in result.reasons
+    assert R_INDEPENDENT_CONSENSUS not in result.reasons
+    assert result.boxes[0].consensus_class == ""
+
+
+def test_the_vision_model_cannot_clear_an_objection_the_colour_made() -> None:
+    """It may only add doubt: AUTO_ACCEPT is reached by having no reasons."""
+    without = _decide("Red", colour="Orange", vision=None)
+    agreeing = _decide("Red", colour="Orange", vision="Red")
+
+    assert without.decision == NEEDS_REVIEW
+    assert agreeing.decision == NEEDS_REVIEW
+
+
+def test_all_three_agreeing_still_reaches_auto_accept() -> None:
+    result = _decide("Red", colour="Red", vision="Red")
+
+    assert result.decision == AUTO_ACCEPT
+
+
+def test_an_undecided_vision_opinion_changes_nothing() -> None:
+    """Silence from a source is not a vote against."""
+    result = _decide("Red", colour="Red", vision="")
+
+    assert result.decision == AUTO_ACCEPT
