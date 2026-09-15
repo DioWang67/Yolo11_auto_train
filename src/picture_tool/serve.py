@@ -5,6 +5,12 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, cast
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers only
+    # Annotations only. ultralytics is imported guardedly below and is
+    # deliberately absent under pytest, so this must not run at import time.
+    from ultralytics.engine.results import Results
 
 
 try:
@@ -160,9 +166,14 @@ async def predict(file: UploadFile, conf: float = 0.25):
         results = await run_in_threadpool(MODEL_INSTANCE, image, conf=conf)
 
         # Format response
+        # ultralytics 8.4 widened these annotations past the runtime
+        # contract: predict() is typed as possibly yielding tensors, and
+        # Boxes as possibly absent and not iterable. A detect model returns
+        # Results whose Boxes does iterate. Narrowed here rather than at
+        # each use; nothing about this changes at runtime.
         detections = []
-        for r in results:
-            for box in r.boxes:
+        for r in cast("list[Results]", results):
+            for box in cast("Iterable[Any]", r.boxes):
                 detections.append(
                     {
                         "class": int(box.cls),

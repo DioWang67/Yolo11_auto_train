@@ -1,9 +1,14 @@
 import csv
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from tqdm import tqdm  # type: ignore
+
+if TYPE_CHECKING:  # pragma: no cover - for type checkers only
+    # Imported for annotations alone. ultralytics is loaded guardedly below
+    # and is absent under pytest, so this must never run at import time.
+    from ultralytics.engine.results import Results
 
 import os
 
@@ -67,15 +72,26 @@ def run_batch_inference(config: dict, logger: Optional[logging.Logger] = None) -
             ["file", "class_id", "class_name", "conf", "x1", "y1", "x2", "y2"]
         )
         for img_path in tqdm(images, desc="Batch inference", unit="img"):
-            results = model(str(img_path), imgsz=imgsz, device=device, conf=conf)
+            # ultralytics 8.4 annotates predict() as possibly yielding
+            # tensors and as possibly not a list. Without stream=True it
+            # returns a list of Results; the annotation is wider than the
+            # runtime contract. Narrowing here also settles results[0]
+            # below. Nothing about this changes at runtime.
+            results = cast(
+                "list[Results]",
+                model(str(img_path), imgsz=imgsz, device=device, conf=conf),
+            )
             for res in results:
                 names = res.names
                 if res.boxes is None:
                     logger.info(f"{img_path.name}: 0 detections (no boxes)")
                     continue
-                xyxy = res.boxes.xyxy.cpu().numpy()
-                confs = res.boxes.conf.cpu().numpy().tolist()
-                clss = res.boxes.cls.cpu().numpy().tolist()
+                # 8.4 types the Boxes fields as Tensor | ndarray | Any. Only
+                # the tensor has .cpu(), and a detect model produces tensors.
+                boxes = cast(Any, res.boxes)
+                xyxy = boxes.xyxy.cpu().numpy()
+                confs = boxes.conf.cpu().numpy().tolist()
+                clss = boxes.cls.cpu().numpy().tolist()
                 logger.info(
                     f"{img_path.name}: {len(confs)} detections (min_conf={min(confs) if confs else 'NA'})"
                 )
