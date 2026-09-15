@@ -778,3 +778,150 @@ source-safe val 的 179 個檔案裡**有 58 個是 champion 當初訓練用過�
 限制是 882 張源自 46 個 source capture，基數小，差距要夠大才有意義。
 
 **共同前置**：先做 ultralytics 升級驗證。升級若弄壞既有管路，後面都不用談。
+
+---
+
+## 15. ultralytics 8.3.156 → 8.4.152 升級驗證（2026-09-15）
+
+**結論：runtime 全過，mypy 不過。先不要升 pin。**
+
+### 方法：不動主環境
+
+主環境是系統 Python 3.11，`yolo11_inference` 共用它，而那裡有使用者未提交的
+golden sample 工作。所以升級裝在 overlay venv：
+
+```
+python -m venv --system-site-packages D:/tmp/autotrain-upgrade/venv84
+venv84/Scripts/python -m pip install ultralytics==8.4.152
+```
+
+`pip install --dry-run` 先確認過**只有 install、沒有 uninstall**（不會把系統那份
+拆掉）；裝完兩邊各查一次：venv 8.4.152、系統仍 8.3.156。
+
+### 結果
+
+| 閘門 | 8.3.156（基準） | 8.4.152 |
+| --- | --- | --- |
+| pytest | 1487 passed / 6 skipped | **1487 passed / 6 skipped** |
+| coverage | 80.51% | 80.51% |
+| ruff | clean | clean（ruff 不吃 ultralytics，版本無關） |
+| mypy | clean, 147 files | **12 errors in 2 files** |
+| `autotrain_smoke.py --fresh` | OK, `trained_this_run: True` | **OK, `trained_this_run: True`** |
+
+**基準是自己跑出來的，不是引用文件**。沒有基準就無法分辨「本來就壞」與「升壞的」。
+
+### 那 12 個錯誤
+
+全部同一個成因：8.4 把 `predict()` 的回傳註記放寬成
+`Iterator[Results | Tensor] | list[Results] | list[Tensor]`，`Boxes` 欄位放寬成
+`Tensor | ndarray | Any`。落點：`serve.py:165`（3 個）、
+`infer/batch_infer.py:73/76/77/78/103/104`（9 個）。
+
+**是純靜態問題，不是 runtime 問題**——1487 個測試在 8.4.152 全綠，smoke 真的訓練成功。
+但 `mypy src/picture_tool` 是 CI blocking gate（`ci.yml:44`），所以升級不能就這樣過。
+
+**依指示沒有動手修**。邊升邊修會讓「升級本身壞了什麼」不可歸因。
+
+### 一個方法上的坑（自己踩的，記下來免得重犯）
+
+兩個環境共用同一個 `.mypy_cache` 會讓 mypy 內部崩潰
+（`AssertionError: Cannot find module for google`）。更重要的是：第一次量到的
+12 個錯誤**有可能是 cache 假象**，所以清掉快取、用各自的 `--cache-dir` 重跑一次
+才確認是真的。以後跨環境跑 mypy 一律分開 cache。
+
+### smoke 的指標不可比（不要拿來說版本好壞）
+
+8.3 mAP50-95 0.777 / 8.4 0.749。**不能歸因於版本**：每次 `--fresh` 重切資料集，
+augmentation 有隨機性，兩次 `dataset_id` 與張數都不同（874 vs 867）。
+smoke 是管路檢查，不是指標比較。這與 §12 的歸因陷阱同類。
+
+class schema hash 兩邊相同（`05f915927011…`），這個才是 smoke 該看的東西。
+
+### 供應鏈變化（需要單獨判斷）
+
+8.4.x 帶進三個 8.3.156 沒有的傳遞依賴：**`ultralytics-platform`（0.1.41，依賴
+httpx）**、`polars` + `polars-runtime-32`（51.3 MB）、`nvidia-ml-py`。
+一個訓練環境因為升級而多一個 HTTP client 依賴，是安全面要單獨看的事，不是純版本號問題。
+
+### 沒有做的事
+
+沒有改任何 pin——`pyproject.toml`、`requirements/requirements.txt`、
+`requirements/requirements-dev.txt` 三處仍是 `8.3.156`。
+要升的順序是：**先修那 12 個型別錯誤 → 再升 pin**，兩件事分開提交。
+
+---
+
+## 16. Vision review 的兩個缺陷與逐筆落盤（2026-09-15）
+
+§13 列的兩個待修都修了，而且**在真實流量上驗證過**（見下方誠實紀錄）。
+
+### 改了什麼
+
+| 位置 | 內容 |
+| --- | --- |
+| `bootstrap/vision_client.py` | `parse_verdict` 嚴格解析失敗後改走 salvage；deadline 隨圖片數縮放 |
+| `scripts/vision_review_dryrun.py` | 逐筆 append `results.jsonl`、resume、`--summary-only` |
+| `scripts/vision_review_recover.py` | **新** —— 從中斷那次的 log 撈回已付費的判決 |
+| `tests/test_bootstrap_vision_client.py` | **新**，16 個測試（此模組先前 0% 覆蓋） |
+| `tests/test_vision_review_recover.py` | **新**，8 個測試 |
+
+### salvage 為什麼不是「容錯 JSON parser」
+
+失敗訊息是 `Expecting ',' delimiter`，成因是 reviewer 在 `reason` 裡引用它要反駁的
+標籤（`the detector's "Green" call is wrong`）而沒有跳脫。
+
+修法**不猜結構**：prompt 把 key 集合寫死了，所以每個 value 可以從自己的冒號讀到
+**下一個 key** 為止，中間怎麼引號都無所謂。這是「已知 schema 的搶救」，不是通用寬鬆解析。
+
+三個刻意的限制：
+1. 只認 prompt 宣告的那些 key。會自己發明欄位的修復，等於把壞掉的回覆變成「看起來有答案」。
+2. 搶救不到 `verdict` 就拒絕，不回傳只有 reason 的記錄。
+3. **搶救出來的結果一路標記 `repaired: true` 到報告裡**。salvage 出來的 `reason`
+   是重建物，讀的人有權知道哪幾筆是。
+
+### timeout 為什麼是縮放不是調大
+
+固定 120s 會**先殺掉最大的樣本**——生成時間隨圖片數成長。實際炸掉那筆是
+「2 crop + 整圖」＝ 3 張。所以改成 `timeout_seconds + per_image × 張數`
+（120 + 45×n）。調大常數只是把同一個形狀的失敗往後推。
+
+### 逐筆落盤的一個判斷：error 不算做完
+
+resume 只跳過**有 verdict** 的樣本。errored 的樣本是未完成的工作，要再問一次——
+否則先前失敗的那 3 筆會被永久跳過，而這些修正正是為它們而做的。
+（第一版寫成「有紀錄就跳過」，是錯的，改掉了。）
+
+### 從 log 撈回已付費的判決
+
+中斷那次的 81 筆只活在 gitignored 的 `runs/vision_full.log`。
+`vision_review_recover.py` 把它們讀回 `results.jsonl`：**77 answered + 3 failed**，
+ACCEPT 21 / REJECT 55 / RETRY 1 —— 與 §13 記的數字逐項相同（獨立對帳）。
+第 81 筆正確判定為「送出但沒答完」，不產生記錄。
+
+**撈回來的不等於當初送出的**：log 只有 verdict、class、reason 前 80 字。
+confidence／next_action／token usage 一律寫 `null` 而不是猜，
+並標 `fidelity: recovered_from_log`、`reason_truncated: true`。
+
+### 誠實紀錄：一次非預期的真實 API 呼叫
+
+驗證 resume 時直接跑了 `vision_review_dryrun.py`，**沒有先確認環境變數是否帶著可用的
+credential**。`ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` 當時是通的，於是它真的開始呼叫，
+處理了 14 筆才被中止。**花費：input 19,336 / output 6,351 tokens。**
+
+這是操作錯誤，不是腳本缺陷。但它意外地變成三個修正的真實驗證：
+
+- 先前失敗的 **3 筆全部重試成功**（2 筆 parse、1 筆 timeout），三筆都得到 REJECT；
+- 14 筆之中**有 1 筆走了 salvage 路徑**（`repaired: true`）——salvage 在真流量上確實會觸發；
+- 中止時**一筆都沒掉**，因為已經逐筆落盤了。這正是這次要修的東西。
+
+事後補上 `--summary-only`：不接端點、不花錢，只從磁碟上的記錄重建 `dryrun.json`。
+會踩到那個坑，正是因為先前沒有「不呼叫也能看結果」的路徑。
+
+**目前進度**：91/213 answered（14 live + 77 recovered）、122 outstanding、failures 0。
+
+### 仍然沒有做的事
+
+沒有把任何 AI ACCEPT 併進 dataset，沒有訓練對應的 challenger，
+bootstrap 的 11% AUTO_ACCEPT 維持原狀。**真正的 blocker 仍是 Golden v1 的人工標註**：
+`runs/review_pack/v1/images/` 250 張，目前 `.txt` 標註數為 **0**。
+在那之前 AUTO_ACCEPT precision 無法量測。
