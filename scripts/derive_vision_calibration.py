@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Measure a vision model's box bias against a station's own records.
 
-The model places box centres well and draws the boxes too small, consistently
-enough that three constants correct them. This derives those constants and,
-because a correction fitted and tested on the same frames proves nothing,
-reports what they do on frames it never saw.
+The model places box centres well horizontally and draws the boxes too
+small, consistently enough that a few constants correct them. This derives
+those constants and, because a correction fitted and tested on the same
+frames proves nothing, reports what they do on frames it never saw.
+
+It also decomposes the *vertical* error, which is the one the constants are
+not expected to fix. Cable1/A's hand labels say the wire ends are collinear
+within a frame but that the line they lie on is placed differently in every
+frame, so a vertical correction belonging to the station cannot exist. The
+``vertical_structure`` block splits the residual into the part that moves
+between frames and the part that varies inside one, so that claim is
+answered by this run's own numbers rather than inherited from that one.
 
 **The reference is the station's detector, not ground truth.** Production
 records say what the detector found, which is what makes them available in
@@ -28,6 +36,7 @@ import os
 import random
 import sys
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -43,6 +52,7 @@ from picture_tool.bootstrap.vision_evidence import (  # noqa: E402
     VisionPrompt,
     calibrate,
     match_by_centre,
+    measure_vertical_structure,
 )
 
 LOGGER = logging.getLogger("derive_vision_calibration")
@@ -75,8 +85,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--model", default="Qwen3.8-27B-GGUF")
     p.add_argument("--max-tokens", type=int, default=6000)
     p.add_argument("--match-radius", type=float, default=0.02,
-                   help="How near a proposed centre must be to count as the "
-                        "same object, as a fraction of image width.")
+                   help="How near in cx a proposed centre must be to count "
+                        "as the same object, as a fraction of image width.")
+    p.add_argument("--vertical-match-radius", type=float, default=None,
+                   help="Optional cy gate. Leave unset unless this station "
+                        "stacks objects at the same cx: the model's cy is "
+                        "the one coordinate known to be wrong, and gating "
+                        "on it is what made a 6/6 frame measure 0/6.")
     p.add_argument("--describe", default=(
         "Each object is a wire end where it meets its solder pad. Box only "
         "that short segment, not the wire running away from it."),
@@ -206,52 +221,93 @@ def main(argv: list[str] | None = None) -> int:
     )
     LOGGER.info("object described as: %s", args.describe)
 
-    def proposals(group: list[tuple[Path, list[Box]]]) -> list[tuple[Box, Box]]:
-        pairs: list[tuple[Box, Box]] = []
+    def proposals(
+        group: list[tuple[Path, list[Box]]]
+    ) -> list[tuple[Path, list[tuple[Box, Box]]]]:
+        """Matched pairs, kept grouped by frame.
+
+        Grouping is not bookkeeping: whether the vertical error belongs to
+        the station or to each frame is answerable only while it is known
+        which frame a pair came from, and flattening here is what would
+        make that question unanswerable later.
+        """
+        out: list[tuple[Path, list[tuple[Box, Box]]]] = []
         for image_path, reference in group:
             image = cv2.imread(str(image_path))
             if image is None:
                 LOGGER.warning("Could not read %s", image_path)
                 continue
-            before = len(pairs)
             try:
                 proposed = source._ask(image, profile)
             except Exception as exc:  # noqa: BLE001 - one frame must not end a survey
                 LOGGER.error("  %s: %s", image_path.name, str(exc)[:110])
                 continue
-            for target, match in zip(
-                reference,
-                match_by_centre(proposed, reference, radius=args.match_radius),
-            ):
-                if match is not None:
-                    pairs.append((match, target))
-            LOGGER.info("  %s: %d/%d matched", image_path.name, len(pairs) - before, len(reference))
-        return pairs
+            pairs = [
+                (match, target)
+                for target, match in zip(
+                    reference,
+                    match_by_centre(
+                        proposed, reference,
+                        radius=args.match_radius,
+                        vertical_radius=args.vertical_match_radius,
+                    ),
+                )
+                if match is not None
+            ]
+            out.append((image_path, pairs))
+            LOGGER.info("  %s: %d/%d matched",
+                        image_path.name, len(pairs), len(reference))
+        return out
+
+    def flatten(
+        per_frame: list[tuple[Path, list[tuple[Box, Box]]]]
+    ) -> list[tuple[Box, Box]]:
+        return [pair for _, pairs in per_frame for pair in pairs]
 
     LOGGER.info("Measuring on %d fit frame(s)", len(fit))
-    fit_pairs = proposals(fit)
+    fit_frames = proposals(fit)
+    fit_pairs = flatten(fit_frames)
     calibration = calibrate(
         fit_pairs, product=args.product, area=args.area, sample_images=len(fit),
         derived_from=str(source_path),
         notes=f"reference is {reference_kind}",
     )
-    LOGGER.info("width x%.3f  height x%.3f  cx %+.4f  cy %+.4f",
+    LOGGER.info("width x%.3f  height x%.3f  cx %+.4f  cy %+.4f (spread %.4f)",
                 calibration.width_scale, calibration.height_scale,
-                calibration.cx_shift, calibration.cy_shift)
+                calibration.cx_shift, calibration.cy_shift,
+                calibration.cy_shift_spread)
 
-    report = {"calibration": calibration.to_dict(), "splits": {}}
-    for label, group in (("fit", fit_pairs), ("holdout", proposals(held) if held else [])):
+    held_frames = proposals(held) if held else []
+    vertical = measure_vertical_structure(
+        [pairs for _, pairs in fit_frames + held_frames]
+    )
+    report: dict[str, Any] = {
+        "calibration": calibration.to_dict(),
+        "splits": {},
+        "vertical_structure": vertical.to_dict(),
+    }
+    for label, frames_ in (("fit", fit_frames), ("holdout", held_frames)):
+        group = flatten(frames_)
         if not group:
             continue
         raw = [iou(p, r) for p, r in group]
         fixed = [iou(calibration.apply(p), r) for p, r in group]
+        reference_boxes = sum(
+            len(boxes) for _, boxes in (fit if label == "fit" else held)
+        )
         report["splits"][label] = {
+            "frames": len(frames_),
             "boxes": len(group),
+            # Without this, a calibration derived from the one frame that
+            # matched would report a confident mean over almost nothing.
+            "match_rate": round(len(group) / reference_boxes, 4)
+            if reference_boxes else 0.0,
             "mean_iou_raw": round(sum(raw) / len(raw), 4),
             "mean_iou_calibrated": round(sum(fixed) / len(fixed), 4),
             "usable_raw": sum(1 for v in raw if v >= 0.5),
             "usable_calibrated": sum(1 for v in fixed if v >= 0.5),
         }
+    LOGGER.info("vertical: %s", vertical.reading)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     calibration.write(args.out)

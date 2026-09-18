@@ -8,7 +8,12 @@ six verified frames of 2026-09-15, asked to name and locate all six wire ends:
 naming and counting          36/36 boxes, 6/6 correct class multiset
 horizontal placement         cx within 0.003 of image width
 box size                     systematically 0.65x too small
+vertical placement           flattened; does not follow the board's tilt
 ===========================  =========================================
+
+The last row is the one that shapes everything below it: cy is the single
+coordinate here that is not usable, so nothing in this module may let cy
+decide anything cx can decide instead.
 
 So it is used as :class:`VisionLLMEvidence` --- an opinion on boxes somebody
 else proposed --- wherever a detector already exists. That is the role its
@@ -42,10 +47,10 @@ from picture_tool.bootstrap.vision_client import VisionClientError, VisionReques
 #: Name this source answers under, alongside "detector" and "colour".
 SOURCE_NAME = "vision_llm"
 
-#: A matched opinion has to be nearer than this, as a fraction of image width.
-#: Measured cx error is 0.003 and a box is about 0.045 wide, so 0.02 accepts
-#: every real match while refusing to pair a box with an object the model
-#: was describing somewhere else entirely.
+#: How far apart two centres may be *horizontally* and still be the same
+#: object, as a fraction of image width. Measured cx error is 0.003 and a box
+#: is about 0.045 wide, so 0.02 accepts every real match while refusing to
+#: pair a box with an object the model was describing somewhere else entirely.
 DEFAULT_MATCH_RADIUS = 0.02
 
 #: Boxes whose reply could not be matched get this, rather than a guess.
@@ -60,14 +65,26 @@ class CalibrationError(AutoTrainError):
 class BoxCalibration:
     """The systematic difference between the model's boxes and real ones.
 
-    Three constants, because three is what the measurement supports: the
-    model places centres well and draws them too small, consistently. It is
-    deliberately not a learned model --- a fitted transform on this little
-    data would describe the sample rather than the bias.
+    A few constants, because constants are what the measurement supports:
+    the model places centres well and draws them too small, consistently.
+    It is deliberately not a learned model --- a fitted transform on this
+    little data would describe the sample rather than the bias.
 
     Bound to one station. The framing, lens and working distance are what
     make the bias what it is, so applying a Cable1/A calibration to another
     station would be borrowing a number that was never about it.
+
+    **``cy_shift`` is the weak term and no tilt term joins it.** Cable1/A's
+    46 hand-labelled frames were measured before this was written: within a
+    frame the wire ends are collinear to 0.005 of frame height, so a frame's
+    vertical layout is two numbers. But across frames the line's slope has a
+    spread of 0.117 around a median of 0.067 and reverses sign in 16 of the
+    46 --- the board is placed at a different angle each time. A slope like
+    that is not a property of the station, so it cannot be carried by a
+    class that is `applies_to` one station; a constant fitted to it would be
+    the median of a distribution straddling zero. :attr:`cy_shift_spread`
+    exists so a caller can see that for itself rather than read
+    ``cy_shift`` as though it were as solid as the scales beside it.
     """
 
     product: str
@@ -76,6 +93,11 @@ class BoxCalibration:
     height_scale: float
     cy_shift: float = 0.0
     cx_shift: float = 0.0
+    #: Median absolute deviation of the vertical corrections the fit saw.
+    #: A shift smaller than its own spread is a number the data did not
+    #: support --- see the class docstring for why that is expected here
+    #: and what has to supply the vertical instead.
+    cy_shift_spread: float = 0.0
     #: How many box pairs the medians were taken over. A caller deciding
     #: whether to trust this needs to know it was six frames, not six hundred.
     sample_boxes: int = 0
@@ -112,6 +134,7 @@ class BoxCalibration:
             "width_scale": round(self.width_scale, 6),
             "height_scale": round(self.height_scale, 6),
             "cy_shift": round(self.cy_shift, 6),
+            "cy_shift_spread": round(self.cy_shift_spread, 6),
             "cx_shift": round(self.cx_shift, 6),
             "sample_boxes": self.sample_boxes,
             "sample_images": self.sample_images,
@@ -128,6 +151,7 @@ class BoxCalibration:
                 width_scale=float(payload["width_scale"]),
                 height_scale=float(payload["height_scale"]),
                 cy_shift=float(payload.get("cy_shift", 0.0)),
+                cy_shift_spread=float(payload.get("cy_shift_spread", 0.0)),
                 cx_shift=float(payload.get("cx_shift", 0.0)),
                 sample_boxes=int(payload.get("sample_boxes", 0)),
                 sample_images=int(payload.get("sample_images", 0)),
@@ -172,6 +196,10 @@ def calibrate(
     Medians rather than means throughout: one box the model placed on the
     wrong object would drag a mean into a correction that fits nothing, and
     at this sample size there is no room to absorb that.
+
+    The vertical correction is reported with its spread beside it, because
+    on this station it is expected to be a number without a bias underneath
+    it. See :class:`BoxCalibration` for the measurement that says so.
     """
     if len(pairs) < minimum_boxes:
         raise CalibrationError(
@@ -190,17 +218,215 @@ def calibrate(
         heights.append(reference.height / proposed.height)
         dxs.append(reference.cx - proposed.cx)
         dys.append(reference.cy - proposed.cy)
+    cy_shift = statistics.median(dys)
     return BoxCalibration(
         product=product,
         area=area,
         width_scale=statistics.median(widths),
         height_scale=statistics.median(heights),
         cx_shift=statistics.median(dxs),
-        cy_shift=statistics.median(dys),
+        cy_shift=cy_shift,
+        cy_shift_spread=statistics.median([abs(dy - cy_shift) for dy in dys]),
         sample_boxes=len(pairs),
         sample_images=sample_images,
         derived_from=derived_from,
         notes=notes,
+    )
+
+
+#: Two boxes nearer than this in cx say nothing about a slope; the division
+#: would amplify label noise instead of measuring a gradient.
+MIN_CX_SEPARATION = 0.02
+
+#: Below this many boxes, a frame's own line is not worth fitting.
+MIN_BOXES_FOR_A_FRAME_LINE = 4
+
+
+def _theil_sen_slope(points: Sequence[tuple[float, float]]) -> float | None:
+    """Median of the pairwise slopes, or None if x barely moves.
+
+    Least squares would let one box the model put on the wrong object set
+    the slope, which is the same reason :func:`calibrate` uses medians.
+    """
+    slopes = [
+        (y2 - y1) / (x2 - x1)
+        for i, (x1, y1) in enumerate(points)
+        for x2, y2 in points[i + 1:]
+        if abs(x2 - x1) >= MIN_CX_SEPARATION
+    ]
+    return statistics.median(slopes) if slopes else None
+
+
+@dataclass(frozen=True)
+class Spread:
+    """A robust summary of one set of measurements.
+
+    ``negative`` is here because a correction whose sign is not settled is
+    a different kind of useless from one that is merely imprecise, and the
+    median alone hides the difference.
+    """
+
+    n: int = 0
+    median: float = 0.0
+    mad: float = 0.0
+    low: float = 0.0
+    high: float = 0.0
+    negative: int = 0
+
+    @classmethod
+    def of(cls, values: Sequence[float]) -> "Spread":
+        if not values:
+            return cls()
+        centre = statistics.median(values)
+        return cls(
+            n=len(values),
+            median=centre,
+            mad=statistics.median([abs(v - centre) for v in values]),
+            low=min(values),
+            high=max(values),
+            negative=sum(1 for v in values if v < 0),
+        )
+
+    @property
+    def settled(self) -> bool:
+        """Whether these agree well enough to stand in for one another.
+
+        Says nothing about whether the agreed value is large enough to be
+        worth acting on --- measurements that agree on zero are settled and
+        not worth storing, and conflating the two reported a perfectly
+        consistent absence of tilt as frames disagreeing about one.
+        """
+        return (
+            self.n > 0
+            and self.negative in (0, self.n)
+            and self.mad < abs(self.median)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "n": self.n,
+            "median": round(self.median, 4),
+            "mad": round(self.mad, 4),
+            "min": round(self.low, 4),
+            "max": round(self.high, 4),
+            "negative": self.negative,
+        }
+
+
+@dataclass(frozen=True)
+class VerticalStructure:
+    """Where the vertical error lives: in the station, or in each frame.
+
+    :class:`BoxCalibration` can only carry the first kind. This measures
+    which kind is actually present, so that the decision not to add a
+    vertical term to it is a reading of data rather than a preference.
+
+    ``between_frames``
+        How far frames' own median corrections sit from one another. A
+        single ``cy_shift`` can only be right for one of them, so this
+        spread is what that shift leaves behind.
+    ``within_frames``
+        What remains inside a frame once its own median is removed --- the
+        part a per-frame offset would still miss, and what a tilt would
+        have to explain.
+    ``frame_slopes``
+        That leftover's gradient against cx, per frame. A station tilt term
+        is only meaningful if these agree; if the spread rivals the median
+        or the sign flips between frames, there is no station tilt to store.
+    """
+
+    between_frames: Spread = field(default_factory=Spread)
+    within_frames: Spread = field(default_factory=Spread)
+    frame_slopes: Spread = field(default_factory=Spread)
+
+    #: A per-frame offset is only worth having if frames differ by more
+    #: than this. Cable1/A's boxes are 0.09 high, so 0.01 is a ninth of a
+    #: box --- below it, the offset is not what is hurting IoU.
+    MEANINGFUL_OFFSET = 0.01
+
+    #: A slope moves cy by ``slope * cx-span`` across a frame. Cable1/A's
+    #: span is 0.26 and its boxes are 0.09 high, so 0.05 is where the tilt
+    #: starts to move a box by a seventh of itself. Below that there is
+    #: nothing to correct, however consistently the frames agree on it.
+    MEANINGFUL_TILT = 0.05
+
+    @property
+    def reading(self) -> str:
+        """The conclusion, so a reader need not re-derive it from numbers.
+
+        Only ever reports what is *wrong*; a run with nothing to report
+        falls through to saying a constant fits. So a flat tilt that every
+        frame agrees on is silence here, not a complaint about tilt.
+        """
+        if not self.between_frames.n:
+            return "No matched boxes; nothing measured."
+        notes = []
+        if self.between_frames.mad > self.MEANINGFUL_OFFSET:
+            notes.append(
+                f"frames disagree about the vertical by "
+                f"{self.between_frames.mad:.4f} (MAD), so no one "
+                "station-wide cy_shift can serve them all"
+            )
+        slopes = self.frame_slopes
+        tilted = abs(slopes.median) >= self.MEANINGFUL_TILT
+        # Spread counts on its own: frames leaning hard in both directions
+        # average out to a median that looks flat and is not.
+        if slopes.n and (tilted or slopes.mad >= self.MEANINGFUL_TILT):
+            if slopes.settled:
+                notes.append(
+                    f"per-frame tilt agrees at {slopes.median:+.4f} "
+                    f"+/-{slopes.mad:.4f}; a station tilt term would earn "
+                    "its place"
+                )
+            else:
+                notes.append(
+                    f"per-frame tilt is {slopes.median:+.4f} "
+                    f"+/-{slopes.mad:.4f} with {slopes.negative}/{slopes.n} "
+                    "leaning the other way, so there is no station tilt "
+                    "to store either"
+                )
+        return "; ".join(notes) or "A constant vertical shift fits this data."
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "between_frames": self.between_frames.to_dict(),
+            "within_frames": self.within_frames.to_dict(),
+            "frame_slopes": self.frame_slopes.to_dict(),
+            "reading": self.reading,
+        }
+
+
+def measure_vertical_structure(
+    per_frame: Sequence[Sequence[tuple[Box, Box]]]
+) -> VerticalStructure:
+    """Split the vertical error into what a constant could fix and what not.
+
+    Takes pairs still grouped by the frame they came from, because that
+    grouping *is* the measurement: flattened, between-frame and
+    within-frame error are indistinguishable, and the question of which one
+    dominates is the question being asked.
+    """
+    frame_medians: list[float] = []
+    within: list[float] = []
+    slopes: list[float] = []
+    for pairs in per_frame:
+        residuals = [
+            (proposed.cx, reference.cy - proposed.cy)
+            for proposed, reference in pairs
+        ]
+        if not residuals:
+            continue
+        centre = statistics.median([dy for _, dy in residuals])
+        frame_medians.append(centre)
+        within.extend(dy - centre for _, dy in residuals)
+        if len(residuals) >= MIN_BOXES_FOR_A_FRAME_LINE:
+            slope = _theil_sen_slope(residuals)
+            if slope is not None:
+                slopes.append(slope)
+    return VerticalStructure(
+        between_frames=Spread.of(frame_medians),
+        within_frames=Spread.of(within),
+        frame_slopes=Spread.of(slopes),
     )
 
 
@@ -209,23 +435,48 @@ def match_by_centre(
     targets: Sequence[Box],
     *,
     radius: float = DEFAULT_MATCH_RADIUS,
+    vertical_radius: float | None = None,
 ) -> list[Box | None]:
     """For each target, the nearest proposed box, or None if none is near.
 
     Nearest-centre rather than best-IoU on purpose. The model's sizes are
     known to be wrong and its centres are known to be right, so IoU would
     rank matches by the one thing that cannot be trusted.
+
+    **Horizontal distance alone decides the match.** An earlier version took
+    the plain two-dimensional distance, which spent the model's one accurate
+    coordinate on its one inaccurate one: frames whose six boxes were all
+    within 0.005 of the right cx and named 6/6 correctly came back 0/6
+    matched, because cy can be out by 0.06 and the radius is 0.02. Vetoing a
+    trustworthy axis with an untrustworthy one is not a strict test, it is a
+    broken one.
+
+    ``vertical_radius`` re-admits cy as a *gate* --- never as a ranking term
+    --- for a station whose objects sit above one another and so cannot be
+    told apart by cx. Cable1/A's are a single row, 0.045 apart horizontally,
+    so it is left off there and cy is only ever a tie-break.
     """
+    if radius <= 0:
+        raise EvidenceError(f"A match radius must be positive, got {radius}.")
+    if vertical_radius is not None and vertical_radius <= 0:
+        raise EvidenceError(
+            f"A vertical match radius must be positive, got {vertical_radius}."
+        )
     out: list[Box | None] = []
     for target in targets:
         best: Box | None = None
-        best_distance = radius
+        best_key: tuple[float, float] | None = None
         for candidate in proposed:
-            distance = float(
-                np.hypot(candidate.cx - target.cx, candidate.cy - target.cy)
-            )
-            if distance <= best_distance:
-                best, best_distance = candidate, distance
+            dx = abs(candidate.cx - target.cx)
+            if dx > radius:
+                continue
+            dy = abs(candidate.cy - target.cy)
+            if vertical_radius is not None and dy > vertical_radius:
+                continue
+            # dx first, so cy can only separate candidates cx cannot.
+            key = (dx, dy)
+            if best_key is None or key < best_key:
+                best, best_key = candidate, key
         out.append(best)
     return out
 
@@ -296,11 +547,13 @@ class VisionLLMEvidence:
         *,
         prompt: VisionPrompt | None = None,
         match_radius: float = DEFAULT_MATCH_RADIUS,
+        vertical_match_radius: float | None = None,
         max_side: int = 640,
     ) -> None:
         self._client = client
         self._prompt = prompt or VisionPrompt()
         self._match_radius = match_radius
+        self._vertical_match_radius = vertical_match_radius
         self._max_side = max_side
 
     def read(
@@ -309,7 +562,12 @@ class VisionLLMEvidence:
         if not len(boxes):
             return []
         proposed = self._ask(image, profile)
-        matches = match_by_centre(proposed, boxes, radius=self._match_radius)
+        matches = match_by_centre(
+            proposed,
+            boxes,
+            radius=self._match_radius,
+            vertical_radius=self._vertical_match_radius,
+        )
         opinions = []
         for box, match in zip(boxes, matches):
             if match is None:
@@ -322,13 +580,15 @@ class VisionLLMEvidence:
                     )
                 )
                 continue
-            distance = float(np.hypot(match.cx - box.cx, match.cy - box.cy))
+            # Horizontal only, because that is what decided the match. A
+            # combined distance here would report a number no rule used.
+            offset = abs(match.cx - box.cx)
             opinions.append(
                 BoxOpinion(
                     source=self.name,
                     class_name=match.class_name,
                     confidence=match.confidence,
-                    detail=f"matched at {distance:.4f} of image width",
+                    detail=f"matched {offset:.4f} of image width away in cx",
                 )
             )
         return opinions

@@ -24,12 +24,14 @@ from picture_tool.bootstrap.vision_evidence import (
     SOURCE_NAME,
     BoxCalibration,
     CalibrationError,
+    VerticalStructure,
     VisionLLMEvidence,
     VisionLLMProposer,
     boxes_from_reply,
     calibrate,
     compare_opinions,
     match_by_centre,
+    measure_vertical_structure,
 )
 
 NAMES = ("Black", "Green", "Orange", "Red", "Yellow")
@@ -257,6 +259,148 @@ def test_matching_prefers_the_nearest_centre_not_the_best_overlap() -> None:
 
 def test_a_distant_box_does_not_match_at_all() -> None:
     assert match_by_centre([box("Red", 0.35)], [box("Red", 0.80)]) == [None]
+
+
+def test_a_flattened_cy_cannot_veto_a_correct_cx() -> None:
+    """The bug that made a 6/6 frame measure 0/6.
+
+    The model puts every box on one horizontal line while the board is
+    tilted, so cy is out by up to 0.06 --- three times the match radius ---
+    on boxes whose cx is right to 0.005. Under a combined distance none of
+    them matched and the frame scored zero.
+    """
+    # A tilted board, as the hand labels measure it: the ends are collinear
+    # with a slope of about 0.17, and where that line sits varies frame to
+    # frame. The model draws its own flat line at its own height.
+    xs = (0.35, 0.40, 0.45, 0.50, 0.55, 0.60)
+    targets = [box(n, cx, cy=0.620 + 0.17 * (cx - 0.5))
+               for n, cx in zip((*NAMES, "Black"), xs)]
+    proposed = [box(t.class_name, t.cx + 0.004, cy=0.680) for t in targets]
+
+    matched = match_by_centre(proposed, targets)
+
+    assert [m.class_name for m in matched if m] == [t.class_name for t in targets]
+    assert all(np.hypot(m.cx - t.cx, m.cy - t.cy) > 0.02
+               for m, t in zip(matched, targets) if m is not None), (
+        "the 2-D distance these pass at must still exceed the radius, "
+        "or the test is not reproducing the failure it is named for"
+    )
+
+
+def test_cy_may_gate_when_a_station_stacks_objects_but_never_ranks() -> None:
+    """Two objects at one cx need cy; it excludes, it does not choose."""
+    upper, lower = box("Red", 0.35, cy=0.30), box("Green", 0.35, cy=0.80)
+
+    assert match_by_centre([upper], [lower], vertical_radius=0.10) == [None]
+    # Without the gate the same pair matches: cx alone cannot separate them,
+    # which is exactly the condition a caller passes vertical_radius for.
+    assert match_by_centre([upper], [lower])[0] is upper
+
+
+def test_cx_decides_the_match_even_when_another_box_is_nearer_overall() -> None:
+    near_in_cx = box("Red", 0.352, cy=0.10)
+    near_in_cy = box("Green", 0.362, cy=0.59)
+    matched = match_by_centre([near_in_cx, near_in_cy], [box("Red", 0.350)])
+
+    assert matched[0] is near_in_cx
+
+
+def test_a_non_positive_radius_is_refused_rather_than_matching_nothing() -> None:
+    with pytest.raises(EvidenceError, match="positive"):
+        match_by_centre([box("Red", 0.35)], [box("Red", 0.35)], radius=0.0)
+    with pytest.raises(EvidenceError, match="positive"):
+        match_by_centre([box("Red", 0.35)], [box("Red", 0.35)],
+                        vertical_radius=-1.0)
+
+
+# -- where the vertical error lives -----------------------------------------
+
+
+def tilted_frame(intercept: float, slope: float, flat_at: float
+                 ) -> list[tuple[Box, Box]]:
+    """One frame: collinear truth at some angle, a flat reply across it."""
+    xs = (0.35, 0.42, 0.49, 0.56, 0.63)
+    return [
+        (box("Red", cx, cy=flat_at),
+         box("Red", cx, cy=intercept + slope * (cx - 0.5)))
+        for cx in xs
+    ]
+
+
+def test_a_shift_that_fits_every_frame_is_reported_as_one() -> None:
+    """The control: when a constant is the truth, it must be found."""
+    frames = [tilted_frame(0.60 + 0.02, slope=0.0, flat_at=0.60)
+              for _ in range(8)]
+
+    measured = measure_vertical_structure(frames)
+
+    assert measured.between_frames.median == pytest.approx(0.02)
+    assert measured.between_frames.mad == pytest.approx(0.0)
+    assert "constant vertical shift fits" in measured.reading
+
+
+def test_frames_placed_differently_rule_out_one_station_shift() -> None:
+    heights = (0.42, 0.51, 0.58, 0.66, 0.73, 0.79)
+    frames = [tilted_frame(h, slope=0.05, flat_at=0.62) for h in heights]
+
+    measured = measure_vertical_structure(frames)
+
+    assert measured.between_frames.mad > VerticalStructure.MEANINGFUL_OFFSET
+    assert "no one station-wide cy_shift" in measured.reading
+
+
+def test_a_tilt_that_reverses_between_frames_is_not_a_station_tilt() -> None:
+    """The finding that kept a tilt term out of BoxCalibration."""
+    frames = [tilted_frame(0.62, slope=s, flat_at=0.62)
+              for s in (-0.18, -0.06, 0.02, 0.07, 0.13, 0.30)]
+
+    measured = measure_vertical_structure(frames)
+
+    assert not measured.frame_slopes.settled
+    assert measured.frame_slopes.negative == 2
+    assert "no station tilt to store" in measured.reading
+
+
+def test_a_tilt_every_frame_agrees_on_would_be_worth_storing() -> None:
+    """The opposite verdict has to be reachable, or the test above is vacuous."""
+    frames = [tilted_frame(0.62, slope=s, flat_at=0.62)
+              for s in (0.16, 0.17, 0.17, 0.18, 0.18, 0.19)]
+
+    measured = measure_vertical_structure(frames)
+
+    assert measured.frame_slopes.settled
+    assert "would earn its place" in measured.reading
+
+
+def test_flattening_the_frames_would_hide_the_distinction() -> None:
+    """Why the pairs stay grouped: one bag of pairs cannot tell these apart."""
+    spread_out = [tilted_frame(h, slope=0.0, flat_at=0.62)
+                  for h in (0.50, 0.56, 0.62, 0.68, 0.74)]
+    all_alike = [tilted_frame(0.62, slope=0.0, flat_at=0.62) for _ in range(5)]
+
+    assert measure_vertical_structure(spread_out).between_frames.mad > 0.05
+    assert measure_vertical_structure(all_alike).between_frames.mad == 0.0
+    # Pooled, the two are the same multiset of dy values in a different order.
+    assert (sorted(round(r.cy - p.cy, 6) for f in spread_out for p, r in f)
+            != sorted(round(r.cy - p.cy, 6) for f in all_alike for p, r in f))
+
+
+def test_an_empty_measurement_says_so_rather_than_dividing_by_zero() -> None:
+    measured = measure_vertical_structure([])
+
+    assert measured.between_frames.n == 0
+    assert not measured.frame_slopes.settled
+    assert "nothing measured" in measured.reading
+
+
+def test_the_slope_ignores_box_pairs_too_close_in_cx_to_carry_one() -> None:
+    """Dividing by a near-zero cx gap amplifies noise into a gradient."""
+    stacked = [(box("Red", 0.500, cy=0.60), box("Red", 0.500, cy=0.70)),
+               (box("Red", 0.5001, cy=0.60), box("Red", 0.5001, cy=0.30)),
+               (box("Red", 0.5002, cy=0.60), box("Red", 0.5002, cy=0.90)),
+               (box("Red", 0.5003, cy=0.60), box("Red", 0.5003, cy=0.20))]
+
+    assert measure_vertical_structure([stacked]).frame_slopes.n == 0
 
 
 # -- comparing two sources --------------------------------------------------
