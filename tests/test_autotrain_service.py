@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -288,10 +289,19 @@ def test_the_tool_surface_is_documented_in_order(service):
 # Production reads
 
 
+#: The collector only reads back `collector.lookback_days` (7) from today,
+#: so a snapshot written under a fixed date stops being visible once the
+#: wall clock walks past it: these tests passed until 2026-09-16 and failed
+#: from 2026-09-17 with nothing in the repository having changed. Dating the
+#: fixture relative to now is what stops the suite from decaying.
+def _today() -> str:
+    return datetime.now().strftime("%Y%m%d")
+
+
 def _write_snapshot(paths, inspection_id, status, *, image=None):
     directory = (
         paths.production_results_root()
-        / "20260910"
+        / _today()
         / PRODUCT
         / AREA
         / status
@@ -304,7 +314,7 @@ def _write_snapshot(paths, inspection_id, status, *, image=None):
             {
                 "schema_version": 2,
                 "inspection_id": inspection_id,
-                "timestamp": "2026-09-10T12:00:00",
+                "timestamp": datetime.now().replace(microsecond=0).isoformat(),
                 "status": status,
                 "detector": "yolo",
                 "product": PRODUCT,
