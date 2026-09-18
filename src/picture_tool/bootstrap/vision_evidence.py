@@ -56,6 +56,25 @@ DEFAULT_MATCH_RADIUS = 0.02
 #: Boxes whose reply could not be matched get this, rather than a guess.
 UNDECIDED = ""
 
+#: How many hand-labelled frames a calibration needs under it, and how many
+#: are worth asking for. Measured by resampling Cable1/A's 46 frames: the
+#: spread in height_scale across draws is 27% of its own value at 3 frames,
+#: 18.8% at 5, 12.5% at 8, 10.3% at 12, and 5.2% at 23. Eight is where a
+#: held-out frame's IoU stops depending on which frames were picked; twelve
+#: buys the last of it. Past twelve the return is 0.014 IoU for more than
+#: doubling the labelling, which is not a trade worth asking a person for.
+MINIMUM_SEED_IMAGES = 8
+RECOMMENDED_SEED_IMAGES = 12
+
+#: Send the image as it was taken. The model's box placement is a function
+#: of whether it can resolve the object at all: shrinking a 3072px frame to
+#: 640 turns a 125px wire end into 26px, and the measured vertical error
+#: goes from 0.0065 of frame height to 0.0771 -- twelve times worse, to save
+#: four seconds a frame. Naming is unaffected, which is why
+#: :class:`VisionLLMEvidence` still defaults to a thumbnail and only the
+#: proposer, whose whole job is placement, defaults to the full frame.
+NO_DOWNSCALE = 0
+
 
 class CalibrationError(AutoTrainError):
     """Raised when a calibration is missing, malformed, or for another station."""
@@ -70,9 +89,19 @@ class BoxCalibration:
     It is deliberately not a learned model --- a fitted transform on this
     little data would describe the sample rather than the bias.
 
-    Bound to one station. The framing, lens and working distance are what
-    make the bias what it is, so applying a Cable1/A calibration to another
-    station would be borrowing a number that was never about it.
+    Bound to one station, **one image scale and one model**. The framing,
+    lens and working distance are what make the bias what it is, so applying
+    a Cable1/A calibration to another station would be borrowing a number
+    that was never about it --- and the same is true of the other two.
+
+    The scale is not a footnote. Measured on the same station, same frames,
+    same prompt: at ``max_side`` 640 the height correction is x1.497, at
+    3072 it is **x1.981**. Shrinking the image shrinks a 125px wire end to
+    26px, and a model that cannot resolve the object draws a vaguer, larger
+    box than one that can. A calibration used at a scale it was not derived
+    at is wrong by a third and nothing about the boxes looks unusual, so
+    :meth:`applies_to` refuses the mismatch rather than trusting the caller
+    to remember.
 
     **``cy_shift`` is the weak term and no tilt term joins it.** Cable1/A's
     46 hand-labelled frames were measured before this was written: within a
@@ -91,6 +120,13 @@ class BoxCalibration:
     area: str
     width_scale: float
     height_scale: float
+    #: The longest side the images were resized to before being asked about,
+    #: and the model that answered. Both are part of what the bias *is*, so
+    #: both are part of what it applies to. Zero and empty mean a calibration
+    #: written before this was recorded: readable, but not usable, because
+    #: there is no way to tell which scale produced it.
+    max_side: int = 0
+    model: str = ""
     cy_shift: float = 0.0
     cx_shift: float = 0.0
     #: Median absolute deviation of the vertical corrections the fit saw.
@@ -112,8 +148,47 @@ class BoxCalibration:
                 f"height={self.height_scale}."
             )
 
-    def applies_to(self, product: str, area: str) -> bool:
-        return self.product == product and self.area == area
+    def mismatch_for(
+        self, product: str, area: str, *, max_side: int, model: str
+    ) -> str:
+        """Why this calibration does not apply here, or "" if it does.
+
+        A reason rather than a bool, because all four ways of not applying
+        need different things done about them and a caller holding only
+        False has to guess which it hit.
+
+        An unrecorded scale or model is a mismatch, not a pass. The same
+        rule already governs vision review, where a result without a model
+        field is treated exactly like one from a different model: the
+        records that predate the field are precisely the ones the check
+        exists to catch, so letting them through waives it where it is most
+        needed.
+        """
+        if self.product != product or self.area != area:
+            return (
+                f"derived for {self.product}/{self.area}, not {product}/{area}. "
+                "The bias comes from this station's framing and optics, so it "
+                "is not a number another station may borrow."
+            )
+        if not self.max_side or not self.model:
+            return (
+                "was written before the image scale and model were recorded, "
+                "so there is no way to tell which scale produced it. Derive it "
+                "again; the same measurement at 640 and at 3072 differs by a "
+                "third in height_scale."
+            )
+        if self.max_side != max_side:
+            return (
+                f"was derived at max_side {self.max_side} and is being used at "
+                f"{max_side}. Box size bias tracks how well the model could "
+                "resolve the object, so the two are not interchangeable."
+            )
+        if self.model != model:
+            return (
+                f"was derived from {self.model}, not {model}. How large a box "
+                "a model draws around the same object is the model's own habit."
+            )
+        return ""
 
     def apply(self, box: Box) -> Box:
         """One box, corrected. Centres move a little, sizes move a lot."""
@@ -133,6 +208,8 @@ class BoxCalibration:
             "area": self.area,
             "width_scale": round(self.width_scale, 6),
             "height_scale": round(self.height_scale, 6),
+            "max_side": self.max_side,
+            "model": self.model,
             "cy_shift": round(self.cy_shift, 6),
             "cy_shift_spread": round(self.cy_shift_spread, 6),
             "cx_shift": round(self.cx_shift, 6),
@@ -150,6 +227,12 @@ class BoxCalibration:
                 area=str(payload["area"]),
                 width_scale=float(payload["width_scale"]),
                 height_scale=float(payload["height_scale"]),
+                # Absent in files written before these were recorded. They
+                # read back cleanly and mismatch_for then refuses them, so
+                # the failure is a message about re-deriving rather than a
+                # crash on load.
+                max_side=int(payload.get("max_side", 0) or 0),
+                model=str(payload.get("model", "")),
                 cy_shift=float(payload.get("cy_shift", 0.0)),
                 cy_shift_spread=float(payload.get("cy_shift_spread", 0.0)),
                 cx_shift=float(payload.get("cx_shift", 0.0)),
@@ -187,15 +270,26 @@ def calibrate(
     product: str,
     area: str,
     sample_images: int = 0,
+    max_side: int = 0,
+    model: str = "",
     derived_from: str = "",
     notes: str = "",
     minimum_boxes: int = 6,
+    minimum_images: int = MINIMUM_SEED_IMAGES,
 ) -> BoxCalibration:
     """Measure the bias from boxes the model drew against boxes known good.
 
     Medians rather than means throughout: one box the model placed on the
     wrong object would drag a mean into a correction that fits nothing, and
     at this sample size there is no room to absorb that.
+
+    The floor that matters is **images, not boxes**. Measured by resampling
+    Cable1/A's 46 hand-labelled frames: the spread in ``height_scale`` falls
+    with the number of frames, not with the number of boxes in them, because
+    what varies between one board and the next --- where it sits, how it
+    leans --- is a property of the frame that all six of its boxes share.
+    Six boxes from one frame is one observation of the bias wearing the
+    disguise of six.
 
     The vertical correction is reported with its spread beside it, because
     on this station it is expected to be a number without a bias underneath
@@ -206,6 +300,27 @@ def calibrate(
             f"{len(pairs)} box pair(s) is too few to measure a bias; "
             f"{minimum_boxes} is the floor. A correction fitted to fewer "
             "describes those boxes rather than the station."
+        )
+    if not sample_images and minimum_images:
+        raise CalibrationError(
+            "The number of labelled frames was not recorded, so there is no "
+            "way to tell whether the bias was measured over enough of them. "
+            "An unrecorded count is refused rather than waved through: "
+            "BoxCalibration.mismatch_for applies the same rule to an "
+            "unrecorded scale or model, and for the same reason --- the "
+            "calls that predate the field are precisely the ones the floor "
+            "exists to catch. Pass sample_images, or minimum_images=0 to say "
+            "the floor does not apply to this call."
+        )
+    if sample_images < minimum_images:
+        raise CalibrationError(
+            f"{sample_images} labelled image(s) is too few; {minimum_images} "
+            "is the floor. Resampling this station's hand labels put the "
+            "height correction's spread at 27% of its own value over 3 "
+            f"images, 12.5% over {MINIMUM_SEED_IMAGES} and 10% over "
+            f"{RECOMMENDED_SEED_IMAGES} -- below the floor the correction is "
+            "as likely to be 1.07 as 1.88. Label more frames rather than "
+            "more boxes in the same frames."
         )
     widths, heights, dxs, dys = [], [], [], []
     for proposed, reference in pairs:
@@ -227,6 +342,8 @@ def calibrate(
         cx_shift=statistics.median(dxs),
         cy_shift=cy_shift,
         cy_shift_spread=statistics.median([abs(dy - cy_shift) for dy in dys]),
+        max_side=max_side,
+        model=model,
         sample_boxes=len(pairs),
         sample_images=sample_images,
         derived_from=derived_from,
@@ -597,7 +714,13 @@ class VisionLLMEvidence:
         import cv2
 
         height, width = image.shape[:2]
-        scale = min(1.0, self._max_side / max(height, width))
+        # A max_side of zero means send it as taken; without this the scale
+        # below is 0.0 and cv2 is asked to resize to nothing.
+        scale = (
+            min(1.0, self._max_side / max(height, width))
+            if self._max_side > 0
+            else 1.0
+        )
         sent = (
             cv2.resize(image, (int(width * scale), int(height * scale)))
             if scale < 1.0
@@ -710,12 +833,15 @@ class VisionLLMProposer:
         *,
         calibration: BoxCalibration | None = None,
         prompt: VisionPrompt | None = None,
-        max_side: int = 640,
+        max_side: int = NO_DOWNSCALE,
+        model: str = "",
         allow_uncalibrated: bool = False,
     ) -> None:
         self._evidence = VisionLLMEvidence(
             client, prompt=prompt, max_side=max_side
         )
+        self.max_side = max_side
+        self.model = model
         self.calibration = calibration
         self.allow_uncalibrated = allow_uncalibrated
 
@@ -742,13 +868,12 @@ class VisionLLMProposer:
                 "enough to train on. Derive one with calibrate(), or pass "
                 "allow_uncalibrated=True if the boxes are not for training."
             )
-        if not self.calibration.applies_to(profile.product, profile.area):
-            raise CalibrationError(
-                f"Calibration is for {self.calibration.product}/"
-                f"{self.calibration.area}, not {profile.product}/{profile.area}. "
-                "The bias comes from this station's framing and optics, so it "
-                "is not a number another station may borrow."
-            )
+        reason = self.calibration.mismatch_for(
+            profile.product, profile.area,
+            max_side=self.max_side, model=self.model,
+        )
+        if reason:
+            raise CalibrationError(f"This calibration {reason}")
         return self.calibration
 
 

@@ -84,6 +84,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--key-env", default="")
     p.add_argument("--model", default="Qwen3.8-27B-GGUF")
     p.add_argument("--max-tokens", type=int, default=6000)
+    p.add_argument("--max-side", type=int, default=0,
+                   help="Longest side to resize to before asking; 0 sends "
+                        "the frame as taken. Recorded in the calibration and "
+                        "enforced when it is used, because the size bias "
+                        "depends on it: x1.497 at 640, x1.981 at 3072 on the "
+                        "same station and frames.")
     p.add_argument("--match-radius", type=float, default=0.02,
                    help="How near in cx a proposed centre must be to count "
                         "as the same object, as a fraction of image width.")
@@ -218,8 +224,10 @@ def main(argv: list[str] | None = None) -> int:
         vc.HttpVisionLLMClient(cfg),
         prompt=VisionPrompt(object_description=args.describe),
         match_radius=args.match_radius,
+        max_side=args.max_side,
     )
     LOGGER.info("object described as: %s", args.describe)
+    LOGGER.info("max_side %s", args.max_side or "unscaled")
 
     def proposals(
         group: list[tuple[Path, list[Box]]]
@@ -269,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     fit_pairs = flatten(fit_frames)
     calibration = calibrate(
         fit_pairs, product=args.product, area=args.area, sample_images=len(fit),
+        max_side=args.max_side, model=args.model,
         derived_from=str(source_path),
         notes=f"reference is {reference_kind}",
     )

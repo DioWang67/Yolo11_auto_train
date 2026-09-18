@@ -21,6 +21,7 @@ from picture_tool.bootstrap.evidence import Box, BoxOpinion, EvidenceError
 from picture_tool.bootstrap.profile import ProductProfile
 from picture_tool.bootstrap.vision_client import VisionClientError, VisionReply
 from picture_tool.bootstrap.vision_evidence import (
+    MINIMUM_SEED_IMAGES,
     SOURCE_NAME,
     BoxCalibration,
     CalibrationError,
@@ -104,7 +105,10 @@ def test_calibration_measures_the_bias_it_was_shown() -> None:
         (box("Black", 0.55, w=0.030, h=0.045), box("Black", 0.55, w=0.045, h=0.072)),
         (box("Black", 0.60, w=0.030, h=0.045), box("Black", 0.60, w=0.045, h=0.072)),
     ]
-    cal = calibrate(pairs, product="Cable1", area="A", sample_images=1)
+    # minimum_images=0 on purpose: this pins the median arithmetic, and the
+    # frame-count floor is a separate rule with its own test below.
+    cal = calibrate(pairs, product="Cable1", area="A", sample_images=1,
+                    minimum_images=0)
 
     assert cal.width_scale == pytest.approx(1.5)
     assert cal.height_scale == pytest.approx(1.6)
@@ -118,7 +122,10 @@ def test_calibration_uses_medians_so_one_stray_box_cannot_set_it() -> None:
         (box("Red", 0.35, w=0.030), box("Red", 0.35, w=0.045)) for _ in range(6)
     ]
     stray = (box("Green", 0.40, w=0.001), box("Green", 0.40, w=0.045))
-    cal = calibrate([*good, stray], product="Cable1", area="A")
+    # minimum_images=0 on purpose: this pins the median arithmetic, not the
+    # frame-count floor, which has its own tests below.
+    cal = calibrate([*good, stray], product="Cable1", area="A",
+                    minimum_images=0)
 
     assert cal.width_scale == pytest.approx(1.5)
 
@@ -133,6 +140,7 @@ def test_too_few_boxes_is_refused_rather_than_fitted() -> None:
 def test_a_calibration_survives_a_round_trip(tmp_path) -> None:
     cal = BoxCalibration(
         product="Cable1", area="A", width_scale=1.38, height_scale=1.597,
+        max_side=3072, model="Qwen3.8-27B-GGUF",
         cy_shift=0.0188, sample_boxes=18, sample_images=3,
         derived_from="Result/20260915 PASS frames",
     )
@@ -141,7 +149,116 @@ def test_a_calibration_survives_a_round_trip(tmp_path) -> None:
     back = BoxCalibration.read(path)
 
     assert back == cal
-    assert json.loads(path.read_text(encoding="utf-8"))["sample_images"] == 3
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["sample_images"] == 3
+    assert (written["max_side"], written["model"]) == (3072, "Qwen3.8-27B-GGUF")
+
+
+def test_a_calibration_written_before_the_scale_was_recorded_still_loads(
+    tmp_path,
+) -> None:
+    """Readable but not usable: the message has to say re-derive, not crash."""
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({
+        "product": "Cable1", "area": "A",
+        "width_scale": 1.174743, "height_scale": 1.497138,
+    }), encoding="utf-8")
+
+    back = BoxCalibration.read(path)
+
+    assert (back.max_side, back.model) == (0, "")
+    assert "Derive it again" in back.mismatch_for(
+        "Cable1", "A", max_side=3072, model="Qwen3.8-27B-GGUF")
+
+
+def usable(**overrides) -> BoxCalibration:
+    """A calibration that passes every check, so a test can break one."""
+    fields = dict(product="Cable1", area="A", width_scale=1.17,
+                  height_scale=1.98, max_side=3072, model="Qwen3.8-27B-GGUF")
+    fields.update(overrides)
+    return BoxCalibration(**fields)
+
+
+def test_a_calibration_from_another_image_scale_is_refused() -> None:
+    """x1.497 at 640 and x1.981 at 3072: the same measurement, a third apart."""
+    cal = usable(max_side=640)
+
+    reason = cal.mismatch_for("Cable1", "A", max_side=3072,
+                              model="Qwen3.8-27B-GGUF")
+
+    assert "640" in reason and "3072" in reason
+    assert usable().mismatch_for("Cable1", "A", max_side=3072,
+                                 model="Qwen3.8-27B-GGUF") == ""
+
+
+def test_a_calibration_from_another_model_is_refused() -> None:
+    reason = usable(model="some-other-vlm").mismatch_for(
+        "Cable1", "A", max_side=3072, model="Qwen3.8-27B-GGUF")
+
+    assert "some-other-vlm" in reason
+
+
+def test_a_calibration_that_recorded_neither_is_refused_too() -> None:
+    """The files that predate the field are the ones the check is for.
+
+    Treating "unrecorded" as "fine" waives the check exactly where nothing
+    can confirm it, which is the same rule vision review applies to results
+    with no model field.
+    """
+    for missing in (dict(max_side=0), dict(model=""), dict(max_side=0, model="")):
+        reason = usable(**missing).mismatch_for(
+            "Cable1", "A", max_side=3072, model="Qwen3.8-27B-GGUF")
+        assert "before the image scale and model were recorded" in reason
+
+
+def test_a_proposer_refuses_a_calibration_from_another_scale() -> None:
+    proposer = VisionLLMProposer(
+        _FakeClient([reply("Red", 0.35)]),
+        calibration=usable(max_side=640),
+        max_side=3072, model="Qwen3.8-27B-GGUF",
+    )
+
+    with pytest.raises(CalibrationError, match="max_side 640"):
+        proposer.propose("unused.jpg", profile())
+
+
+def test_the_proposer_sends_the_frame_as_taken_by_default() -> None:
+    """Placement is what the proposer is for, and placement needs pixels."""
+    assert VisionLLMProposer(_FakeClient()).max_side == 0
+    # Naming a box somebody else drew does not, so evidence keeps its
+    # thumbnail: the same frames named 276/276 correctly at 640.
+    assert VisionLLMEvidence(_FakeClient())._max_side == 640
+
+
+def test_a_calibration_needs_frames_not_just_boxes() -> None:
+    """Six boxes from one frame is one observation wearing six disguises."""
+    pairs = [(box("Red", 0.35 + i * 0.05, w=0.03), box("Red", 0.35 + i * 0.05))
+             for i in range(6)]
+
+    with pytest.raises(CalibrationError, match="too few"):
+        calibrate(pairs, product="Cable1", area="A", sample_images=1)
+
+    ok = calibrate(pairs, product="Cable1", area="A",
+                   sample_images=MINIMUM_SEED_IMAGES)
+    assert ok.sample_images == MINIMUM_SEED_IMAGES
+
+
+def test_an_unrecorded_frame_count_is_refused_rather_than_skipped() -> None:
+    """Not knowing how many frames is not the same as having enough.
+
+    The same rule mismatch_for applies to an unrecorded scale or model: the
+    callers that predate the field are the ones the floor is for, so letting
+    them past waives it exactly where nothing can confirm it.
+    """
+    pairs = [(box("Red", 0.35 + i * 0.05, w=0.03), box("Red", 0.35 + i * 0.05))
+             for i in range(6)]
+
+    with pytest.raises(CalibrationError, match="not recorded"):
+        calibrate(pairs, product="Cable1", area="A")
+
+    # ...but a caller may still say the floor does not apply, out loud.
+    assert calibrate(pairs, product="Cable1", area="A",
+                     minimum_images=0).sample_images == 0
 
 
 def test_a_zero_scale_is_refused_at_construction() -> None:

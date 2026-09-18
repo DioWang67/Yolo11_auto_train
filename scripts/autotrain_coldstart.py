@@ -50,7 +50,19 @@ DESCRIPTION = (
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--results", type=Path, required=True)
+    p.add_argument("--results", type=Path, default=None,
+                   help="A Result/<date>/<product>/<area> directory.")
+    p.add_argument("--images", type=Path, default=None,
+                   help="A plain directory of frames. What a new station "
+                        "has: photographs, and no production records yet.")
+    p.add_argument("--seed", type=Path, default=None,
+                   help="A directory with images/ and labels/ holding the "
+                        "hand-drawn frames the calibration came from. Their "
+                        "human labels are copied through in place of asking "
+                        "the model about them again.")
+    p.add_argument("--max-side", type=int, default=0,
+                   help="Longest side to resize to before asking; 0 sends "
+                        "the frame as taken. Must match the calibration's.")
     p.add_argument("--calibration", type=Path,
                    default=PROJECT_ROOT / "runs" / "vision_calibration" / "calibration.json")
     p.add_argument("--out", type=Path,
@@ -67,11 +79,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp"}
+
+
 def frames(root: Path) -> list[Path]:
     """Preprocessed frames, which is the space the detections are recorded in."""
     found = [Path(p) for p in
              sorted(glob.glob(str(root / "*" / "preprocessed" / "*" / "*.jpg")))]
     return found
+
+
+def plain_frames(root: Path) -> list[Path]:
+    """Every image in a directory, which is all a new station has."""
+    return sorted(p for p in root.iterdir()
+                  if p.suffix.lower() in IMAGE_SUFFIXES)
+
+
+def seed_labels(root: Path) -> dict[str, Path]:
+    """The hand-drawn label for each seed frame, keyed by image name.
+
+    A seed frame's boxes are already known, and a person drew them. Asking
+    the model about it again would replace the best labels in the set with
+    the ones being corrected *from* them.
+    """
+    images, labels = root / "images", root / "labels"
+    if not images.is_dir() or not labels.is_dir():
+        raise SystemExit(f"{root} needs images/ and labels/ side by side.")
+    out: dict[str, Path] = {}
+    for image in sorted(images.iterdir()):
+        if image.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        label = labels / f"{image.stem}.txt"
+        if label.is_file():
+            out[image.name] = label
+    return out
 
 
 def render(image_path: Path, boxes: list[Box], names: tuple[str, ...], out: Path) -> None:
@@ -121,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     proposer = VisionLLMProposer(
         vc.HttpVisionLLMClient(cfg), calibration=calibration,
         prompt=VisionPrompt(object_description=args.describe),
+        max_side=args.max_side, model=args.model,
     )
 
     images_dir = args.out / "images"
@@ -133,9 +175,40 @@ def main(argv: list[str] | None = None) -> int:
 
     import shutil
 
-    written = complete = 0
+    if args.images:
+        wanted = plain_frames(args.images)
+    elif args.results:
+        wanted = frames(args.results)
+    else:
+        raise SystemExit("Give either --images or --results.")
+    seeds = seed_labels(args.seed) if args.seed else {}
+    if seeds:
+        # A seed that is not among the frames being labelled is dropped by the
+        # loop below without a word: hand_drawn_images then under-reports, and
+        # the frames the calibration was derived from can be missing from the
+        # dataset the calibration is used to seed. Said out loud instead.
+        absent = sorted(set(seeds) - {frame.name for frame in wanted})
+        if absent:
+            raise SystemExit(
+                f"{len(absent)} of {len(seeds)} seed frame(s) are not among "
+                f"the images being labelled, e.g. {', '.join(absent[:3])}. "
+                "Their hand-drawn labels would be silently dropped. Point "
+                "--images at the directory the seeds came from, or drop them "
+                "from --seed."
+            )
+        LOGGER.info("%d seed frame(s) keep their hand-drawn labels", len(seeds))
+
+    written = complete = seeded = 0
     report = []
-    for frame in frames(args.results):
+    for frame in wanted:
+        if frame.name in seeds:
+            shutil.copy2(frame, images_dir / frame.name)
+            shutil.copy2(seeds[frame.name], labels_dir / f"{frame.stem}.txt")
+            written += 1
+            seeded += 1
+            report.append({"image": frame.name, "source": "human"})
+            LOGGER.info("  %s: hand-drawn, kept", frame.name)
+            continue
         boxes = proposer.propose(frame, profile)
         counts: dict[str, int] = {}
         for box in boxes:
@@ -162,9 +235,14 @@ def main(argv: list[str] | None = None) -> int:
         f"nc: {len(names)}\nnames: [{', '.join(names)}]\n", encoding="utf-8")
     summary = {
         "images": written,
+        "hand_drawn_images": seeded,
+        "model_labelled_images": written - seeded,
         "matching_station_inventory": complete,
         "calibration": calibration.to_dict(),
+        "max_side": args.max_side,
         "described_as": args.describe,
+        # True only of the seed frames, and they are counted separately
+        # above so nobody has to infer which half of the set is which.
         "labels_are_ground_truth": False,
         "frames": report,
     }
