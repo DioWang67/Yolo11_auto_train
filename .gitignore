@@ -49,4 +49,9 @@ Thumbs.db
 
 # Archives
 *.zip
+
+# MLflow local tracking store. mlruns/ holds the artifacts; mlflow.db is the
+# SQLite backend a local `mlflow ui` writes beside them. No code reads it, so
+# it is workstation state, not source.
 mlruns/
+mlflow.db
