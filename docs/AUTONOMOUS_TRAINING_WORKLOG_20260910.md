@@ -700,6 +700,10 @@ source-safe val 的 179 個檔案裡**有 58 個是 champion 當初訓練用過�
 
 ## 13. Known risk：Vision gateway 是內網明文 HTTP（2026-09-14）
 
+> `<company-gateway>` 是佔位符。這個 repo 是公開的，內網位址屬於站點組態而不是
+> 原始碼，一律走環境變數；實際位址請看站點的 `.env`。下面的結論與位址無關，
+> 換成任何一台明文 HTTP 的 gateway 都成立。
+
 `bootstrap/vision_client.py` 呼叫的公司 gateway 位於 `http://<company-gateway>:12808`，
 **沒有 TLS**。已實測確認，過程中未關閉、未繞過任何 TLS 設定（驗證全程維持預設）：
 

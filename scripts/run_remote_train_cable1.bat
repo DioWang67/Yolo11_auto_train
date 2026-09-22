@@ -6,11 +6,19 @@ REM  Uploads script + dataset + base model, trains in an ISOLATED venv (so it
 REM  never disturbs the mujoco anaconda env), then pulls the verified ONNX/PT
 REM  pair and its checksum contract back.
 REM
-REM  Usage:   scripts\run_remote_train_cable1.bat
-REM  Override: set REMOTE_HOST / REMOTE_DIR / REMOTE_BASE_PY before running.
+REM  Usage:    set "REMOTE_HOST=user@gpu-box" && scripts\run_remote_train_cable1.bat
+REM  Required: REMOTE_HOST. There is no default: the address of a GPU box is
+REM            site configuration, and this repository is public.
+REM  Override: set REMOTE_DIR / REMOTE_PY before running.
 REM ===========================================================================
 
-if "%REMOTE_HOST%"==""  set "REMOTE_HOST=root@<train-host>"
+if "%REMOTE_HOST%"=="" (
+    echo [ERROR] REMOTE_HOST is not set, and this script carries no default.
+    echo         Set it to the training machine before running, for example:
+    echo             set "REMOTE_HOST=user@gpu-box"
+    endlocal
+    exit /b 2
+)
 if "%REMOTE_DIR%"==""   set "REMOTE_DIR=/root/anaconda3/yolo11_cable1_train"
 REM yolo_train_env already has ultralytics 8.3.56 + torch CUDA on the GPU box.
 if "%REMOTE_PY%"==""    set "REMOTE_PY=/root/anaconda3/envs/yolo_train_env/bin/python"
