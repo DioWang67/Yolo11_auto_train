@@ -2,6 +2,7 @@
 # Keep these pins aligned with requirements-dev.txt. The remaining runtime
 # dependencies retain their project constraints so pip can select Python 3.10
 # compatible wheels.
+anyio==4.12.0
 fastapi==0.128.0
 httpx==0.28.1
 pytest==9.0.2
