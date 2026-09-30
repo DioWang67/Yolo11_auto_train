@@ -48,7 +48,9 @@ from picture_tool.autotrain.class_schema import ClassSchema
 LOGGER = logging.getLogger(__name__)
 
 MANIFEST_FILENAME = "golden_manifest.json"
-MANIFEST_SCHEMA_VERSION = 1
+#: 2 added ``files``: every image file with its label's hash. Schema 1 locked
+#: image bytes only, so a rewritten label or an added image passed as OK.
+MANIFEST_SCHEMA_VERSION = 2
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 
 #: No golden set has been configured. Evaluation still runs; promotion cannot.
@@ -92,6 +94,9 @@ class GoldenDataset:
     #: who assembled the set said which is which. Absent means unsplit.
     groups: Mapping[str, str] = field(default_factory=dict)
     schema_version: int = MANIFEST_SCHEMA_VERSION
+    #: Every image file (relative path) with its own hash and its label's,
+    #: ``None`` where the image had no label file --- a background image.
+    files: Mapping[str, Mapping[str, str | None]] = field(default_factory=dict)
 
     @property
     def image_count(self) -> int:
@@ -212,6 +217,14 @@ def register(
         raise GoldenDatasetError(
             f"No images found under {directory}; nothing to register."
         )
+    files = _hash_files(directory)
+    conflicts = _conflicting_duplicates(files)
+    if conflicts:
+        raise GoldenDatasetError(
+            "The same image appears more than once with different labels, so "
+            "this set would hold two answers for one question: "
+            + "; ".join(conflicts)
+        )
 
     resolved_groups = _intersect_groups(groups, images)
 
@@ -224,9 +237,13 @@ def register(
         "image_count": len(images),
         "class_schema": class_schema.to_dict(),
         "groups": dict(sorted(resolved_groups.items())),
+        "files": {relative: dict(entry) for relative, entry in sorted(files.items())},
     }
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-    manifest_path.write_text(serialized, encoding="utf-8")
+    # Bytes, not text: write_text would turn every newline into CRLF on
+    # Windows, and the pinned manifest_sha256 would then differ from what
+    # Get-FileHash reports for the very same file.
+    manifest_path.write_bytes(serialized.encode("utf-8"))
 
     return GoldenDataset(
         root=directory,
@@ -239,6 +256,7 @@ def register(
         description=description,
         class_schema=class_schema,
         groups=resolved_groups,
+        files=files,
     )
 
 
@@ -310,6 +328,11 @@ def resolve(
         ),
         groups={str(k): str(v) for k, v in (payload.get("groups") or {}).items()},
         schema_version=int(payload.get("schema_version", 0)),
+        files={
+            str(relative): dict(entry)
+            for relative, entry in (payload.get("files") or {}).items()
+            if isinstance(entry, dict)
+        },
     )
 
     expected = expected_manifest_sha256.strip()
@@ -353,8 +376,18 @@ def resolve(
 
 
 def verify_content(dataset: GoldenDataset) -> tuple[str, ...]:
-    """Re-hash the registered images and report any drift."""
+    """Re-hash the registered images and labels and report any drift.
+
+    Evaluation reads the whole directory, not the manifest, so every way the
+    measured set can differ from the registered one is drift: an image or a
+    label rewritten, deleted or newly added.
+    """
     problems: list[str] = []
+    if dataset.schema_version < 2:
+        problems.append(
+            f"manifest schema {dataset.schema_version} locks image bytes only; "
+            "re-register the set so its labels are locked too"
+        )
     for sample_id, relative in sorted(dataset.images.items()):
         path = dataset.root / relative
         if not path.is_file():
@@ -365,7 +398,9 @@ def verify_content(dataset: GoldenDataset) -> tuple[str, ...]:
             problems.append(f"registered image could not be read: {relative}")
         elif actual != sample_id:
             problems.append(f"registered image changed on disk: {relative}")
-    return tuple(problems)
+    if dataset.schema_version >= 2:
+        problems.extend(_file_drift(dataset.files, _hash_files(dataset.root)))
+    return tuple(dict.fromkeys(problems))
 
 
 def contamination(
@@ -425,6 +460,71 @@ def _hash_images(root: Path) -> dict[str, str]:
             continue
         images[digest] = path.relative_to(root).as_posix()
     return images
+
+
+def _label_path(root: Path, image_relative: str) -> Path:
+    """Where Ultralytics looks for an image's label: images/ becomes labels/."""
+    parts = list(Path(image_relative).parts)
+    if "images" in parts:
+        index = len(parts) - 1 - parts[::-1].index("images")
+        parts[index] = "labels"
+    return (root.joinpath(*parts)).with_suffix(".txt")
+
+
+def _hash_files(root: Path) -> dict[str, dict[str, str | None]]:
+    """Every image file under ``root`` with its hash and its label's."""
+    files: dict[str, dict[str, str | None]] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        relative = path.relative_to(root).as_posix()
+        label = _label_path(root, relative)
+        files[relative] = {
+            "image_sha256": _sha256_file(path),
+            "label_sha256": _sha256_file(label) if label.is_file() else None,
+        }
+    return files
+
+
+def _conflicting_duplicates(files: Mapping[str, Mapping[str, str | None]]) -> list[str]:
+    """Byte-identical images whose labels disagree."""
+    by_image: dict[str, list[tuple[str, str | None]]] = {}
+    for relative, entry in files.items():
+        by_image.setdefault(str(entry["image_sha256"]), []).append(
+            (relative, entry["label_sha256"])
+        )
+    return [
+        " = ".join(relative for relative, _ in group)
+        for group in by_image.values()
+        if len({label for _, label in group}) > 1
+    ]
+
+
+def _file_drift(
+    registered: Mapping[str, Mapping[str, str | None]],
+    current: Mapping[str, Mapping[str, str | None]],
+) -> list[str]:
+    problems: list[str] = []
+    for relative, entry in sorted(registered.items()):
+        now = current.get(relative)
+        if now is None:
+            # Worded as the image check words it, so a file both checks see
+            # is reported once; this one also catches a deleted second copy
+            # of a duplicated image, which the image check cannot see.
+            problems.append(f"registered image is missing: {relative}")
+            continue
+        if now["label_sha256"] != entry.get("label_sha256"):
+            if entry.get("label_sha256") is None:
+                problems.append(f"a label was added for {relative}")
+            elif now["label_sha256"] is None:
+                problems.append(f"the label of {relative} was deleted")
+            else:
+                problems.append(f"the label of {relative} changed on disk")
+    for relative in sorted(set(current) - set(registered)):
+        problems.append(
+            f"unregistered image added: {relative} (evaluation would measure it)"
+        )
+    return problems
 
 
 def _sha256_file(path: Path) -> str | None:

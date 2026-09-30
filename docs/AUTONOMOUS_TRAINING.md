@@ -247,7 +247,11 @@ picture-tool-autotrain golden register D:\golden\Cable1_A --registered-by <姓�
 picture-tool-autotrain golden check
 ```
 
-註冊後內容被鎖定：manifest 或任何一張影像變動都會判為 `MISMATCH`；
+註冊後內容被鎖定：manifest、任何一張影像、**任何一個標註檔**變動（改寫、刪除、補上），
+或目錄裡**多出一張未註冊的影像**，都會判為 `MISMATCH`——評測讀的是整個目錄，不是 manifest，
+所以多出來的圖會被算進分數。同一張影像以不同檔名出現、標註卻不一樣時，**拒絕註冊**：
+一把尺不能對同一個問題有兩個答案。註冊印出的 `manifest_sha256` 就是 manifest 檔本身的雜湊，
+可以直接用 `Get-FileHash` 核對。舊版（schema 1，只鎖影像）的 manifest 需要重新註冊；
 與訓練資料重疊（以影像 SHA-256 比對，改檔名藏不住）判為 `CONTAMINATED`。
 要讓 golden set 能算 detection 指標，目錄裡需要一份 `data.yaml` 與標註；
 沒有時會跳過 golden 比較並記錄原因，而不是假裝跑過。

@@ -203,16 +203,108 @@ def test_a_deleted_image_fails(tmp_path):
     assert any("is missing" in problem for problem in status.problems)
 
 
-def test_an_added_image_does_not_silently_join_the_golden_set(tmp_path):
-    """Growth must go through registration, so the pinned hash still means something."""
+def test_an_added_image_is_drift_because_evaluation_would_measure_it(tmp_path):
+    """Growth must go through registration, so the pinned hash still means something.
+
+    This once resolved OK on the grounds that the manifest did not list the
+    new file --- but evaluation reads the directory, not the manifest, so the
+    added image was measured while the status said nothing had changed.
+    """
     root, dataset = _registered(tmp_path)
     (root / "c.jpg").write_bytes(b"image-c")
 
     status = golden.resolve(str(root), dataset.manifest_sha256)
 
-    assert status.status == OK
-    assert status.dataset.image_count == 2
-    assert "c.jpg" not in status.dataset.images.values()
+    assert status.status == MISMATCH
+    assert any("unregistered image added: c.jpg" in p for p in status.problems)
+
+
+def _registered_with_labels(tmp_path):
+    return _registered(
+        tmp_path,
+        {
+            "images/val/a.jpg": b"image-a",
+            "labels/val/a.txt": b"0 0.5 0.5 0.2 0.2\n",
+            "images/val/b.jpg": b"image-b",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("rewrite", "the label of images/val/a.jpg changed on disk"),
+        ("delete", "the label of images/val/a.jpg was deleted"),
+        ("add", "a label was added for images/val/b.jpg"),
+    ],
+)
+def test_a_label_changed_after_registration_is_drift(tmp_path, change, expected):
+    """The labels are the answers; locking only the questions locked nothing."""
+    root, dataset = _registered_with_labels(tmp_path)
+    if change == "rewrite":
+        (root / "labels/val/a.txt").write_text("3 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    elif change == "delete":
+        (root / "labels/val/a.txt").unlink()
+    else:
+        (root / "labels/val/b.txt").write_text("1 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+
+    status = golden.resolve(str(root), dataset.manifest_sha256)
+
+    assert status.status == MISMATCH
+    assert expected in status.problems
+
+
+def test_one_image_with_two_different_labels_cannot_be_registered(tmp_path):
+    """Public datasets contain these; a yardstick cannot hold two answers."""
+    root = _golden_dir(
+        tmp_path,
+        {
+            "images/val/a.jpg": b"same-pixels",
+            "labels/val/a.txt": b"0 0.5 0.5 0.2 0.2\n",
+            "images/val/a_copy.jpg": b"same-pixels",
+            "labels/val/a_copy.txt": b"2 0.5 0.5 0.2 0.2\n",
+        },
+    )
+
+    with pytest.raises(GoldenDatasetError, match="different labels"):
+        golden.register(root, class_schema=SCHEMA, registered_by="engineer")
+
+
+def test_a_deleted_second_copy_of_a_duplicate_is_drift(tmp_path):
+    root, dataset = _registered(
+        tmp_path, {"a.jpg": b"same-pixels", "a_copy.jpg": b"same-pixels"}
+    )
+    (root / "a_copy.jpg").unlink()
+
+    status = golden.resolve(str(root), dataset.manifest_sha256)
+
+    assert status.status == MISMATCH
+    assert "registered image is missing: a_copy.jpg" in status.problems
+
+
+def test_the_pinned_hash_is_the_file_hash(tmp_path):
+    """So Get-FileHash / sha256sum on the manifest confirms the pin by hand."""
+    import hashlib
+
+    _root, dataset = _registered(tmp_path)
+
+    assert hashlib.sha256(dataset.manifest_path.read_bytes()).hexdigest() == (
+        dataset.manifest_sha256
+    )
+
+
+def test_a_schema_1_manifest_must_be_registered_again(tmp_path):
+    root, dataset = _registered(tmp_path)
+    manifest = root / "golden_manifest.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["schema_version"] = 1
+    payload.pop("files")
+    manifest.write_bytes(json.dumps(payload).encode("utf-8"))
+
+    status = golden.resolve(str(root))
+
+    assert status.status == MISMATCH
+    assert any("re-register" in p for p in status.problems)
 
 
 # ---------------------------------------------------------------------------

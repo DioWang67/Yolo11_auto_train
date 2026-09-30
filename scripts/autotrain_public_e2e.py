@@ -455,6 +455,15 @@ def build_golden(
     pairs: list[tuple[Path, Path]], names: list[str], sandbox: Path
 ) -> tuple[Path, str]:
     root = sandbox / "golden" / "public_test"
+    # african-wildlife's test split holds byte-identical images under
+    # different names, three of them with contradicting labels. Registration
+    # refuses those, so every repeated image is left out of the yardstick.
+    import hashlib
+    from collections import Counter
+
+    digests = [hashlib.sha256(image.read_bytes()).hexdigest() for image, _ in pairs]
+    repeated = {digest for digest, count in Counter(digests).items() if count > 1}
+    pairs = [pair for pair, digest in zip(pairs, digests) if digest not in repeated]
     write_yolo_dir(pairs, root, "val", "golden")
     # The evaluator measures the golden set on split 'val'.
     write_data_yaml(root, names, train="images/val", val="images/val")
