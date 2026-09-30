@@ -11,7 +11,7 @@ from picture_tool.train.anomalib_trainer import (
     package_anomalib_run,
     train_anomalib,
 )
-from picture_tool.train.yolo_trainer import train_yolo
+from picture_tool.train.yolo_trainer import train_yolo, training_config_hash
 from picture_tool.eval.yolo_evaluator import evaluate_yolo
 from picture_tool.position import load_position_config, run_position_validation
 from picture_tool.position.position_gate import (
@@ -29,7 +29,7 @@ from picture_tool.tasks.bundle import rewrite_detection_config
 from picture_tool.utils.onnx_exporter import OnnxExporter
 from picture_tool.position.position_config_gen import PositionConfigGenerator
 from picture_tool.utils.detection_config import DetectionConfigExporter
-from picture_tool.utils.hashing import compute_dir_hash, compute_config_hash
+from picture_tool.utils.hashing import compute_dir_hash
 from picture_tool.quality.dataset_readiness import validate_training_dataset
 from picture_tool.constants import DEFAULT_RUNS_DIR, DEFAULT_SPLITS_DIR
 
@@ -573,7 +573,7 @@ def skip_yolo_train(config, args):
 
         dataset_dir = Path(str(y.get("dataset_dir", DEFAULT_SPLITS_DIR))).resolve()
         current_data_hash = compute_dir_hash(dataset_dir)
-        current_cfg_hash = compute_config_hash(y)
+        current_cfg_hash = training_config_hash(y)
 
         if (
             stored_meta.get("dataset_hash") == current_data_hash
@@ -581,12 +581,17 @@ def skip_yolo_train(config, args):
             and (run_dir / "weights" / "best.pt").exists()
         ):
             return f"Skipping training: dataset and config match last run ({run_dir.name})."
+        # A run that recorded its hashes has answered the question: they
+        # differ, so it is stale. Falling through to the mtime check here
+        # would skip training after any config change on unchanged data.
+        if stored_meta.get("dataset_hash") or stored_meta.get("config_hash"):
+            return None
 
     except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError, OSError):
         # Fallback to mtime if hash check fails or file corrupt
         pass
 
-    # Legacy mtime fallback
+    # Legacy mtime fallback, for runs whose metadata predates the hashes
     weights = run_dir / "weights" / "best.pt"
     dataset_dir = Path(str(y.get("dataset_dir", DEFAULT_SPLITS_DIR)))
     auto_conf = run_dir / "auto_position_config.yaml"

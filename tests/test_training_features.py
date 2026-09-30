@@ -42,6 +42,73 @@ class TestYoloTrainingFunctionality:
         assert params["mosaic"] == 0.0
         assert params["warmup_epochs"] == 1.0
 
+    @staticmethod
+    def _train_arguments(tmp_path, monkeypatch, **yolo_training):
+        """Run train_yolo against a fake Ultralytics; return what train() got."""
+        from picture_tool.train.yolo_trainer import train_yolo
+
+        dataset_dir = tmp_path / "dataset"
+        for split in ("train", "val"):
+            (dataset_dir / split / "images").mkdir(parents=True)
+        run_dir = tmp_path / "runs" / "train"
+        (run_dir / "weights").mkdir(parents=True)
+        model = MagicMock()
+        model.train.return_value = SimpleNamespace(save_dir=run_dir)
+        monkeypatch.setattr(
+            "picture_tool.train.yolo_trainer.YOLO", MagicMock(return_value=model)
+        )
+        config = {
+            "yolo_training": {
+                "dataset_dir": str(dataset_dir),
+                "class_names": ["red"],
+                "epochs": 1,
+                "project": str(tmp_path / "runs"),
+                "name": "train",
+                **yolo_training,
+            }
+        }
+        train_yolo(config, logger=logging.getLogger("test"), args=SimpleNamespace())
+        return model.train.call_args.kwargs
+
+    def test_configured_augmentation_reaches_ultralytics(self, tmp_path, monkeypatch):
+        recipe = {
+            "hsv_h": 0.0,
+            "hsv_s": 0.0,
+            "hsv_v": 0.0,
+            "degrees": 0.0,
+            "translate": 0.0,
+            "scale": 0.0,
+            "erasing": 0.0,
+        }
+
+        arguments = self._train_arguments(tmp_path, monkeypatch, **recipe)
+
+        assert {key: arguments.get(key) for key in recipe} == recipe
+
+    def test_unset_augmentation_keeps_ultralytics_defaults(self, tmp_path, monkeypatch):
+        from picture_tool.train.yolo_trainer import AUGMENTATION_ARGUMENTS
+
+        arguments = self._train_arguments(tmp_path, monkeypatch)
+
+        assert not {key for key, _ in AUGMENTATION_ARGUMENTS} & set(arguments)
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("hsv_s", 1.5),
+            ("translate", -0.1),
+            ("perspective", 0.01),
+            ("hsv_h", float("nan")),
+        ],
+    )
+    def test_out_of_range_augmentation_is_refused(self, tmp_path, key, value):
+        from picture_tool.train.yolo_trainer import _parse_yolo_config
+
+        with pytest.raises(ValueError, match=key):
+            _parse_yolo_config(
+                {"yolo_training": {"dataset_dir": str(tmp_path), key: value}}
+            )
+
     def test_training_workflow_executes(self, tmp_path, monkeypatch):
         """功能：执行完整的训练工作流"""
         from picture_tool.train.yolo_trainer import train_yolo

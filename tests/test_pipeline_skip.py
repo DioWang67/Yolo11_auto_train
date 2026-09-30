@@ -510,6 +510,66 @@ def test_should_skip_yolo_train_when_weights_fresh(base_config, temp_dirs):
     assert reason is not None
 
 
+def _record_run(temp_dirs, config_hash: str) -> None:
+    """Leave a finished run whose weights are newer than its dataset."""
+    import json
+    import time
+
+    from picture_tool.utils.hashing import compute_dir_hash
+
+    time.sleep(1.1)
+    (temp_dirs["runs"] / "weights" / "best.pt").touch()
+    (temp_dirs["runs"] / "last_run_metadata.json").write_text(
+        json.dumps(
+            {
+                "dataset_hash": compute_dir_hash(temp_dirs["split"].resolve()),
+                "config_hash": config_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_recorded_config_change_retrains_despite_newer_weights(base_config, temp_dirs):
+    # The fixture's run also has auto_position_config.yaml, so the mtime
+    # fallback would call it fresh; the recorded hashes must win.
+    _record_run(temp_dirs, config_hash="config-of-an-earlier-run")
+
+    assert training.skip_yolo_train(base_config, SimpleNamespace(force=False)) is None
+
+
+def test_matching_recorded_hashes_still_skip(base_config, temp_dirs):
+    from picture_tool.train.yolo_trainer import training_config_hash
+
+    _record_run(temp_dirs, training_config_hash(base_config["yolo_training"]))
+
+    reason = training.skip_yolo_train(base_config, SimpleNamespace(force=False))
+
+    assert reason is not None
+    assert "match last run" in reason
+
+
+def test_run_cached_before_augmentation_was_forwarded_is_not_reused(
+    base_config, temp_dirs
+):
+    """Same config text, different training: the old key must not match."""
+    from picture_tool.utils.hashing import compute_config_hash
+
+    base_config["yolo_training"]["hsv_h"] = 0.0
+    _record_run(temp_dirs, compute_config_hash(base_config["yolo_training"]))
+
+    assert training.skip_yolo_train(base_config, SimpleNamespace(force=False)) is None
+
+
+def test_config_without_augmentation_keeps_its_cache_key(base_config):
+    from picture_tool.train.yolo_trainer import training_config_hash
+    from picture_tool.utils.hashing import compute_config_hash
+
+    section = base_config["yolo_training"]
+
+    assert training_config_hash(section) == compute_config_hash(section)
+
+
 def test_completed_operator_checkpoint_skips_training_despite_config_change(
     base_config, tmp_path
 ):

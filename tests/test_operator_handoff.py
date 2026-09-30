@@ -541,6 +541,37 @@ def test_schema3_handoff_rejects_unaccounted_job_sample(tmp_path: Path) -> None:
         load_operator_handoff(handoff_path, training_root=training_root)
 
 
+def test_handoff_colour_safe_recipe_is_forwarded_to_ultralytics(
+    tmp_path: Path,
+) -> None:
+    """The recipe has to survive the trainer's parsing, not only the config.
+
+    The recipe below always sat in the prepared config and was asserted
+    there, while the trainer forwarded none of it --- every operator run
+    trained with Ultralytics' default colour jitter.
+    """
+    from picture_tool.train.yolo_trainer import _parse_yolo_config
+
+    training_root = tmp_path / "train"
+    handoff = load_operator_handoff(
+        _write_schema3_handoff(training_root), training_root=training_root
+    )
+    prepared = apply_handoff_to_config(
+        {"yolo_training": {"class_names": ["Black"]}},
+        materialize_job_dataset_snapshot(handoff),
+    )
+
+    assert _parse_yolo_config(prepared)["augmentation"] == {
+        "hsv_h": 0.0,
+        "hsv_s": 0.0,
+        "hsv_v": 0.0,
+        "degrees": 0.0,
+        "translate": 0.0,
+        "scale": 0.0,
+        "erasing": 0.0,
+    }
+
+
 def test_schema3_snapshot_is_immutable_and_used_by_training_config(
     tmp_path: Path,
 ) -> None:

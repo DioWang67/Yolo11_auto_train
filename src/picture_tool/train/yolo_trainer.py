@@ -1,10 +1,11 @@
 import logging
 import json
+import math
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Mapping, Optional
 
 import yaml
 from picture_tool.utils.experiment import write_experiment
@@ -79,6 +80,57 @@ def _ensure_data_yaml(
     return out_path
 
 
+#: Ultralytics augmentation arguments, each with its accepted upper bound.
+#: They are forwarded only when configured, so a config that sets none trains
+#: on Ultralytics' own defaults exactly as before. Until they were forwarded
+#: at all, a recipe could state ``hsv_h: 0`` and pass every test that read the
+#: config while Ultralytics still trained with hue/saturation/value jitter:
+#: only the arguments spelled out in ``train_yolo`` ever reached ``train()``.
+AUGMENTATION_ARGUMENTS: tuple[tuple[str, float], ...] = (
+    ("hsv_h", 1.0),
+    ("hsv_s", 1.0),
+    ("hsv_v", 1.0),
+    ("degrees", 180.0),
+    ("translate", 1.0),
+    ("scale", 1.0),
+    ("shear", 180.0),
+    ("perspective", 0.001),
+    ("flipud", 1.0),
+    ("mixup", 1.0),
+    ("copy_paste", 1.0),
+    ("erasing", 1.0),
+)
+
+
+def _parse_augmentation_arguments(ycfg: Mapping[str, Any]) -> dict[str, float]:
+    parsed: dict[str, float] = {}
+    for key, upper in AUGMENTATION_ARGUMENTS:
+        raw = ycfg.get(key)
+        if raw is None:
+            continue
+        value = float(raw)
+        if not (math.isfinite(value) and 0.0 <= value <= upper):
+            raise ValueError(f"yolo_training.{key} must be between 0 and {upper}")
+        parsed[key] = value
+    return parsed
+
+
+def training_config_hash(yolo_training: Mapping[str, Any]) -> str:
+    """Skip-cache key for a ``yolo_training`` section.
+
+    The key hashes the configured section, but what decides the weights is
+    what reached Ultralytics. Augmentation keys sat in operator configs long
+    before they were forwarded, so a run cached under the old forwarding
+    hashes the same as a config that would now train differently. Marking
+    sections that set any of them keeps those runs from matching; a section
+    that sets none trains exactly as before and keeps its old key.
+    """
+    section = dict(yolo_training)
+    if any(section.get(key) is not None for key, _ in AUGMENTATION_ARGUMENTS):
+        section["_augmentation_forwarded"] = True
+    return compute_config_hash(section)
+
+
 def _parse_yolo_config(config: dict) -> dict:
     """Extract and validate basic YOLO configurations."""
     ycfg = config.get("yolo_training", {})
@@ -109,6 +161,7 @@ def _parse_yolo_config(config: dict) -> dict:
             ycfg.get("resume_completed_before_run") or 0
         ),
         "resume_native": bool(ycfg.get("resume_native", False)),
+        "augmentation": _parse_augmentation_arguments(ycfg),
     }
     for field in ("epochs", "imgsz", "batch", "patience"):
         if params[field] <= 0:
@@ -388,6 +441,7 @@ def train_yolo(
         "close_mosaic": params["close_mosaic"],
         "cos_lr": params["cos_lr"],
         "warmup_epochs": params["warmup_epochs"],
+        **params["augmentation"],
     }
     if resume_checkpoint and native_resume:
         training_arguments["resume"] = True
@@ -443,7 +497,7 @@ def train_yolo(
     # Record Robust Caching Metadata
     try:
         data_hash = compute_dir_hash(params["dataset_dir"])
-        cfg_hash = compute_config_hash(config.get("yolo_training", {}))
+        cfg_hash = training_config_hash(config.get("yolo_training", {}))
         metadata = {
             "dataset_hash": data_hash,
             "config_hash": cfg_hash,
