@@ -1582,3 +1582,57 @@ sandbox 在 `D:	mputotrain_cli_sandbox`（`setup_sandbox.py` 只搭使用者本
 可以：`import-folder` → `cycle` 兩個指令。仍然存在的限制：沒有 golden 時每輪 REJECTED（刻意）；
 這台機器 CPU 訓練會隨機 segfault，cycle 的 train 步驟中斷後能否續跑未驗證；CLI 需要 `typer`，
 系統 Python 沒有裝；§23 的第 3–5 項未修。
+
+## 26. 放進資料夾、一個指令跑完（2026-09-30）
+
+使用者的目標：「data 放入指定路徑，可以從頭跑到尾」。三個 commit：
+
+- `181911d`：**`device: auto` 在 ultralytics 8.3 直接報錯**（`Invalid CUDA 'device=auto'`）——
+  出廠設定照跑，站別第一次訓練就會失敗；之前所有測試都手寫 `cpu` 所以沒發現。
+  另外讓訓練中途當掉的 cycle 能接著跑：原本重跑同一 cycle 會卡在 registry「already registered」，
+  改成沿用仍在 TRAINING 的登記；trainer 找到死在同一份 data.yaml、同樣 epoch 總數的那次
+  run（有 `last.pt`、沒有 `last_run_metadata.json`），用 ultralytics 原生 resume 接續。
+  工作副本保留 mtime，所以增強與切分被快取跳過，續訓用的是同一份 split。
+- `a57a97f`：golden 內的影像從「整批拒絕」改為**排除並列出**（`excluded_golden`）。
+  唯一的補救就是移掉它們，由匯入代做不損失任何東西；整批都是 golden 才拒絕。
+- `6a63b3f`：`picture-tool-autotrain run`（無 typer 時 `python -m picture_tool.autotrain.runner`）。
+  用法與每種情況的反應寫在 `AUTONOMOUS_TRAINING.md` §3.0。設計上值得記的四點：
+  1. **cycle 在子程序跑**：segfault 會帶走整個程序。子程序死掉且 `cycle.json` 有步驟停在
+     RUNNING（當機的痕跡）才重試；cycle 自己記下的 FAILED 是真錯誤，不重試。
+  2. **觸發條件是「有已確認標註不在最新資料集版本裡」**，不是「有新批次」——
+     用 `labeling import` 進來的、或某次 run 忙著續跑舊 cycle 時才匯入的，都不會漏訓。
+  3. **一次只能一個 run**（`autotrain_store_lock(name="runner", timeout=0)`）：排程在長時間訓練
+     中又觸發時，否則會把正在跑的 cycle 當成中斷的再續跑一次。程序死掉時 OS 會釋放鎖。
+  4. 站別還收不了（沒有 champion ⇒ 沒有類別契約）的批次**留在 inbox**，不移到 rejected——
+     內容沒有錯，站別準備好後下次 run 自然會處理。這是寫測試時才發現的：原本會讓整個 run 崩掉。
+
+### 真跑驗證（公開資料 sandbox，只用 CLI）
+
+300 張已標註影像放進 inbox → 一個 `run`：3 張 golden 重複自動排除、297 匯入並歸檔到
+`processed/`；**訓練子程序在第 2 epoch 57% 被強制殺掉**；監督者看到 train 停在 RUNNING，
+開第 2 次嘗試，增強與切分被快取跳過，ultralytics「Resuming … from epoch 2 to 3」寫回同一個
+run 目錄；golden OK，PROMOTION_CANDIDATE，exit 0。緊接著再跑一次 `run`：3 秒、什麼都不做。
+系統 Python（沒有 typer）走 `python -m picture_tool.autotrain.runner` 也正常。
+
+全套 1658 passed／6 skipped、coverage 81.99%、ruff（src＋tests）／mypy clean；overlay venv 下 CLI 19 passed。
+
+### 真跑驗證（真實 Cable1/A 的 sandbox 複本）
+
+`D:	mputotrain_cable1_sandbox`：複製真實 champion（v1.0.6 的 `.training.pt`／`.onnx`、
+manifest、config），inbox 放 operator handoff job `20260727T060103Z` 的 46 張已標註原圖，
+設定用出廠值（**`device: auto`**、imgsz 640、batch 4），只把 epochs 降到 2、變體降到 3。
+真實 store 與 `yolo11_inference` 只讀。
+
+結果：46 張匯入，類別清單與 champion checkpoint 的 5 色契約一致；`auto` 解析成 `device=cpu`；
+AdamW／lr0 0.0005／freeze 10／hsv 0；split 內原圖 32／7／7；一次完成（這次沒有 segfault）；
+決策 **REJECTED**，唯一理由是 golden `NOT_CONFIGURED`——刻意的 fail-closed。
+指標全在天花板（這 46 張正是 champion 自己的訓練資料），不代表任何品質結論。
+
+### 真實站別要用起來，還差的三件事（都是人的決定，程式沒有替你做）
+
+1. `configs/autonomous_training.yaml` 設 `enabled: true`（出廠刻意關閉，這次沒有動它）。
+2. 註冊 golden（review pack 標完 → `golden register-from-review`），否則每輪都是 REJECTED。
+3. 執行環境要有 `typer`（`pyproject.toml` 與 `requirements.txt` 都宣告了 `typer==0.21.0`，
+   系統 Python 少裝了）；或直接用 `python -m picture_tool.autotrain.runner`，不需要 typer。
+
+出廠訓練設定（50 epochs、20 變體、640）在這台 CPU 上一輪會是數小時等級；patience 20 可能提早停。
