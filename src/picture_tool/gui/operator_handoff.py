@@ -18,6 +18,10 @@ from typing import Any
 import yaml
 
 from picture_tool.pending_annotations import validate_yolo_label_text
+from picture_tool.train.finetune_recipe import (
+    apply_colour_safe_augmentation,
+    apply_finetune_training,
+)
 from picture_tool.workspace_paths import (
     WorkspaceConfigurationError,
     WorkspacePaths,
@@ -838,36 +842,14 @@ def _configure_operator_yolo_augmentation(
     augmentation_cfg.setdefault("output", {}).update(
         {"image_dir": str(processed_images), "label_dir": str(processed_labels)}
     )
-    processing = augmentation_cfg.setdefault("processing", {})
-    processing.setdefault("num_workers", 2)
-    # Debug mode intentionally processes only one source image in the legacy
-    # augmentor, so it must never leak into an operator retraining job.
-    processing["debug_mode"] = False
-    policy = augmentation_cfg.setdefault("augmentation", {})
-    policy["num_images"] = options.augmentations_per_image
-    policy["include_originals"] = True
-    policy["target_size"] = options.imgsz
-    policy.setdefault("num_operations", [2, 3])
-    operations = policy.setdefault("operations", {})
-    if not isinstance(operations, dict):
-        raise OperatorHandoffError(
-            "yolo_augmentation.augmentation.operations must be a mapping."
+    try:
+        apply_colour_safe_augmentation(
+            augmentation_cfg,
+            imgsz=options.imgsz,
+            augmentations_per_image=options.augmentations_per_image,
         )
-    safe_defaults: dict[str, dict[str, Any]] = {
-        "blur": {"kernel": [0, 1]},
-        "contrast": {"range": [0.92, 1.08]},
-        "multiply": {"range": [0.88, 1.15]},
-        "noise": {"scale": [0, 0.02]},
-        "rotate": {"angle": [-2, 2]},
-        "scale": {"range": [0.97, 1.03]},
-    }
-    for operation, values in safe_defaults.items():
-        operations.setdefault(operation, values)
-    # Wire color is a class signal. Hue, mirroring, and perspective changes
-    # are intentionally disabled even if a generic project preset enables them.
-    operations.pop("hue", None)
-    operations["flip"] = {"probability": 0.0}
-    operations["perspective"] = {"scale": [0.0, 0.0]}
+    except ValueError as exc:
+        raise OperatorHandoffError(str(exc)) from exc
     return processed_images, processed_labels
 
 
@@ -1151,29 +1133,11 @@ def apply_handoff_to_config(
     if deployed_training_weight is not None:
         training_cfg["model"] = str(deployed_training_weight)
     configured_epochs = handoff.training_options.epochs
-    training_cfg.update(
-        {
-            "epochs": configured_epochs,
-            "batch": handoff.training_options.batch,
-            "imgsz": handoff.training_options.imgsz,
-            "optimizer": "AdamW",
-            "lr0": min(float(training_cfg.get("lr0", 0.0005)), 0.0005),
-            "lrf": float(training_cfg.get("lrf", 0.1)),
-            "patience": min(max(configured_epochs // 2, 5), 20),
-            "freeze": training_cfg.get("freeze", 10),
-            "mosaic": 0.0,
-            "fliplr": 0.0,
-            "close_mosaic": 0,
-            "hsv_h": 0.0,
-            "hsv_s": 0.0,
-            "hsv_v": 0.0,
-            "degrees": 0.0,
-            "translate": 0.0,
-            "scale": 0.0,
-            "erasing": 0.0,
-            "cos_lr": True,
-            "warmup_epochs": min(float(training_cfg.get("warmup_epochs", 1.0)), 1.0),
-        }
+    apply_finetune_training(
+        training_cfg,
+        epochs=configured_epochs,
+        batch=handoff.training_options.batch,
+        imgsz=handoff.training_options.imgsz,
     )
     completed_checkpoint = _find_completed_job_checkpoint(
         handoff,

@@ -38,6 +38,10 @@ import yaml
 from picture_tool.autotrain import AutoTrainError
 from picture_tool.autotrain.class_schema import ClassSchema, validate_label_class_ids
 from picture_tool.autotrain.dataset_versions import DatasetVersion
+from picture_tool.train.finetune_recipe import (
+    apply_colour_safe_augmentation,
+    apply_finetune_training,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -160,7 +164,7 @@ def build_candidate_config(
         "image_dir": str(processed_images),
         "label_dir": str(processed_labels),
     }
-    _force_colour_safe_augmentation(augmentation)
+    apply_colour_safe_augmentation(augmentation, imgsz=imgsz)
 
     split = config.setdefault("train_test_split", {})
     split["input"] = {
@@ -173,9 +177,9 @@ def build_candidate_config(
     training["dataset_dir"] = str(split_dir)
     training["class_names"] = list(class_names)
     training["model"] = base_model
-    training["epochs"] = epochs
-    training["imgsz"] = imgsz
-    training["batch"] = batch
+    # The champion's own recipe: a challenger trained any other way would be
+    # measured against it on training differences, not on the new data.
+    apply_finetune_training(training, epochs=epochs, batch=batch, imgsz=imgsz)
     training["device"] = device
     training["project"] = str(run_project)
     training["name"] = run_name
@@ -427,23 +431,6 @@ def _pipeline_args(config_path: Path, overrides: Mapping[str, Any] | None):
     }
     values.update(dict(overrides or {}))
     return type("AutoTrainArgs", (), values)()
-
-
-def _force_colour_safe_augmentation(augmentation: dict[str, Any]) -> None:
-    """Disable augmentations that destroy this domain's class signal.
-
-    Wire colour *is* the label on this station, and orientation carries
-    meaning, so hue shifts, flips and perspective would teach the model that
-    a red wire is sometimes orange. The operator retraining flow already
-    forces exactly this; a challenger trained under looser augmentation would
-    not be comparable to the champion.
-    """
-    operations = augmentation.setdefault("augmentation", {}).setdefault(
-        "operations", {}
-    )
-    operations.setdefault("hue", {})["range"] = [1, 1]
-    operations.setdefault("flip", {})["probability"] = 0.0
-    operations.setdefault("perspective", {})["scale"] = [0, 0]
 
 
 def _run_weight_mtimes(project: Path) -> dict[Path, int]:

@@ -229,9 +229,54 @@ def test_colour_destroying_augmentation_is_forced_off(tmp_path):
     )
 
     operations = config["yolo_augmentation"]["augmentation"]["operations"]
-    assert operations["hue"]["range"] == [1, 1]
+    # Removed, not narrowed: the augmentor reads a hue range as a shift, so
+    # the [1, 1] this test once asserted shifted hue by one step and switched
+    # on saturation/value jitter with it.
+    assert "hue" not in operations
     assert operations["flip"]["probability"] == 0.0
-    assert operations["perspective"]["scale"] == [0, 0]
+    assert operations["perspective"]["scale"] == [0.0, 0.0]
+
+
+def test_the_challenger_trains_on_the_champions_recipe(tmp_path):
+    """Measured against the champion, so trained the way the champion was.
+
+    Before this shared the operator recipe, the challenger ran on Ultralytics'
+    generic defaults: lr0 0.01, nothing frozen, patience 100 against 50
+    epochs, mosaic and mirroring on, and no originals among its images.
+    """
+    config = build_candidate_config(
+        BASE_CONFIG,
+        dataset_version=_dataset_version(tmp_path),
+        work_dir=tmp_path / "work",
+        run_project=tmp_path / "runs",
+        run_name="candidate",
+        base_model="champion.pt",
+        class_names=["Red"],
+        epochs=50,
+        imgsz=640,
+        batch=4,
+        device="cpu",
+    )
+
+    training = config["yolo_training"]
+    assert {
+        key: training[key]
+        for key in (
+            "epochs", "batch", "imgsz", "optimizer", "lr0", "lrf", "patience",
+            "freeze", "mosaic", "fliplr", "close_mosaic", "cos_lr", "warmup_epochs",
+        )
+    } == {
+        "epochs": 50, "batch": 4, "imgsz": 640, "optimizer": "AdamW",
+        "lr0": 0.0005, "lrf": 0.1, "patience": 20, "freeze": 10, "mosaic": 0.0,
+        "fliplr": 0.0, "close_mosaic": 0, "cos_lr": True, "warmup_epochs": 1.0,
+    }
+    for key in ("hsv_h", "hsv_s", "hsv_v", "degrees", "translate", "scale", "erasing"):
+        assert training[key] == 0.0, key
+    policy = config["yolo_augmentation"]["augmentation"]
+    # Without originals an empty label file --- a verified negative ---
+    # yields no variants and never reaches the split.
+    assert policy["include_originals"] is True
+    assert policy["target_size"] == 640
 
 
 def test_position_calibration_stays_out_of_a_challenger_run(tmp_path):
