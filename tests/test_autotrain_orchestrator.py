@@ -511,6 +511,59 @@ def test_a_resumed_cycle_skips_the_steps_it_already_finished(
     assert result.state.step("collect")["finished_at"] == collected_at
 
 
+class _DiesMidTraining:
+    """A runner that takes the process down, as the segfaults on this line do.
+
+    Raising something outside ``Exception`` is the closest a test gets to a
+    killed process: nothing records FAILED, so the step is left RUNNING and
+    the candidate TRAINING, exactly as a real crash leaves them.
+    """
+
+    def __call__(self, tasks, config, logger, args):
+        raise KeyboardInterrupt("process killed mid-training")
+
+
+def test_a_cycle_killed_mid_training_finishes_when_run_again(
+    paths, config, champion, tmp_path
+):
+    _seed_verified_pool(paths, tmp_path)
+    with pytest.raises(KeyboardInterrupt):
+        run_training_cycle(
+            config, paths, cycle_id="cycle_test_crash", runner=_DiesMidTraining()
+        )
+    crashed = TrainingCycle(config, paths, cycle_id="cycle_test_crash")
+    assert crashed.state.step(STEP_TRAIN)["status"] == "RUNNING"
+
+    result = run_training_cycle(
+        config,
+        paths,
+        cycle_id="cycle_test_crash",
+        runner=_FakeRunner(),
+        validator=_validator(champion),
+    )
+
+    assert result.status == COMPLETED
+    models = CandidateRegistry(paths.candidates_root / PRODUCT / AREA).list_models()
+    assert [model.status for model in models] == [PROMOTION_CANDIDATE]
+    assert models[0].notes == "resuming an interrupted attempt"
+
+
+def test_a_recorded_failure_is_not_retried_as_if_it_were_a_crash(
+    paths, config, champion, tmp_path
+):
+    """FAILED was a real error; a rerun of the same cycle must not paper over it."""
+    _seed_verified_pool(paths, tmp_path)
+    with pytest.raises(CycleError):
+        run_training_cycle(
+            config, paths, cycle_id="cycle_test_fail3", runner=_FakeRunner(fail=True)
+        )
+
+    with pytest.raises(CycleError, match="already registered"):
+        run_training_cycle(
+            config, paths, cycle_id="cycle_test_fail3", runner=_FakeRunner()
+        )
+
+
 def test_steps_can_be_run_individually(paths, config, champion, tmp_path):
     _seed_verified_pool(paths, tmp_path)
     cycle = TrainingCycle(

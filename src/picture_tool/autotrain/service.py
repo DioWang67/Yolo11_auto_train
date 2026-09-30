@@ -40,6 +40,7 @@ from picture_tool.autotrain.class_schema import (
     resolve_class_schema,
     schema_from_station_config,
 )
+from picture_tool.autotrain.trainer import resolve_device
 from picture_tool.autotrain.registry import (
     CandidateRegistry,
     read_champion,
@@ -278,7 +279,7 @@ class AutoTrainService:
             data_yaml=data_yaml,
             golden_status=golden_status,
             imgsz=self.config.training.imgsz,
-            device=self.config.training.device,
+            device=resolve_device(self.config.training.device),
             batch=self.config.training.batch,
             validator=validator,
         )

@@ -25,6 +25,7 @@ the classes the line detects today.
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import logging
 import shutil
@@ -317,8 +318,31 @@ def train_candidate(
         epochs=epochs,
         imgsz=imgsz,
         batch=batch,
-        device=device,
+        device=resolve_device(device),
     )
+    interrupted = find_interrupted_run(
+        run_project, run_name, data_yaml=work_dir / "split" / "data.yaml", epochs=epochs
+    )
+    if interrupted is not None:
+        checkpoint, completed = interrupted
+        # Native resume restores the optimizer and schedule from the
+        # checkpoint, so the run finishes as an uninterrupted one would have
+        # instead of paying again for every epoch it already trained.
+        config["yolo_training"].update(
+            {
+                "resume_checkpoint": str(checkpoint),
+                "resume_native": True,
+                "resume_completed_epochs": completed,
+                "resume_completed_before_run": 0,
+            }
+        )
+        log.info(
+            "Resuming %s from %s after %s of %s epochs",
+            model_version,
+            checkpoint,
+            completed,
+            epochs,
+        )
 
     config_path = work_dir / "candidate_pipeline.yaml"
     config_path.write_text(
@@ -449,6 +473,69 @@ def _run_weight_mtimes(project: Path) -> dict[Path, int]:
         for weight in project.glob("*/weights/*.pt")
         if weight.is_file()
     }
+
+
+def resolve_device(device: str) -> str:
+    """Turn the configured ``auto`` into a device Ultralytics accepts.
+
+    ``auto`` is the shipped default, and Ultralytics 8.3 rejects it outright
+    (``Invalid CUDA 'device=auto' requested``), so a station running the
+    default config failed at its first training step on any machine.
+    """
+    if device.strip().lower() != "auto":
+        return device
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - torch is a pinned dependency
+        return "cpu"
+    return "0" if torch.cuda.is_available() else "cpu"
+
+
+def find_interrupted_run(
+    project: Path, name: str, *, data_yaml: Path, epochs: int
+) -> tuple[Path, int] | None:
+    """The newest attempt at this run that died part-way, and its epoch count.
+
+    A run counts only if it trained on this very ``data.yaml`` towards the
+    same epoch total, finished at least one epoch, and never wrote
+    ``last_run_metadata.json`` --- the trainer writes that only on success, so
+    its absence beside a ``last.pt`` is what a crash leaves behind. During
+    training ``last.pt`` still carries the optimizer state native resume needs.
+    """
+    if not project.is_dir():
+        return None
+    expected = data_yaml.resolve()
+    found: list[tuple[int, Path, int]] = []
+    for run_dir in project.iterdir():
+        if not (run_dir.is_dir() and run_dir.name.startswith(name)):
+            continue
+        checkpoint = run_dir / "weights" / "last.pt"
+        args_path = run_dir / "args.yaml"
+        results_path = run_dir / "results.csv"
+        if (run_dir / "last_run_metadata.json").is_file() or not (
+            checkpoint.is_file() and args_path.is_file() and results_path.is_file()
+        ):
+            continue
+        try:
+            recorded = yaml.safe_load(args_path.read_text(encoding="utf-8")) or {}
+            with results_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                completed = max(
+                    (int(float(row.get("epoch") or 0)) for row in csv.DictReader(handle)),
+                    default=0,
+                )
+        except (OSError, UnicodeDecodeError, yaml.YAMLError, TypeError, ValueError):
+            continue
+        if (
+            Path(str(recorded.get("data") or "")).resolve() != expected
+            or int(recorded.get("epochs") or 0) != epochs
+            or not 0 < completed < epochs
+        ):
+            continue
+        found.append((checkpoint.stat().st_mtime_ns, checkpoint, completed))
+    if not found:
+        return None
+    _, checkpoint, completed = max(found, key=lambda item: item[0])
+    return checkpoint, completed
 
 
 def _resolve_run_dir(project: Path, name: str) -> Path:

@@ -52,8 +52,10 @@ from picture_tool.autotrain.registry import (
     PROMOTION_CANDIDATE,
     REJECTED,
     TRAINED,
+    TRAINING,
     CandidateRegistry,
     ChampionModel,
+    ModelRegistryError,
     read_champion,
     read_champion_class_schema,
 )
@@ -66,7 +68,7 @@ from picture_tool.autotrain.class_schema import (
     schema_from_station_config,
 )
 from picture_tool.autotrain.selectors import run_selectors
-from picture_tool.autotrain.trainer import train_candidate
+from picture_tool.autotrain.trainer import resolve_device, train_candidate
 
 LOGGER = logging.getLogger(__name__)
 
@@ -411,21 +413,30 @@ class TrainingCycle:
         base_model = champion.training_weight_path or champion.weights_path
         model_version = f"{self.product}_{self.area}_{self.cycle_id}_candidate"
         registry = self.registry
-        registry.register(
-            model_version,
-            dataset_version=version.version,
-            dataset_content_id=version.content_id,
-            parent_model=champion.model_version,
-            cycle_id=self.cycle_id,
-            class_schema=schema,
-            training_config={
-                "epochs": self.config.training.epochs,
-                "imgsz": self.config.training.imgsz,
-                "batch": self.config.training.batch,
-                "device": self.config.training.device,
-                "base_model": base_model,
-            },
-        )
+        if self._interrupted_registration(model_version):
+            # This cycle's earlier attempt died mid-training (a crash leaves
+            # the step RUNNING and the candidate TRAINING). Registering again
+            # would refuse, so the record is reused and the trainer resumes
+            # the interrupted run.
+            registry.update_status(
+                model_version, TRAINING, notes="resuming an interrupted attempt"
+            )
+        else:
+            registry.register(
+                model_version,
+                dataset_version=version.version,
+                dataset_content_id=version.content_id,
+                parent_model=champion.model_version,
+                cycle_id=self.cycle_id,
+                class_schema=schema,
+                training_config={
+                    "epochs": self.config.training.epochs,
+                    "imgsz": self.config.training.imgsz,
+                    "batch": self.config.training.batch,
+                    "device": self.config.training.device,
+                    "base_model": base_model,
+                },
+            )
         try:
             result = train_candidate(
                 dataset_version=version,
@@ -495,7 +506,7 @@ class TrainingCycle:
                 golden_status=golden_status,
                 confidence=0.4,
                 imgsz=self.config.training.imgsz,
-                device=self.config.training.device,
+                device=resolve_device(self.config.training.device),
                 batch=self.config.training.batch,
                 min_group_samples=self.config.golden.min_group_samples,
                 validator=self.validator,
@@ -633,6 +644,18 @@ class TrainingCycle:
             ],
             context=f"{self.product}/{self.area}",
         )
+
+    def _interrupted_registration(self, model_version: str) -> bool:
+        """Whether this cycle already registered the candidate and then died.
+
+        Only a candidate still in TRAINING qualifies. One that reached FAILED
+        was recorded as a genuine failure, and retrying it would repeat that.
+        """
+        try:
+            existing = self.registry.get(model_version)
+        except ModelRegistryError:
+            return False
+        return existing.status == TRAINING and existing.cycle_id == self.cycle_id
 
     def _training_sample_ids(self) -> tuple[str, ...]:
         version_name = self.state.data.get("dataset_version", "")

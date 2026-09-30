@@ -22,7 +22,9 @@ from picture_tool.autotrain.trainer import (
     TrainingResult,
     assert_no_forbidden_tasks,
     build_candidate_config,
+    find_interrupted_run,
     prepare_work_dir,
+    resolve_device,
     train_candidate,
 )
 from picture_tool.autotrain.class_schema import (
@@ -501,3 +503,104 @@ def test_the_generated_config_is_written_for_traceability(tmp_path):
     assert result.config_path.is_file()
     written = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
     assert written["autotrain"]["dataset_version"] == "dataset_v001"
+
+
+# ---------------------------------------------------------------------------
+# Surviving a crash, and the shipped device default
+
+
+def _leave_crashed_run(work_dir: Path, *, epochs: int, completed: int, name="candidate"):
+    """What a process killed mid-training leaves: last.pt, no success marker."""
+    run_dir = work_dir / "runs" / name
+    (run_dir / "weights").mkdir(parents=True)
+    (run_dir / "weights" / "last.pt").write_bytes(b"mid-training")
+    (run_dir / "args.yaml").write_text(
+        yaml.safe_dump({"data": str(work_dir / "split" / "data.yaml"), "epochs": epochs}),
+        encoding="utf-8",
+    )
+    rows = "".join(f"{epoch},0.5\n" for epoch in range(1, completed + 1))
+    (run_dir / "results.csv").write_text("epoch,loss\n" + rows, encoding="utf-8")
+    return run_dir
+
+
+def test_an_interrupted_run_is_resumed_natively(tmp_path):
+    work_dir = tmp_path / "cycle" / "work"
+    crashed = _leave_crashed_run(work_dir, epochs=5, completed=3)
+    runner = _FakeRunner()
+
+    _train(tmp_path, runner=runner, epochs=5)
+
+    training = runner.calls[0][1]["yolo_training"]
+    assert training["resume_checkpoint"] == str(crashed / "weights" / "last.pt")
+    assert training["resume_native"] is True
+    assert training["resume_completed_epochs"] == 3
+
+
+@pytest.mark.parametrize(
+    "spoil",
+    [
+        "finished",  # the trainer wrote its success marker
+        "other_data",  # trained on a different split
+        "other_epochs",  # towards a different total
+        "no_epoch_yet",  # died before finishing one epoch
+    ],
+)
+def test_only_a_run_that_died_on_this_dataset_is_resumed(tmp_path, spoil):
+    work_dir = tmp_path / "cycle" / "work"
+    crashed = _leave_crashed_run(work_dir, epochs=5, completed=0 if spoil == "no_epoch_yet" else 3)
+    if spoil == "finished":
+        (crashed / "last_run_metadata.json").write_text("{}", encoding="utf-8")
+    if spoil in ("other_data", "other_epochs"):
+        (crashed / "args.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "data": str(tmp_path / "elsewhere" / "data.yaml")
+                    if spoil == "other_data"
+                    else str(work_dir / "split" / "data.yaml"),
+                    "epochs": 5 if spoil == "other_data" else 9,
+                }
+            ),
+            encoding="utf-8",
+        )
+    runner = _FakeRunner()
+
+    _train(tmp_path, runner=runner, epochs=5)
+
+    assert "resume_checkpoint" not in runner.calls[0][1]["yolo_training"]
+
+
+def test_the_newest_interrupted_attempt_wins(tmp_path):
+    import os
+
+    work_dir = tmp_path / "cycle" / "work"
+    older = _leave_crashed_run(work_dir, epochs=5, completed=1)
+    newer = _leave_crashed_run(work_dir, epochs=5, completed=2, name="candidate2")
+    stamp = (older / "weights" / "last.pt").stat().st_mtime_ns
+    os.utime(newer / "weights" / "last.pt", ns=(stamp + 10**9, stamp + 10**9))
+
+    found = find_interrupted_run(
+        work_dir / "runs", "candidate", data_yaml=work_dir / "split" / "data.yaml", epochs=5
+    )
+
+    assert found == (newer / "weights" / "last.pt", 2)
+
+
+@pytest.mark.parametrize(("cuda", "expected"), [(False, "cpu"), (True, "0")])
+def test_the_shipped_auto_device_becomes_one_ultralytics_accepts(monkeypatch, cuda, expected):
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda)
+
+    assert resolve_device("auto") == expected
+    assert resolve_device("cpu") == "cpu"
+
+
+def test_the_generated_config_never_carries_auto(tmp_path, monkeypatch):
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    runner = _FakeRunner()
+
+    _train(tmp_path, runner=runner, device="auto")
+
+    assert runner.calls[0][1]["yolo_training"]["device"] == "cpu"
