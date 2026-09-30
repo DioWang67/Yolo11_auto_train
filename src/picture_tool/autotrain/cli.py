@@ -218,6 +218,30 @@ def labeling_import(
     raise typer.Exit(code=1 if result.errors else 0)
 
 
+@labeling_app.command("import-folder")
+def labeling_import_folder(
+    folder: str = typer.Argument(
+        ..., help="Folder with images/, labels/ and classes.txt (or a data.yaml)."
+    ),
+    product: str = typer.Option("", help="Override the configured product."),
+    area: str = typer.Option("", help="Override the configured area."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+):
+    """Add an already-labelled folder to the pool as verified candidates.
+
+    All or nothing: one missing label, invalid line, class-list mismatch,
+    conflicting duplicate or golden image refuses the whole folder.
+    """
+
+    def action():
+        summary = _service(config, product, area).import_labelled_folder(folder)
+        _echo_json(summary)
+        return summary
+
+    summary = _run(action)
+    raise typer.Exit(code=1 if summary["errors"] else 0)
+
+
 @labeling_app.command("status")
 def labeling_status(
     request: str = typer.Argument(..., help="Path to the exported request."),

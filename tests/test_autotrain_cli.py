@@ -97,6 +97,7 @@ def station_workspace(tmp_path, monkeypatch):
         ["select", "--cycle-id", "cycle_x"],
         ["dataset"],
         ["labeling", "export", "--classes", "Red"],
+        ["labeling", "import-folder", "some/labelled/folder"],
     ],
 )
 def test_every_write_command_refuses_while_disabled(disabled_config, command, tmp_path):
@@ -104,6 +105,45 @@ def test_every_write_command_refuses_while_disabled(disabled_config, command, tm
 
     assert result.exit_code == DISABLED_EXIT, result.output
     assert "disabled" in result.output.lower()
+
+
+def test_import_folder_verifies_a_folder_and_fails_loudly_on_a_bad_one(
+    tmp_path, station_workspace
+):
+    settings = tmp_path / "enabled.yaml"
+    settings.write_text(
+        yaml.safe_dump(
+            {
+                "autonomous_training": {
+                    "enabled": True,
+                    "station": {"product": "Cable1", "area": "A"},
+                    "selectors": {"low_confidence": {"enabled": True}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    folder = tmp_path / "batch"
+    (folder / "images").mkdir(parents=True)
+    (folder / "labels").mkdir()
+    (folder / "images" / "a.jpg").write_bytes(b"labelled")
+    (folder / "labels" / "a.txt").write_text("3 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    (folder / "classes.txt").write_text(
+        "Black\nGreen\nOrange\nRed\nYellow\n", encoding="utf-8"
+    )
+
+    good = runner.invoke(
+        app, ["labeling", "import-folder", str(folder), "--config", str(settings)]
+    )
+    (folder / "images" / "b.jpg").write_bytes(b"unlabelled")
+    bad = runner.invoke(
+        app, ["labeling", "import-folder", str(folder), "--config", str(settings)]
+    )
+
+    assert good.exit_code == 0, good.output
+    assert json.loads(good.output)["verified"] == 1
+    assert bad.exit_code == 1, bad.output
+    assert "no label file" in bad.output
 
 
 def test_the_refusal_names_the_file_to_edit(disabled_config):

@@ -24,15 +24,27 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
+
+import yaml
 
 from picture_tool.autotrain import AutoTrainError
 from picture_tool.autotrain.candidate_pool import (
+    DISCARDED,
     NEEDS_LABEL,
     VERIFIED,
     CandidatePool,
+    CandidatePoolError,
     CandidateSample,
+    sample_id_for_image,
+    utc_now_iso,
 )
+from picture_tool.autotrain.class_schema import (
+    ClassSchema,
+    ClassSchemaError,
+    normalize_class_names,
+)
+from picture_tool.autotrain.golden import IMAGE_SUFFIXES
 from picture_tool.pending_annotations import validate_yolo_label_text
 
 LOGGER = logging.getLogger(__name__)
@@ -42,6 +54,9 @@ CLASSES_FILENAME = "classes.txt"
 IMAGES_DIRNAME = "images"
 LABELS_DIRNAME = "labels"
 REQUEST_SCHEMA_VERSION = 1
+#: Selector recorded for candidates that arrived already labelled, so the pool
+#: and every dataset version built from it can tell them from production picks.
+IMPORTED_SELECTOR = "imported"
 
 
 class LabelingError(AutoTrainError):
@@ -255,6 +270,226 @@ def import_request(pool: CandidatePool, root: str | Path) -> ImportResult:
         skipped_unlabelled=tuple(unlabelled),
         errors=(),
     )
+
+
+@dataclass(frozen=True)
+class FolderImportResult:
+    """What importing an already-labelled folder applied, and what it refused."""
+
+    verified: tuple[str, ...] = ()
+    already_verified: tuple[str, ...] = ()
+    duplicates: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+
+    @property
+    def applied(self) -> bool:
+        return not self.errors and bool(self.verified)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "verified": len(self.verified),
+            "already_verified": len(self.already_verified),
+            "duplicates_in_folder": len(self.duplicates),
+            "errors": list(self.errors),
+        }
+
+
+def import_labelled_folder(
+    pool: CandidatePool,
+    root: str | Path,
+    *,
+    class_schema: ClassSchema,
+    product: str,
+    area: str,
+    golden_sample_ids: Iterable[str] = (),
+) -> FolderImportResult:
+    """Add a folder that is already labelled to the pool, as verified.
+
+    The folder is ``images/`` and ``labels/`` with matching relative paths
+    (nested splits such as ``images/train`` are fine) and a ``classes.txt``
+    or YAML ``names`` stating what the class ids mean. Everything is checked
+    before anything is written, so a folder with one problem changes nothing:
+
+    * its class list must equal the station's contract, in order --- the
+      same names in another order would train every box as the wrong class;
+    * every image needs a label file. An empty file is a verified negative;
+      a missing one is not, and the two must stay distinguishable;
+    * labels pass the operator flow's own validator;
+    * one image stored twice with different labels is a conflict, not a
+      choice to make silently --- public datasets do contain these;
+    * an image that is in the golden set is refused here, where it can
+      still be removed, rather than surfacing later as a contaminated
+      evaluation;
+    * an image already in the pool may be verified by this import, but a
+      different label for one a person already verified, or a label for one
+      a person discarded, is a conflict.
+    """
+    folder = Path(root).expanduser()
+    images_dir, labels_dir = folder / IMAGES_DIRNAME, folder / LABELS_DIRNAME
+    if not images_dir.is_dir() or not labels_dir.is_dir():
+        return FolderImportResult(
+            errors=(f"{folder} must contain {IMAGES_DIRNAME}/ and {LABELS_DIRNAME}/",)
+        )
+    try:
+        declared = read_folder_class_schema(folder)
+    except ClassSchemaError as exc:
+        return FolderImportResult(errors=(str(exc),))
+    if declared is None:
+        return FolderImportResult(
+            errors=(
+                f"{folder} declares no classes; add {CLASSES_FILENAME} or a YAML "
+                "file with 'names' so the class ids can be checked.",
+            )
+        )
+    if not declared.agrees_with(class_schema):
+        return FolderImportResult(
+            errors=(
+                f"class list {list(declared.names)} does not match this station's "
+                f"{list(class_schema.names)} (order matters).",
+            )
+        )
+
+    golden = set(golden_sample_ids)
+    existing = {sample.sample_id: sample for sample in pool.load()}
+    accepted: dict[str, tuple[Path, str, str]] = {}
+    already: list[str] = []
+    duplicates: list[str] = []
+    errors: list[str] = []
+
+    for image in sorted(images_dir.rglob("*")):
+        if not image.is_file() or image.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        relative = image.relative_to(images_dir).as_posix()
+        label = labels_dir / Path(relative).with_suffix(".txt")
+        if not label.is_file():
+            errors.append(
+                f"{relative}: no label file (write an empty one for an image "
+                "with no objects)"
+            )
+            continue
+        try:
+            text = label.read_text(encoding="utf-8")
+            sample_id = sample_id_for_image(image)
+        except (OSError, UnicodeDecodeError, CandidatePoolError) as exc:
+            errors.append(f"{relative}: unreadable ({exc})")
+            continue
+        problems = validate_yolo_label_text(text, len(class_schema.names))
+        if problems:
+            errors.append(f"{relative}: " + "; ".join(problems))
+            continue
+        if sample_id in golden:
+            errors.append(
+                f"{relative}: this image is in the golden set; training on it "
+                "would contaminate the evaluation"
+            )
+            continue
+        earlier = accepted.get(sample_id)
+        if earlier is not None:
+            if _label_lines(earlier[1]) == _label_lines(text):
+                duplicates.append(relative)
+            else:
+                errors.append(
+                    f"{relative}: same image as {earlier[2]} but with a different label"
+                )
+            continue
+        current = existing.get(sample_id)
+        if current is not None and current.label_state == DISCARDED:
+            errors.append(f"{relative}: a person discarded this image from the pool")
+            continue
+        if current is not None and current.label_state == VERIFIED:
+            stored = _read_label(current.label_path)
+            if stored is not None and _label_lines(stored) == _label_lines(text):
+                already.append(sample_id)
+                continue
+            if stored is not None:
+                errors.append(
+                    f"{relative}: already verified in the pool with a different label"
+                )
+                continue
+        accepted[sample_id] = (image, text, relative)
+
+    if errors:
+        return FolderImportResult(
+            already_verified=tuple(already),
+            duplicates=tuple(duplicates),
+            errors=tuple(errors),
+        )
+
+    selected_at = utc_now_iso()
+    added = pool.add(
+        CandidateSample(
+            sample_id=sample_id,
+            inspection_id="",
+            product=product,
+            area=area,
+            selector=IMPORTED_SELECTOR,
+            selected_reason=f"imported labelled image {relative} from {folder}",
+            score=0.0,
+            source_model="",
+            source_model_version="",
+            selected_at=selected_at,
+            production_timestamp="",
+            image_path="",
+            source_image_path=str(image),
+        )
+        for sample_id, (image, _text, relative) in accepted.items()
+    )
+    pool.labels_dir.mkdir(parents=True, exist_ok=True)
+    verified: list[str] = []
+    for sample_id, (_image, text, _relative) in accepted.items():
+        if sample_id in added.skipped_missing_image:
+            continue
+        stored_label = pool.labels_dir / f"{sample_id}.txt"
+        stored_label.write_text(text, encoding="utf-8")
+        pool.update_label_state(sample_id, VERIFIED, label_path=str(stored_label))
+        verified.append(sample_id)
+    return FolderImportResult(
+        verified=tuple(verified),
+        already_verified=tuple(already),
+        duplicates=tuple(duplicates),
+        errors=tuple(
+            f"{accepted[sample_id][2]}: could not be copied into the pool"
+            for sample_id in added.skipped_missing_image
+        ),
+    )
+
+
+def read_folder_class_schema(root: str | Path) -> ClassSchema | None:
+    """The class list a labelled folder declares, or None if it declares none.
+
+    ``classes.txt`` (one name per line, the labelImg convention) wins over a
+    YAML ``names`` entry because it is what annotation tools write.
+    """
+    folder = Path(root)
+    classes_file = folder / CLASSES_FILENAME
+    if classes_file.is_file():
+        names = [
+            line.strip()
+            for line in classes_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        return normalize_class_names(names, source=str(classes_file)) if names else None
+    for descriptor in sorted(folder.glob("*.yaml")) + sorted(folder.glob("*.yml")):
+        try:
+            payload = yaml.safe_load(descriptor.read_text(encoding="utf-8")) or {}
+        except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            continue
+        if isinstance(payload, dict) and payload.get("names"):
+            return normalize_class_names(payload["names"], source=str(descriptor))
+    return None
+
+
+def _label_lines(text: str) -> tuple[str, ...]:
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
+
+
+def _read_label(path: str) -> str | None:
+    if not path:
+        return None
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def verified_samples(pool: CandidatePool) -> tuple[CandidateSample, ...]:

@@ -274,6 +274,81 @@ def test_every_public_method_returns_serialisable_data(service, paths, tmp_path)
         json.dumps(payload)  # must not raise
 
 
+def test_importing_labelled_folders_is_not_an_agent_tool():
+    """Importing declares labels human-verified, which an agent cannot do.
+
+    If it were a tool, model-drawn labels could be laundered into VERIFIED
+    by writing them to a folder first --- the one step this path keeps human.
+    """
+    assert "import_labelled_folder" not in TOOL_SURFACE
+
+
+def _labelled_folder(root: Path, classes=CLASSES) -> Path:
+    (root / "images").mkdir(parents=True)
+    (root / "labels").mkdir()
+    (root / "images" / "a.jpg").write_bytes(b"labelled-pixels")
+    (root / "labels" / "a.txt").write_text("3 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    (root / "classes.txt").write_text("\n".join(classes) + "\n", encoding="utf-8")
+    return root
+
+
+def test_a_labelled_folder_is_checked_against_the_station_contract(service, tmp_path):
+    reordered = _labelled_folder(tmp_path / "reordered", classes=tuple(reversed(CLASSES)))
+    matching = _labelled_folder(tmp_path / "matching")
+
+    refused = service.import_labelled_folder(reordered)
+    imported = service.import_labelled_folder(matching)
+
+    assert "order matters" in refused["errors"][0]
+    assert imported == {
+        "verified": 1,
+        "already_verified": 0,
+        "duplicates_in_folder": 0,
+        "errors": [],
+        "golden_checked": False,
+    }
+    assert service.create_dataset_version()["sample_ids"]
+
+
+def test_a_configured_golden_set_is_enforced_on_import(paths, tmp_path):
+    from picture_tool.autotrain import golden
+    from picture_tool.autotrain.class_schema import normalize_class_names
+
+    folder = _labelled_folder(tmp_path / "batch")
+    golden_root = tmp_path / "golden"
+    (golden_root / "images").mkdir(parents=True)
+    (golden_root / "images" / "same.jpg").write_bytes(b"labelled-pixels")
+    registered = golden.register(
+        golden_root,
+        registered_by="test",
+        class_schema=normalize_class_names(list(CLASSES), source="test"),
+    )
+    settings = tmp_path / "with_golden.yaml"
+    settings.write_text(
+        yaml.safe_dump(
+            {
+                "autonomous_training": {
+                    "enabled": True,
+                    "station": {"product": PRODUCT, "area": AREA},
+                    "selectors": {"low_confidence": {"enabled": True}},
+                    "golden": {
+                        "dataset_path": str(golden_root),
+                        "manifest_sha256": registered.manifest_sha256,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = AutoTrainService(AutoTrainConfig.load(settings), paths).import_labelled_folder(
+        folder
+    )
+
+    assert summary["golden_checked"] is True
+    assert "golden set" in summary["errors"][0]
+
+
 def test_the_tool_surface_is_documented_in_order(service):
     """A stable list is what a future agent binds its tools to."""
     signature_names = [

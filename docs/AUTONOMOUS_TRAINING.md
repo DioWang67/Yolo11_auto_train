@@ -77,6 +77,39 @@ picture-tool-autotrain labeling import <request 路徑>
 picture-tool-autotrain cycle
 ```
 
+### 3.1 手上已經有一批標好的圖
+
+不必先讓產線挑中。資料夾放成這樣：
+
+```
+batch/
+  images/      ← 可以有子目錄（images/train/...），labels/ 要有相同的相對路徑
+  labels/      ← 每張圖一個 .txt；「確認沒有物件」請放空檔
+  classes.txt  ← 一行一個類別，或改放一份帶 names 的 data.yaml
+```
+
+```powershell
+picture-tool-autotrain labeling import-folder D:\labelled\batch
+picture-tool-autotrain cycle
+```
+
+**全部通過才寫入**，任何一項不過就整批不動、列出是哪幾個檔案：
+
+| 檢查 | 為什麼 |
+| --- | --- |
+| 類別清單與站別契約同名同序 | 同樣的名字換了順序，每個框都會被當成別的類別訓練 |
+| 每張圖都有標註檔 | 空檔是「確認沒有物件」；**沒有檔案**是「沒人看過」，兩者不能混 |
+| 標註語法 | 與操作員流程同一支 `validate_yolo_label_text` |
+| 同一張圖出現兩次 | 標註相同就去重；標註不同是衝突，要人決定（公開資料集真的有這種圖） |
+| 不在 golden 裡 | 在入口擋下，而不是評測時才判 `CONTAMINATED`——此時還來得及把檔案移走 |
+| 池裡已有同一張圖 | 等待標註的會被標為已確認；已確認但標註不同、或已被人捨棄的，是衝突 |
+
+圖片身分以內容雜湊判斷，改檔名藏不住。匯入的樣本在池裡記為 `imported`，
+與產線挑中的分得開。影像會複製進池子，之後可以刪除來源資料夾。
+
+這個指令刻意**不在** agent 可呼叫的工具清單（`TOOL_SURFACE`）裡：匯入等於宣告
+「這些標註是人確認過的」，若 agent 能呼叫，模型畫的框只要先寫進資料夾就能變成已確認。
+
 每一步也可以單獨執行、單獨重試：
 
 ```powershell

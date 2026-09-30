@@ -31,11 +31,12 @@ from picture_tool.autotrain.dataset_versions import (
     LabelledSample,
 )
 from picture_tool.autotrain.evaluator import evaluate_candidate as _evaluate_candidate
-from picture_tool.autotrain.labeling import verified_samples
+from picture_tool.autotrain.labeling import import_labelled_folder, verified_samples
 from picture_tool.autotrain.metrics import ModelMetrics, compare
 from picture_tool.autotrain.orchestrator import TrainingCycle, run_training_cycle
 from picture_tool.autotrain.paths import AutoTrainPaths
 from picture_tool.autotrain.class_schema import (
+    ClassSchema,
     resolve_class_schema,
     schema_from_station_config,
 )
@@ -211,20 +212,32 @@ class AutoTrainService:
             ],
             source="autotrain-pool",
             label_source="human-verified",
-            class_schema=resolve_class_schema(
-                [
-                    station_class_schema(
-                        self.paths.production_model_dir(self.product, self.area)
-                    ),
-                    schema_from_station_config(
-                        self.paths.production_model_dir(self.product, self.area)
-                    ),
-                ],
-                context=f"{self.product}/{self.area}",
-            ),
+            class_schema=self._station_class_schema(),
             description=description,
         )
         return version.to_dict()
+
+    def import_labelled_folder(self, folder: str | Path) -> dict[str, Any]:
+        """Add an already-labelled folder to the pool as verified candidates.
+
+        The class contract is the station's, never the folder's: a folder
+        that disagrees is refused. Images in the configured golden set are
+        refused at the door; a golden set that cannot be read does not block
+        the import, because evaluation fails closed on it anyway.
+        """
+        self.config.require_enabled()
+        golden = golden_module.resolve(
+            self.config.golden.dataset_path, self.config.golden.manifest_sha256
+        )
+        result = import_labelled_folder(
+            self._pool(),
+            folder,
+            class_schema=self._station_class_schema(),
+            product=self.product,
+            area=self.area,
+            golden_sample_ids=golden.dataset.sample_ids if golden.dataset else (),
+        )
+        return {**result.summary(), "golden_checked": golden.dataset is not None}
 
     def train_candidate(
         self,
@@ -309,6 +322,13 @@ class AutoTrainService:
         }
 
     # -- internals ---------------------------------------------------------------
+
+    def _station_class_schema(self) -> ClassSchema:
+        model_dir = self.paths.production_model_dir(self.product, self.area)
+        return resolve_class_schema(
+            [station_class_schema(model_dir), schema_from_station_config(model_dir)],
+            context=f"{self.product}/{self.area}",
+        )
 
     def _pool(self) -> CandidatePool:
         return CandidatePool(self.paths.pool_dir(self.product, self.area))

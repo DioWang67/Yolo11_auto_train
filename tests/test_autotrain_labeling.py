@@ -12,10 +12,14 @@ from picture_tool.autotrain.candidate_pool import (
     VERIFIED,
     CandidatePool,
     CandidateSample,
+    sample_id_for_image,
 )
+from picture_tool.autotrain.class_schema import normalize_class_names
 from picture_tool.autotrain.labeling import (
+    IMPORTED_SELECTOR,
     LabelingError,
     export_request,
+    import_labelled_folder,
     import_request,
     load_request,
     request_statistics,
@@ -266,3 +270,188 @@ def test_request_statistics_track_annotation_progress(tmp_path):
     stats = request_statistics(request)
 
     assert stats == {"requested": 3, "labelled": 1, "outstanding": 2}
+
+
+# ---------------------------------------------------------------------------
+# Importing a folder that is already labelled
+
+STATION = normalize_class_names(CLASSES, source="station")
+
+
+def _labelled_folder(root: Path, items: dict[str, str | None], classes=CLASSES) -> Path:
+    """``items`` maps an image's relative path to its label text, or None."""
+    for relative, label in items.items():
+        image = root / "images" / relative
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(f"pixels-of-{relative}".encode("utf-8"))
+        if label is not None:
+            target = (root / "labels" / relative).with_suffix(".txt")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(label, encoding="utf-8")
+    (root / "labels").mkdir(parents=True, exist_ok=True)
+    if classes is not None:
+        (root / "classes.txt").write_text("\n".join(classes) + "\n", encoding="utf-8")
+    return root
+
+
+def _import_folder(tmp_path, folder, pool=None, **kwargs):
+    pool = pool or CandidatePool(tmp_path / "pool")
+    options = {"class_schema": STATION, "product": "Cable1", "area": "A"}
+    options.update(kwargs)
+    return pool, import_labelled_folder(pool, folder, **options)
+
+
+def test_a_labelled_folder_becomes_verified_training_input(tmp_path):
+    folder = _labelled_folder(
+        tmp_path / "batch",
+        {"a.jpg": "0 0.5 0.5 0.2 0.2\n", "b.png": "1 0.4 0.4 0.1 0.1\n", "neg.jpg": ""},
+    )
+
+    pool, result = _import_folder(tmp_path, folder)
+
+    assert result.errors == ()
+    assert len(result.verified) == 3
+    usable = verified_samples(pool)
+    assert {sample.selector for sample in usable} == {IMPORTED_SELECTOR}
+    # The empty label is kept as a verified negative, not dropped.
+    stored = {Path(sample.label_path).read_text(encoding="utf-8") for sample in usable}
+    assert "" in stored
+    # The pool keeps its own copy, so the source folder can be deleted.
+    assert all(Path(sample.image_path).is_relative_to(pool.images_dir) for sample in usable)
+
+
+def test_nested_split_folders_are_accepted(tmp_path):
+    folder = _labelled_folder(
+        tmp_path / "batch",
+        {"train/a.jpg": "0 0.5 0.5 0.2 0.2\n", "val/b.jpg": "1 0.5 0.5 0.2 0.2\n"},
+    )
+
+    _, result = _import_folder(tmp_path, folder)
+
+    assert result.errors == ()
+    assert len(result.verified) == 2
+
+
+def test_the_class_list_may_come_from_a_data_yaml(tmp_path):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"}, classes=None)
+    (folder / "data.yaml").write_text("names:\n  0: Red\n  1: Orange\n", encoding="utf-8")
+
+    _, result = _import_folder(tmp_path, folder)
+
+    assert result.errors == ()
+
+
+@pytest.mark.parametrize(
+    ("classes", "reason"),
+    [(None, "declares no classes"), (["Orange", "Red"], "order matters")],
+)
+def test_a_class_list_that_is_absent_or_reordered_is_refused(tmp_path, classes, reason):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"}, classes=classes)
+
+    pool, result = _import_folder(tmp_path, folder)
+
+    assert reason in result.errors[0]
+    assert pool.load() == ()
+
+
+@pytest.mark.parametrize(
+    ("items", "reason"),
+    [
+        ({"a.jpg": "0 0.5 0.5 0.2 0.2\n", "b.jpg": None}, "no label file"),
+        ({"a.jpg": "0 0.5 0.5 0.2 0.2\n", "b.jpg": "7 0.5 0.5 0.2 0.2\n"}, "b.jpg"),
+    ],
+)
+def test_one_bad_image_leaves_the_pool_untouched(tmp_path, items, reason):
+    folder = _labelled_folder(tmp_path / "batch", items)
+
+    pool, result = _import_folder(tmp_path, folder)
+
+    assert any(reason in error for error in result.errors)
+    assert result.verified == ()
+    assert pool.load() == ()
+
+
+def test_the_same_image_twice_is_a_duplicate_or_a_conflict(tmp_path):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"})
+    # Byte-identical copy under another name, as public datasets contain.
+    copy = folder / "images" / "copy.jpg"
+    copy.write_bytes((folder / "images" / "a.jpg").read_bytes())
+    (folder / "labels" / "copy.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+
+    _, same = _import_folder(tmp_path / "first", folder)
+
+    assert same.errors == ()
+    assert same.duplicates == ("copy.jpg",)
+    assert len(same.verified) == 1
+
+    (folder / "labels" / "copy.txt").write_text("1 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    pool, conflict = _import_folder(tmp_path / "second", folder)
+
+    assert "different label" in conflict.errors[0]
+    assert pool.load() == ()
+
+
+def test_golden_images_are_refused_at_the_door(tmp_path):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"})
+    golden_id = sample_id_for_image(folder / "images" / "a.jpg")
+
+    pool, result = _import_folder(tmp_path, folder, golden_sample_ids=[golden_id])
+
+    assert "golden set" in result.errors[0]
+    assert pool.load() == ()
+
+
+def test_reimporting_the_same_folder_changes_nothing(tmp_path):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"})
+    pool, _ = _import_folder(tmp_path, folder)
+
+    _, again = _import_folder(tmp_path, folder, pool=pool)
+
+    assert again.errors == ()
+    assert again.verified == ()
+    assert len(again.already_verified) == 1
+
+
+def test_a_different_label_for_a_verified_image_is_a_conflict(tmp_path):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"})
+    pool, _ = _import_folder(tmp_path, folder)
+    (folder / "labels" / "a.txt").write_text("1 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+
+    _, result = _import_folder(tmp_path, folder, pool=pool)
+
+    assert "already verified" in result.errors[0]
+    stored = Path(pool.load()[0].label_path).read_text(encoding="utf-8")
+    assert stored == "0 0.5 0.5 0.2 0.2\n"
+
+
+def test_a_pending_production_candidate_is_verified_by_the_import(tmp_path):
+    folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"})
+    image = folder / "images" / "a.jpg"
+    content_id = sample_id_for_image(image)
+    pool = CandidatePool(tmp_path / "pool")
+    pool.add(
+        [
+            CandidateSample(
+                sample_id=content_id,
+                inspection_id="insp0",
+                product="Cable1",
+                area="A",
+                selector="low_confidence",
+                selected_reason="uncertain",
+                score=0.3,
+                source_model="best.onnx",
+                source_model_version="1.2.0",
+                selected_at="2026-09-10T00:00:00+00:00",
+                production_timestamp="",
+                image_path="",
+                source_image_path=str(image),
+            )
+        ]
+    )
+
+    _, result = _import_folder(tmp_path, folder, pool=pool)
+
+    assert result.verified == (content_id,)
+    merged = {sample.sample_id: sample for sample in pool.load()}[content_id]
+    assert merged.label_state == VERIFIED
+    assert IMPORTED_SELECTOR in merged.also_selected_by
