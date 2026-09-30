@@ -1551,3 +1551,34 @@ FN 194 → 65），以及 golden **CONTAMINATED**。後者一度令人意外：a
 3. 這台機器訓練會隨機 segfault；cycle 的 train 步驟中斷後能否續跑**未驗證**。
 4. `picture-tool-autotrain` CLI 本機沒有 typer，從未在這台機器上執行過。
 5. §23 的第 3–5 項未修。
+
+## 25. 已標註資料夾的入口；第一次只靠 CLI 跑完（2026-09-30）
+
+新指令 `picture-tool-autotrain labeling import-folder <資料夾>`（`labeling.import_labelled_folder`、
+`AutoTrainService.import_labelled_folder`），用法與檢查項目寫在 `AUTONOMOUS_TRAINING.md` §3.1。
+全有全無；golden 內的影像在入口就拒絕；類別契約永遠取站別的，不取資料夾的。
+**刻意不在 `TOOL_SURFACE`**，有測試鎖住：匯入等於宣告標註是人確認過的，若 agent 能呼叫，
+模型畫的框寫進資料夾就能洗成 VERIFIED。
+
+### 使用者層級的真跑（只用 CLI）
+
+overlay venv（`python -m venv --system-site-packages`，只加裝 `typer==0.21.0`；dry-run 確認
+只 install 不 uninstall）讓 CLI **第一次在這台機器上執行**，`test_autotrain_cli.py` 本機 18 passed。
+sandbox 在 `D:	mputotrain_cli_sandbox`（`setup_sandbox.py` 只搭使用者本來就會有的東西，
+`cli.sh` 等同 console script）。順序：
+
+1. `golden register` → 從 champion checkpoint 讀出契約、印出 manifest sha，照提示填進設定檔。
+2. `labeling import-folder`（300 張）→ **整批拒絕**，點名 3 張與 golden 位元相同的影像，
+   其中就有 §23 讓 golden 被判 CONTAMINATED 的 `4 (236).jpg`。刪掉那 3 張重跑 → 297 VERIFIED。
+3. `cycle` → 產線紀錄 0 筆、挑選 0 張，資料集完全來自匯入：golden `OK`，
+   內部 mAP50 0.684 → 0.862、golden mAP50 0.620 → 0.837，決策 **PROMOTION_CANDIDATE**。
+   這是第一次在有真實水準的 champion、且 golden 通過的條件下走到這個分支。
+4. `report`／`history`／`registry` 都正常，皆標 `deployed: false`。
+
+驗證：全套 1634 passed／6 skipped、coverage 81.88%；overlay venv 下 labeling＋service＋CLI 76 passed。
+
+### 「能不能順暢地用已標註的圖自動訓練」——更新後的答案
+
+可以：`import-folder` → `cycle` 兩個指令。仍然存在的限制：沒有 golden 時每輪 REJECTED（刻意）；
+這台機器 CPU 訓練會隨機 segfault，cycle 的 train 步驟中斷後能否續跑未驗證；CLI 需要 `typer`，
+系統 Python 沒有裝；§23 的第 3–5 項未修。
