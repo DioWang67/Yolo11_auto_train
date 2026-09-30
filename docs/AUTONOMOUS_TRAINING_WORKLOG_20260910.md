@@ -1503,7 +1503,9 @@ seed 0。兩者的 `args.yaml` 事後核對過，只差那 7 個鍵。在測試�
    第一版腳本設了 `plots=False`，混淆矩陣欄位全是空矩陣的 0，我一度據此回報「Red↔Orange 0 次」。
    上面的表是 `plots=True` 重算的。**任何用 `val()` 讀 confusion matrix 的程式都要注意這點。**
 2. **現役 champion 是用 ultralytics 8.3.199 訓練的**（checkpoint 的 `version`），repo 釘的是
-   8.3.156，`train10/args.yaml` 還帶著 8.3.156 不認得的 `compile` 鍵。看起來是在另一台機器上訓練的。
+   8.3.156，`train10/args.yaml` 還帶著 8.3.156 不認得的 `compile` 鍵。~~看起來是在另一台機器上訓練的。~~
+   **更正（§27）**：是這台機器的操作員環境 conda `anomalib_env`（Ultralytics 8.3.199），
+   `picture_tool.doctor` 兩個版本都接受。
 3. **這台機器上 640／batch 8 的 CPU 訓練會隨機 segfault**（兩次，分別在不同 epoch 的中途；
    其中一次沒有任何並行負載）。採樣時 python 只佔 2.4 GB，但系統 commit 在 20.4／23.2 GB，
    pagefile 自動管理且在滿的 C: 上長不大。**這是可能原因、未證實**（採樣期間沒再當）。
@@ -1647,3 +1649,39 @@ AdamW／lr0 0.0005／freeze 10／hsv 0；split 內原圖 32／7／7；一次完�
 
 至此仍未實際驗證的：10 epochs 的完整長度（只是迴圈次數）、真實 workspace（仍 `enabled: false`）、
 從真實產線紀錄收集（本機 `Result/` 為空）、真實站別的 PROMOTION_CANDIDATE 路徑（需要 golden）、排程器。
+
+## 27. 補完判定的可信度，以及真正的啟動方式（2026-09-30）
+
+使用者：「先完善整套系統」。§23 列的第 3–5 項加上途中挖到的，全部已提交：
+
+| commit | 內容 |
+| --- | --- |
+| `5dd0ea2` | promotion 在 golden **分數**上再套一次同樣的四條規則（前綴 `golden:`）；golden OK 但量不到也擋。原本只看狀態。evaluator 明寫 `plots=True`——漏檢規則讀的混淆矩陣只有 plots 時才會累計 |
+| `adb1ffc` | **import ultralytics 會把全域 `cv2.imread` 換成遇到壞圖就丟例外的版本**。收集器在任何訓練／評測過的程序裡，一張寫到一半的產線影像就會讓整個 pass 崩掉。改用 `np.fromfile` + `cv2.imdecode`，順便修好 Windows 非 ASCII 路徑。是一個「只在特定測試順序才失敗」的測試揭露的 |
+| `5cf3e4d` | golden manifest schema 2：鎖每個影像檔**和它的標註**；改寫／刪除／補上標註、多出未註冊影像、刪掉重複影像的第二份，全部 `MISMATCH`。同一張影像兩份標註不同**拒絕註冊**。manifest 以 bytes 寫入，pin 就是檔案雜湊（`Get-FileHash` 可核對）。schema 1 需重新註冊 |
+| `88fbfa6` | 新 selector `production_fail`：沒人複核的 FAIL／DETECTION_FAIL。模型整條線沒畫框時 low_confidence 看不到，但產線會因數量不足判 FAIL |
+| `bb5d024` | `autotrain_smoke.py --base-model` 的 NameError（agent 先前回報，真跑確認並修好）、淺層 `--raw` 的 IndexError |
+| `ff3f2c1` | **`run_autotrain.bat`**：這個 repo 不靠安裝啟動（見下），比照 `open_operator_training.bat` 找 Python、設 `PYTHONPATH=src`、跑 doctor、再 `python -m picture_tool.autotrain.runner` |
+
+### 為什麼需要 `run_autotrain.bat`
+
+`picture-tool-autotrain` 是 console script，需要安裝。系統 Python 的 picture-tool 是
+editable 安裝，但指向 **`D:\Git\robotlearning\Yolo11_auto_train`——已經不存在的舊路徑**，
+所以 `import picture_tool` 失敗；三個環境也都沒有 typer。repo 自己的慣例本來就是 `.bat`
+找直譯器（`PICTURE_TOOL_PYTHON` → `.venv` → `anomalib_env` → `yolo_anomalib` → `python`）。
+
+**今天前面所有驗證都跑在系統 Python（8.3.156／torch 2.4.1），而正式啟動用的是
+`anomalib_env`（8.3.199／torch 2.5.1）。** 所以透過 bat 在那個環境再跑一次：CLI sandbox，
+golden 以 schema 2 重新註冊（先移掉 3 組矛盾重複；pin 與檔案雜湊一致），inbox 放 30 張新圖 →
+178 秒、exit 0；golden OK 且 `golden:` 規則都有跑（golden FN 187→49，8.3.199 下混淆矩陣也正常）；
+REJECTED 是內部 split precision −0.064（只訓 1 epoch），閘門擋得對。
+autotrain＋training 測試在 `anomalib_env` 內 626 passed；系統 Python 全套 1680 passed、coverage 82.09%。
+
+### 仍然開著的
+
+- golden v1 的人工標註（review pack 250 張，0 張）——沒有它每輪 REJECTED。
+- 真實 workspace 啟用（`enabled: true`）是人的決定，這次沒動。
+- `configs/default_pipeline.yaml` 的 `hue: [1, 1]`：不走操作員／autotrain 的一般訓練仍會位移色相。預設設定的決定，沒動。
+- 系統 Python 的 picture-tool editable 安裝指向舊路徑；要用 console script 得在正確路徑重新 `pip install -e .`。
+- segfault 的根因（commit 20.4／23.2 GB、pagefile 在滿的 C: 上長不大）未證實；resume 讓它不再致命。
+- GUI：建議不整合進推論 GUI；訓練 GUI 面板延後到真實站別跑過之後。
