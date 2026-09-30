@@ -65,9 +65,15 @@ autonomous_training:
 ```powershell
 # 1) 把標好的資料夾放進 inbox（預設 Yolo11_auto_train\data\.autotrain\inbox\）
 #    inbox\batch_0930\images\...  labels\...  classes.txt
-# 2) 一個指令
-picture-tool-autotrain run
+# 2) 雙擊，或在命令列執行
+run_autotrain.bat
 ```
+
+`run_autotrain.bat` 用和 `open_operator_training.bat` **同一套** Python 搜尋順序
+（`PICTURE_TOOL_PYTHON` → `.venv` → conda `anomalib_env` → `yolo_anomalib` → `python`），
+所以訓練環境與操作員補訓完全相同；不需要安裝套件，也不需要 `typer`。
+`run_autotrain.bat --check` 只做環境檢查。已經 `pip install -e .` 且裝了 `typer` 的環境，
+`picture-tool-autotrain run` 是同一個動作。
 
 `run` 依序做完：匯入 inbox 裡每一批（規則同 3.1）→ 用所有尚未進過資料集版本的
 已確認標註訓練 challenger → 與 champion 比較 → 決策 → 報告。**不會部署。**
@@ -87,8 +93,17 @@ picture-tool-autotrain run
 `data\.autotrain\cycles\<cycle_id>\run_attempt_<n>.log`。離開碼：全部正常 `0`；
 有批次被拒、被擱置或 cycle 沒有得到結果 `1`；功能未啟用 `2`。
 
-**排程**：Windows 工作排程器設定定時執行 `picture-tool-autotrain run` 即可。
-環境裡沒有 `typer` 時，`python -m picture_tool.autotrain.runner` 是同一個動作。
+**排程**：工作排程器的「動作」直接指向 `run_autotrain.bat`（它不會停下來等按鍵，
+排程不會卡住）。例如每天晚上八點：
+
+```powershell
+$bat = "D:\Git\robotlearning\yolo11_workspace\Yolo11_auto_train\run_autotrain.bat"
+Register-ScheduledTask -TaskName "yolo11-autotrain" `
+  -Action (New-ScheduledTaskAction -Execute $bat) `
+  -Trigger (New-ScheduledTaskTrigger -Daily -At 20:00)
+```
+
+同一台機器若同時跑產線推論，排在離線時段：訓練會吃滿 CPU。
 
 ---
 
