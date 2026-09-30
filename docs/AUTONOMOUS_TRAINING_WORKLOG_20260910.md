@@ -1382,3 +1382,172 @@ n=10；`temperature`/`seed` 未設，同輸入兩次跑定位差 12 個百分點
 我用模擬估真實行為錯了三次，又拿 640 的結果推論模型能力一次。
 **共同點：在沒有確認量測條件是否公平之前就開始推論。**
 下次面對「模型做不到 X」的結論，先問「我給它的輸入，人自己看得出 X 嗎？」
+
+## 23. 用公開資料真跑完整 7 步 cycle；訓練參數被丟掉的問題（2026-09-29）
+
+**狀態（2026-09-30 已提交，未推送）：** 第 1 項 `dfa49cc`、harness `8840e02`。
+
+### 做法
+
+公開的線色標註資料集不存在（Roboflow 上的候選類別不符、要帳號）。改用 Ultralytics 的
+african-wildlife（1504 張、4 類、AGPL、免帳號），在 `D:\tmp\autotrain_public_sandbox`
+搭一個假站別 `PublicDemo/A`：自己訓練 champion、champion 真推論寫出 snapshot、
+公開標註當人工標註走 `export_request` → `import_request`、test split 註冊成 golden。
+所有路徑用建構子直接給（CLI 會找到真的 `workspace.yaml`），並以 sandbox 為 CWD
+（pipeline 的 lint／log／MLflow 寫在 CWD）。
+
+```powershell
+python scripts\autotrain_public_e2e.py --dataset D:\tmp\datasets `
+  --sandbox D:\tmp\autotrain_public_sandbox --fresh > D:\tmp\e2e.log 2>&1
+```
+
+### 結果
+
+七步全部 `COMPLETED`，約 3 分鐘（每張 3 個變體、challenger 3 epoch）。決策
+`PROMOTION_CANDIDATE`，但**沒有意義**：5 epoch 的 champion 一個框都沒畫出來，指標全 0。
+要測 `REJECTED` 分支得把 champion 訓到 10 epoch 以上。出廠的 20 倍增生在 CPU 上
+每 epoch 約 4 分鐘，使用者認為太久。
+
+### 發現（都是只有真跑才會現形的）
+
+| # | 問題 | 狀態 |
+| --- | --- | --- |
+| 1 | `train_yolo` 只轉交固定幾個參數，操作員配方的 `hsv_h/s/v`、`translate`、`scale`、`erasing` 全被丟掉 | **已修，未提交** |
+| 2 | autotrain 完全不沿用操作員配方：無 `include_originals`（split 裡原圖 0 張、空標註負樣本整張消失）、`patience` 100（永不觸發）、`lr0` 0.01、無 freeze、fliplr 0.5、mosaic 1.0 | 未修 |
+| 3 | golden 只鎖影像：註冊後改標註、加新圖，`resolve` 仍回 `OK`（在副本上實測）。`manifest_sha256` 與檔案雜湊不同（Windows CRLF） | 未修 |
+| 4 | promotion 只看 golden **狀態**，golden **分數**只進報告 | 未修 |
+| 5 | champion 一個框都沒畫時，`low_confidence` 一張都選不到——整張漏檢只能靠隨機或人工複核 | 未修 |
+
+第 1 項的實證：`runs/Cable1/A/train8/9/10/92/args.yaml` 都是 hsv_s 0.7、hsv_v 0.4、
+scale 0.5、erasing 0.4。**現役 champion（train10）是帶顏色抖動訓練的。**
+
+### 第 1 項怎麼修的
+
+- `AUGMENTATION_ARGUMENTS`：12 個增強參數，有設才轉交、逐一驗範圍；沒設的照舊用
+  ultralytics 預設。
+- `training_config_hash`：有設這些參數的 section 換一把快取 key，舊快取不會被當成新的；
+  沒設的 key 不變，其他站別不必重訓。
+- **連帶修掉一個更大的**：`skip_yolo_train` 在記錄的雜湊不符時，會落到 mtime 檢查，
+  只要權重比資料新就跳過——資料沒變時**任何設定改動都被無視**。現在只有沒記錄雜湊的
+  舊 metadata 才走 mtime。
+
+驗證：新測試 11 個在修正前全失敗、修正後全過；全套 1618 passed / 6 skipped、
+coverage 81.86%、ruff／mypy clean；真跑 1 epoch，ultralytics 自己的 `args.yaml` 是 0。
+
+### 效果：未知，而且現有資料量不出來
+
+champion 在自己的 val 上已是 P 0.999／R 1.0／mAP50 0.995，測試集是 46 個 source 的變體，
+新舊模型都會頂到天花板。差異只會出現在真實產線影像上，那需要 golden。
+**方向也不一定是變好**：`hsv_v` 抖動本來在幫模型扛曝光變化，而本站 9/21 前曝光約 3 倍，
+所以 Red→Orange 的 109 次修正可能是曝光造成的，不一定是抖動。
+這次修正讓設定「說什麼做什麼」，配方本身對不對從未被驗證過。
+
+### 提交前要知道
+
+1. **下一次操作員補訓等於這套配方第一次生效**，信心值分布可能改變，照常走驗收，不要預設變好。
+2. 修正前開始、修正後以 ultralytics 原生 resume 續跑的那次，會沿用 checkpoint 裡的舊參數。
+3. 這是操作員流程的修正，不是 autotrain 專屬；目前分支是 `feature/autonomous-training-phase1`，
+   提交前要決定放哪個分支。另見 workspace 記憶的 public repo push gate：push 前先掃 diff。
+
+### 下一步（依價值）
+
+1. 決定第 1 項提交到哪個分支並提交。
+2. 取捨實驗（約 30 分鐘 CPU）：從 `train9/last.pt`、同一份 split 各訓 5 epoch，
+   A 帶抖動、B 不帶；在測試集的原圖／亮度 ×0.5 與 ×2／色相 ±5° 上比。回答的是
+   「分色相更準還是對曝光更脆」，回答不了「產線會不會變好」。
+3. 第 2 項：autotrain 直接沿用操作員配方，不要各寫一份。
+4. 第 3、4、5 項。
+
+## 24. 取捨實驗結果；autotrain 改用操作員配方（2026-09-30）
+
+**狀態（已提交，未推送）：** 第 2 項 `fe89387`（新檔 `train/finetune_recipe.py`，
+改 `gui/operator_handoff.py`、`autotrain/trainer.py`、`tests/test_autotrain_trainer.py`）。實驗腳本在
+`D:\tmp\ab_hsv\`（`ab_hsv.py`、`ab_conf04.py`），不在 repo 裡。
+
+分支的判斷：這條分支上已有 `fix(wizard)`、`fix(types)`、`feat(provenance)`、`build(ci)`
+等與 autotrain 無關的一般修正，實際上就是整合分支，第 1、2 項放這裡符合慣例。
+
+### 取捨實驗：配方「寫的」vs「實際跑的」
+
+- A = `train10/args.yaml` 原樣（hsv 0.015/0.7/0.4、translate 0.1、scale 0.5、erasing 0.4）
+- B = 同上，那 7 個鍵真的是 0
+- C = 現役 champion（`train10/best.pt`，參考）
+
+A、B 都從 `train9/last.pt`（train10 自己的起點）在 train10 那份 split 的**複本**上訓 5 epoch，
+seed 0。兩者的 `args.yaml` 事後核對過，只差那 7 個鍵。在測試集（199 張、46 個 source）上
+用程式模擬 7 種條件評估。
+
+**原圖上三者都頂到天花板**（mAP50 0.995、全類召回率 1.0），看不出差別——這正是要做擾動的原因。
+
+**產線門檻 conf 0.4 下，6 種擾動條件合計：**
+
+| 模型 | 認錯類別 | 多抓 | 漏抓 |
+| --- | --- | --- | --- |
+| A 實際跑的（有抖動） | 35 | 28 | 4 |
+| **B 寫的（無抖動）** | **17** | **8** | **3** |
+| C 現役 champion | 37 | 12 | 5 |
+
+- 主要錯誤是 **Orange→Green**，集中在色相 −10° 與亮度 ×0.5：A 20／9、B 8／6、C 21／9。
+- 原圖與亮度 ×2：三者 0 錯。
+- **Red↔Orange 在所有條件下都是 0**——產線那 109 次 Red→Orange 修正，這個實驗重現不出來，
+  不能拿它解釋。
+- B 的代價：mAP50-95 低 0.01–0.02（框略鬆）。
+
+結論方向與 §23 的擔心**相反**：拿掉抖動沒有讓模型對光線變化更脆，模擬擾動下類別錯誤約減半。
+**限制**：單一 seed、每個模型只訓一次；199 張只來自 46 個 source，錯誤彼此相關；擾動是模擬的。
+它回答不了「產線會不會變好」。
+
+### 實驗過程中挖到、但不在實驗本身的事
+
+1. **ultralytics 8.3.156 只在 `plots=True` 時累計混淆矩陣**（`models/yolo/detect/val.py:200`）。
+   第一版腳本設了 `plots=False`，混淆矩陣欄位全是空矩陣的 0，我一度據此回報「Red↔Orange 0 次」。
+   上面的表是 `plots=True` 重算的。**任何用 `val()` 讀 confusion matrix 的程式都要注意這點。**
+2. **現役 champion 是用 ultralytics 8.3.199 訓練的**（checkpoint 的 `version`），repo 釘的是
+   8.3.156，`train10/args.yaml` 還帶著 8.3.156 不認得的 `compile` 鍵。看起來是在另一台機器上訓練的。
+3. **這台機器上 640／batch 8 的 CPU 訓練會隨機 segfault**（兩次，分別在不同 epoch 的中途；
+   其中一次沒有任何並行負載）。採樣時 python 只佔 2.4 GB，但系統 commit 在 20.4／23.2 GB，
+   pagefile 自動管理且在滿的 C: 上長不大。**這是可能原因、未證實**（採樣期間沒再當）。
+   **這對 autotrain 有直接影響：cycle 就在這台機器上訓練。** 實驗靠原生 resume 從 `last.pt` 續跑完成。
+4. 一個計時測試（`test_five_hundred_heartbeat_refreshes_remain_atomic_and_bounded`）在 CPU 被
+   訓練佔滿時會超時；單獨跑 3 次都過，無負載時全套 1619 passed。
+
+### 第 2 項：autotrain 改用操作員配方
+
+新模組 `train/finetune_recipe.py` 放兩個函式，操作員流程與 autotrain 都呼叫它們：
+`apply_colour_safe_augmentation`（帶原圖、`target_size`、安全的離線增強）與
+`apply_finetune_training`（AdamW、lr0 ≤ 0.0005、freeze 10、patience 依 epochs、
+關掉所有顏色／幾何抖動、cos_lr、warmup ≤ 1）。操作員那邊逐項行為不變，既有測試全過。
+
+順手修掉的：autotrain 的 `_force_colour_safe_augmentation` 把 hue 設成 `[1, 1]`，意圖是「不變」，
+但 augmentor 把 range 當**位移**讀，實測紅色 hue 0 → 179，而且啟用 hue 會連帶打開
+sat／val ±10 的抖動（p=0.3）。操作員那邊是直接移除 hue。測試
+`test_colour_destroying_augmentation_is_forced_off` 原本正好把 `[1, 1]` 鎖成斷言，已改。
+**`configs/default_pipeline.yaml` 的 `yolo_augmentation` 本身就寫著 hue `[1, 1]`**，
+沒走操作員／autotrain 的一般訓練仍會套用那個位移——這是預設設定的決定，沒有動。
+
+驗證：新增 `test_the_challenger_trains_on_the_champions_recipe`；全套 1619 passed／6 skipped、
+coverage 81.87%、ruff／mypy clean。
+
+### 真跑驗證第 2 項（sandbox，champion 10 epoch、每張 3 個變體）
+
+ultralytics 自己的 `args.yaml`：AdamW、lr0 0.0005、freeze 10、patience 5（3 epoch 對應值）、
+mosaic／fliplr 0、hsv／translate／scale／erasing 全 0。split 裡原圖 train 162／val 34／test 34
+（9/29 那次是 0），source 仍不跨 split。
+
+決策 **REJECTED**，兩個理由都是真的：precision −0.104（recall +0.308、mAP50 +0.132、
+FN 194 → 65），以及 golden **CONTAMINATED**。後者一度令人意外：african-wildlife **本身就有
+12 張 train／test 位元相同、檔名不同的影像**（另有 train／val 7 張、val／test 1 張），
+其中 `4 (236).jpg`（train）＝`4 (213).jpg`（test）被選進訓練資料，golden 的內容雜湊檢查抓到了。
+這是污染檢查第一次在真實資料上觸發，且判斷正確。harness 的說明原本宣稱 golden 與可選影像
+不重疊，已更正為「只有檔名不重疊」。
+
+### 「能不能順暢地用已標註的圖自動訓練」——目前的答案
+
+流程通了，但還不順暢：
+1. **沒有入口收一批已標好的圖。** pool 只由 collector 從產線紀錄餵入（`orchestrator.select`
+   是唯一呼叫 `pool.add` 的地方），`dataset create` 也只凍結 pool 裡 VERIFIED 的樣本。
+   外部資料夾要嘛走操作員補訓流程，要嘛 `autotrain_smoke.py --raw`（只到訓練，不比較不決策）。
+2. 沒有 golden → 每輪 REJECTED（刻意的 fail-closed）。
+3. 這台機器訓練會隨機 segfault；cycle 的 train 步驟中斷後能否續跑**未驗證**。
+4. `picture-tool-autotrain` CLI 本機沒有 typer，從未在這台機器上執行過。
+5. §23 的第 3–5 項未修。
