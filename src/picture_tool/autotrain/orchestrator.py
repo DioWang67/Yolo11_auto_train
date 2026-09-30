@@ -531,7 +531,10 @@ class TrainingCycle:
             )
         else:
             decision = promotion_module.decide(
-                report.comparison, report.golden, self.config.promotion
+                report.comparison,
+                report.golden,
+                self.config.promotion,
+                golden_comparison=report.golden_comparison,
             )
         model_version = str(
             (self.state.data.get("challenger") or {}).get("model_version", "")

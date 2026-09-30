@@ -56,21 +56,24 @@ def decide(
     comparison: MetricComparison,
     golden_status: golden_module.GoldenStatus,
     policy: PromotionConfig,
+    golden_comparison: MetricComparison | None = None,
 ) -> PromotionDecision:
     """Apply every promotion rule and return the verdict.
 
     All rules are evaluated even after the first failure: a report that lists
     one problem invites a retry that hits the next one, and the operator
     deserves the whole picture at once.
+
+    ``comparison`` is measured on the cycle's own test split, which is carved
+    from the same pool the challenger trained on. ``golden_comparison`` is the
+    only independent evidence, so when the golden set is required the same
+    rules must hold there too.
     """
     failures: list[str] = []
     passed: list[str] = []
 
-    _check_overall_improvement(comparison, policy, failures, passed)
-    _check_overall_regression(comparison, policy, failures, passed)
-    _check_critical_classes(comparison, policy, failures, passed)
-    _check_false_negatives(comparison, policy, failures, passed)
-    _check_golden(golden_status, policy, failures, passed)
+    _apply_rules(comparison, policy, failures, passed)
+    _check_golden(golden_status, golden_comparison, policy, failures, passed)
 
     return PromotionDecision(
         decision=REJECTED if failures else PROMOTION_CANDIDATE,
@@ -82,6 +85,18 @@ def decide(
 
 # ---------------------------------------------------------------------------
 # Rules
+
+
+def _apply_rules(
+    comparison: MetricComparison,
+    policy: PromotionConfig,
+    failures: list[str],
+    passed: list[str],
+) -> None:
+    _check_overall_improvement(comparison, policy, failures, passed)
+    _check_overall_regression(comparison, policy, failures, passed)
+    _check_critical_classes(comparison, policy, failures, passed)
+    _check_false_negatives(comparison, policy, failures, passed)
 
 
 def _check_overall_improvement(
@@ -198,22 +213,45 @@ def _check_false_negatives(
 
 def _check_golden(
     golden_status: golden_module.GoldenStatus,
+    golden_comparison: MetricComparison | None,
     policy: PromotionConfig,
     failures: list[str],
     passed: list[str],
 ) -> None:
+    """The golden set must be intact, measured, and not worse on the rules.
+
+    Its status used to be the whole check: an intact golden set counted as
+    a pass whatever the challenger scored on it, so a model that improved on
+    its own pool's test split and regressed on the independent set was still
+    recommended. The scores are now held to the same relative rules --- no
+    new thresholds, since every rule compares against the champion --- and a
+    golden set that could not be measured at all blocks, because an
+    unmeasured regression and no regression look identical from here.
+    """
     if not policy.require_golden_pass:
         passed.append(
             f"golden dataset check not required (status {golden_status.status})"
         )
         return
-    if golden_status.is_passing:
-        passed.append("golden dataset passed")
+    if not golden_status.is_passing:
+        failures.append(
+            f"golden dataset status is {golden_status.status}, not a pass"
+            + (f": {golden_status.detail}" if golden_status.detail else "")
+        )
         return
-    failures.append(
-        f"golden dataset status is {golden_status.status}, not a pass"
-        + (f": {golden_status.detail}" if golden_status.detail else "")
-    )
+    if golden_comparison is None:
+        failures.append(
+            "the golden dataset could not be measured (it needs a data.yaml and "
+            "labels); an intact but unmeasured golden set is not a pass"
+        )
+        return
+    golden_failures: list[str] = []
+    golden_passed: list[str] = []
+    _apply_rules(golden_comparison, policy, golden_failures, golden_passed)
+    failures.extend(f"golden: {reason}" for reason in golden_failures)
+    passed.extend(f"golden: {check}" for check in golden_passed)
+    if not golden_failures:
+        passed.append("golden dataset passed")
 
 
 def describe(decision: PromotionDecision) -> Sequence[str]:

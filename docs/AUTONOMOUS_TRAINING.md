@@ -441,6 +441,12 @@ class schema hash 相符；source 可追溯；不與已知訓練資料重疊；
 | 漏檢（FN）相對 champion 增加不超過 | `max_false_negatives` | `0` |
 | Golden dataset 通過 | `require_golden_pass` | `true` |
 
+**「Golden dataset 通過」不只是狀態 OK。** golden 目錄完整、沒被污染之後，上面四條規則
+會在 golden 的分數上**再套一次**（前綴 `golden:`）。第一次的比較用的是這輪自己的測試集，
+它和訓練資料出自同一個池子；golden 是唯一獨立的證據，所以只在自己測試集上變好、
+在 golden 上退步的 challenger 會被擋下。規則都是和 champion 比，不需要新門檻。
+golden 狀態 OK 但量不到（沒有 `data.yaml` 或標註）同樣擋下。
+
 全部 fail-closed：**量不到的指標會擋下升級**，不會被略過 —— 「沒量到退步」和
 「沒有退步」從這裡看是一樣的。漏檢是與 champion 相比，不是與 0 相比：
 在 champion 本來就有漏檢的站別上，絕對門檻 0 會否決掉每一個可能的改善。

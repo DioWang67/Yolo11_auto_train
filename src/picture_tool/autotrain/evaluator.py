@@ -186,6 +186,10 @@ def evaluate_candidate(
         "device": device,
         "batch": batch,
         "workers": workers,
+        # Ultralytics 8.3 fills the confusion matrix only when plotting, and
+        # the false-negative rule is read from that matrix. It is the default
+        # today; stating it keeps a speed tweak from zeroing the rule silently.
+        "plots": True,
     }
 
     LOGGER.info("Evaluating champion %s on %s", champion.name, dataset)

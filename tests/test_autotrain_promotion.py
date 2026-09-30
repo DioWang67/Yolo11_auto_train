@@ -20,9 +20,23 @@ from picture_tool.autotrain.metrics import (
 from picture_tool.autotrain.promotion import (
     PROMOTION_CANDIDATE,
     REJECTED,
-    decide,
     describe,
 )
+from picture_tool.autotrain.promotion import decide as _decide
+
+
+def decide(comparison, golden_status, policy, golden_comparison=None):
+    """Most rules here are about the cycle's own split; the golden set mirrors it.
+
+    Tests about the golden comparison itself pass one explicitly, or call
+    ``_decide`` to leave it out.
+    """
+    return _decide(
+        comparison,
+        golden_status,
+        policy,
+        golden_comparison=comparison if golden_comparison is None else golden_comparison,
+    )
 
 
 def _metrics(
@@ -230,6 +244,61 @@ def test_the_golden_requirement_can_be_switched_off_explicitly():
 
     assert decision.decision == PROMOTION_CANDIDATE
     assert decision.golden_status == golden.NOT_CONFIGURED
+
+
+def test_a_regression_on_the_golden_set_blocks_an_improvement_on_the_own_split():
+    """The own split comes from the training pool; golden is the independent one."""
+    own = compare(_metrics(map50=0.80), _metrics(map50=0.90))
+    on_golden = compare(_metrics(map50=0.80), _metrics(map50=0.70))
+
+    decision = decide(own, _golden(), _policy(), golden_comparison=on_golden)
+
+    assert decision.decision == REJECTED
+    assert any(reason.startswith("golden: mAP50") for reason in decision.reasons)
+
+
+def test_more_misses_on_the_golden_set_block_promotion():
+    own = compare(_metrics(map50=0.80), _metrics(map50=0.90))
+    on_golden = compare(
+        _metrics(map50=0.80, false_negatives=2), _metrics(map50=0.85, false_negatives=5)
+    )
+
+    decision = decide(own, _golden(), _policy(), golden_comparison=on_golden)
+
+    assert decision.decision == REJECTED
+    assert any("golden: false negatives rose" in reason for reason in decision.reasons)
+
+
+def test_an_intact_but_unmeasured_golden_set_is_not_a_pass():
+    """OK status with no labels to measure against must not read as passed."""
+    own = compare(_metrics(map50=0.80), _metrics(map50=0.95))
+
+    decision = _decide(own, _golden(), _policy())
+
+    assert decision.decision == REJECTED
+    assert any("could not be measured" in reason for reason in decision.reasons)
+
+
+def test_golden_checks_are_listed_when_they_pass():
+    comparison = compare(_metrics(map50=0.80), _metrics(map50=0.90))
+
+    decision = decide(comparison, _golden(), _policy())
+
+    assert decision.decision == PROMOTION_CANDIDATE
+    assert "golden dataset passed" in decision.passed_checks
+    assert any(check.startswith("golden: mAP50") for check in decision.passed_checks)
+
+
+def test_switching_the_golden_requirement_off_ignores_golden_scores():
+    own = compare(_metrics(map50=0.80), _metrics(map50=0.90))
+    on_golden = compare(_metrics(map50=0.80), _metrics(map50=0.10))
+
+    decision = decide(
+        own, _golden(golden.NOT_CONFIGURED), _policy(require_golden_pass=False),
+        golden_comparison=on_golden,
+    )
+
+    assert decision.decision == PROMOTION_CANDIDATE
 
 
 def test_an_unmeasurable_metric_blocks_rather_than_being_skipped():
