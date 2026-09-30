@@ -1637,3 +1637,13 @@ AdamW／lr0 0.0005／freeze 10／hsv 0；split 內原圖 32／7／7；一次完�
 
 出廠訓練設定（50 epochs、20 變體、640）在這台 CPU 上一輪會是數小時等級；patience 20 可能提早停。
 （同日改為 **10 epochs**：實測每張訓練圖每 epoch 約 0.24 s（640、freeze 10），與 champion `train10` 的 1722 s／11 epochs 吻合；46 張 × 20 變體一批約 27 分鐘。）
+
+### 補驗證：出廠資料量、640 下的當機續跑（同日）
+
+同一個 Cable1 複本，這次除了 epochs=2 之外全是出廠值（**20 變體**、640、batch 4、`device: auto`）。
+46 張 → 602 張訓練圖，第 1 epoch 138 s；**第 2 epoch 開始 17 秒時強制殺掉訓練子程序**；
+第 2 次嘗試跳過增強／切分（快取），從 checkpoint 續訓完成；COMPLETED、exit 0，總計 7 分 12 秒。
+決策 REJECTED（golden 未設定；mAP50 −0.0004 是天花板上的雜訊）。
+
+至此仍未實際驗證的：10 epochs 的完整長度（只是迴圈次數）、真實 workspace（仍 `enabled: false`）、
+從真實產線紀錄收集（本機 `Result/` 為空）、真實站別的 PROMOTION_CANDIDATE 路徑（需要 golden）、排程器。
