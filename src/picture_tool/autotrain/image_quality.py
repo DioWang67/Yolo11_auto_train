@@ -81,10 +81,17 @@ def measure_file(path: str | Path) -> ImageQuality | None:
     than failing the collection pass.
     """
     resolved = Path(path)
+    # Decoded here rather than through cv2.imread: importing ultralytics
+    # replaces cv2.imread process-wide with a version that raises on an
+    # undecodable file instead of returning None, so in any process that had
+    # already trained or evaluated, one half-written production image would
+    # have aborted the whole collection pass. imdecode is not patched, and
+    # reading the bytes first also copes with non-ASCII Windows paths.
     try:
-        image = cv2.imread(str(resolved), cv2.IMREAD_COLOR)
-    except cv2.error as exc:  # pragma: no cover - defensive, cv2 usually returns None
-        LOGGER.warning("Image quality read failed for %s: %s", resolved, exc)
+        payload = np.fromfile(str(resolved), dtype=np.uint8)
+        image = cv2.imdecode(payload, cv2.IMREAD_COLOR) if payload.size else None
+    except (OSError, ValueError, cv2.error) as exc:
+        LOGGER.debug("Image quality read failed for %s: %s", resolved, exc)
         return None
     if image is None:
         LOGGER.debug("Image quality skipped, unreadable or missing: %s", resolved)

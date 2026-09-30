@@ -114,3 +114,30 @@ def test_a_file_that_is_not_an_image_returns_none(tmp_path):
 
 def test_a_directory_passed_by_mistake_returns_none(tmp_path):
     assert measure_file(tmp_path) is None
+
+
+def test_a_corrupt_file_is_skipped_even_after_ultralytics_patched_cv2(tmp_path, monkeypatch):
+    """Importing ultralytics swaps in an imread that raises on undecodable data.
+
+    Stand-in for that patch: if measure_file still went through cv2.imread,
+    this would raise instead of skipping the one bad image.
+    """
+
+    def patched_imread(*_args, **_kwargs):
+        raise AttributeError("'NoneType' object has no attribute 'ndim'")
+
+    monkeypatch.setattr(cv2, "imread", patched_imread)
+    corrupt = tmp_path / "half-written.jpg"
+    corrupt.write_bytes(b"\xff\xd8\xff not really a jpeg")
+    good = tmp_path / "image.png"
+    cv2.imencode(".png", _bgr())[1].tofile(str(good))
+
+    assert measure_file(corrupt) is None
+    assert measure_file(good) is not None
+
+
+def test_a_non_ascii_path_is_read(tmp_path):
+    path = tmp_path / "線材_影像.png"
+    cv2.imencode(".png", _bgr())[1].tofile(str(path))
+
+    assert measure_file(path) is not None
