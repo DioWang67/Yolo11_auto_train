@@ -1636,3 +1636,4 @@ AdamW／lr0 0.0005／freeze 10／hsv 0；split 內原圖 32／7／7；一次完�
    系統 Python 少裝了）；或直接用 `python -m picture_tool.autotrain.runner`，不需要 typer。
 
 出廠訓練設定（50 epochs、20 變體、640）在這台 CPU 上一輪會是數小時等級；patience 20 可能提早停。
+（同日改為 **10 epochs**：實測每張訓練圖每 epoch 約 0.24 s（640、freeze 10），與 champion `train10` 的 1722 s／11 epochs 吻合；46 張 × 20 變體一批約 27 分鐘。）

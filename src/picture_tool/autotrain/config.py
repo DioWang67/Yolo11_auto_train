@@ -100,7 +100,7 @@ class TrainingConfig:
     """Challenger training parameters."""
 
     base_model: str = "champion"
-    epochs: int = 50
+    epochs: int = 10
     imgsz: int = 640
     device: str = "auto"
     batch: int = 4
@@ -253,7 +253,7 @@ class AutoTrainConfig:
                 base_model=str(training_raw.get("base_model", "champion")).strip()
                 or "champion",
                 epochs=_as_int(
-                    training_raw.get("epochs", 50), "training.epochs", minimum=1
+                    training_raw.get("epochs", 10), "training.epochs", minimum=1
                 ),
                 imgsz=_as_int(
                     training_raw.get("imgsz", 640), "training.imgsz", minimum=32

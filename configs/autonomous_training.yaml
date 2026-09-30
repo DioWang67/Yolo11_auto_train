@@ -67,9 +67,14 @@ autonomous_training:
 
   # Challenger training. base_model: champion continues from the currently
   # deployed weight, which preserves the classes the line already detects.
+  # 10 epochs is a fine-tune, not a training from scratch: the recipe freezes
+  # the backbone at lr0 <= 0.0005, and on this station validation mAP50 is at
+  # 0.99 after the first epoch. Measured on the line's CPU at 640, one epoch
+  # costs about 0.24 s per training image, so a 46-image batch with 20
+  # variants each takes ~2.7 min per epoch (~27 min for 10, ~2.2 h for 50).
   training:
     base_model: champion
-    epochs: 50
+    epochs: 10
     imgsz: 640
     device: auto
     batch: 4
