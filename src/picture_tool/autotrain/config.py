@@ -35,7 +35,12 @@ ROOT_KEY = "autonomous_training"
 #: Selector names this phase implements. Names outside this set are rejected
 #: rather than ignored: a typo that silently disables a selector would show up
 #: as "the pool is smaller than expected" long after the run.
-IMPLEMENTED_SELECTORS = ("low_confidence", "review_correction", "random_sample")
+IMPLEMENTED_SELECTORS = (
+    "low_confidence",
+    "review_correction",
+    "random_sample",
+    "production_fail",
+)
 
 #: Registered but deliberately unimplemented; accepted in config so the shape
 #: is stable, refused if switched on.

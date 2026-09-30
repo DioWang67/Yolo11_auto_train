@@ -87,9 +87,60 @@ def _record(tmp_path, inspection_id, *, confidence=None, outcome="", image=None)
 def test_default_selectors_are_registered():
     assert available_selectors() == [
         "low_confidence",
+        "production_fail",
         "random_sample",
         "review_correction",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Failed inspections nobody has reviewed
+
+
+def _failed(tmp_path, inspection_id, status="DETECTION_FAIL", **fields):
+    record = _record(tmp_path, inspection_id, **fields)
+    return replace(record, status=status, fail_reasons=("MISSING_ITEM",))
+
+
+def test_a_total_miss_is_picked_although_no_box_is_unsure(tmp_path):
+    """The blind spot: no detection means no low confidence to notice."""
+    missed = _failed(tmp_path, "insp-miss")  # no detections at all
+
+    by_confidence = create_selector("low_confidence").select([missed], options={})
+    by_failure = create_selector("production_fail").select([missed], options={})
+
+    assert by_confidence == []
+    (candidate,) = by_failure
+    assert candidate.label_state == NEEDS_LABEL
+    assert "DETECTION_FAIL" in candidate.selected_reason
+    assert "MISSING_ITEM" in candidate.selected_reason
+
+
+@pytest.mark.parametrize(
+    ("status", "picked"),
+    [("FAIL", True), ("DETECTION_FAIL", True), ("PASS", False), ("ERROR", False),
+     ("INFERENCE_ERROR", False)],
+)
+def test_only_judged_failures_are_picked_not_system_errors(tmp_path, status, picked):
+    record = _failed(tmp_path, f"insp-{status}", status=status)
+
+    chosen = create_selector("production_fail").select([record], options={})
+
+    assert bool(chosen) is picked
+
+
+def test_a_reviewed_failure_is_left_to_review_correction(tmp_path):
+    reviewed = _failed(tmp_path, "insp-reviewed", outcome="false_reject")
+
+    assert create_selector("production_fail").select([reviewed], options={}) == []
+
+
+def test_failures_are_capped(tmp_path):
+    records = [_failed(tmp_path, f"insp-{n}") for n in range(5)]
+
+    chosen = create_selector("production_fail").select(records, options={"max_samples": 2})
+
+    assert len(chosen) == 2
 
 
 def test_unknown_selector_is_an_error():

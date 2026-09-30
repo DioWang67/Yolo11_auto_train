@@ -40,6 +40,11 @@ autonomous_training:
     review_correction:
       enabled: true
       max_samples: 500
+    # Failed inspections nobody has reviewed. A wire the model misses gets no
+    # box, so low_confidence never sees it; the line's own FAIL does.
+    production_fail:
+      enabled: true
+      max_samples: 100
     random_sample:
       enabled: true
       fraction: 0.01

@@ -111,6 +111,7 @@ def run_selectors(
 def _register_defaults() -> None:
     """Register the selectors this phase implements."""
     from picture_tool.autotrain.selectors.low_confidence import LowConfidenceSelector
+    from picture_tool.autotrain.selectors.production_fail import ProductionFailSelector
     from picture_tool.autotrain.selectors.random_sample import RandomSampleSelector
     from picture_tool.autotrain.selectors.review_correction import (
         ReviewCorrectionSelector,
@@ -119,6 +120,7 @@ def _register_defaults() -> None:
     register_selector("low_confidence", LowConfidenceSelector)
     register_selector("review_correction", ReviewCorrectionSelector)
     register_selector("random_sample", RandomSampleSelector)
+    register_selector("production_fail", ProductionFailSelector)
 
 
 _register_defaults()
