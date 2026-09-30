@@ -53,6 +53,47 @@ autonomous_training:
 
 ## 3. 一次完整流程
 
+### 3.0 最簡單的用法：放進資料夾，一個指令跑完
+
+一次性設定（之後不用再碰）：
+
+1. `configs/autonomous_training.yaml` 裡 `enabled: true`，`station` 填好站別。
+2.（建議）註冊 golden set，見第 6 節。沒有 golden 時流程照樣跑完，但決策一律 `REJECTED`。
+
+之後每一批資料：
+
+```powershell
+# 1) 把標好的資料夾放進 inbox（預設 Yolo11_auto_train\data\.autotrain\inbox\）
+#    inbox\batch_0930\images\...  labels\...  classes.txt
+# 2) 一個指令
+picture-tool-autotrain run
+```
+
+`run` 依序做完：匯入 inbox 裡每一批（規則同 3.1）→ 用所有尚未進過資料集版本的
+已確認標註訓練 challenger → 與 champion 比較 → 決策 → 報告。**不會部署。**
+
+| 發生什麼 | `run` 的反應 |
+| --- | --- |
+| 一批通過匯入 | 移到 `inbox\processed\<時間>_<名稱>\`，旁邊放 `import_result.json` |
+| 一批有問題（缺標註、類別順序不對…） | 移到 `inbox\rejected\...`，`import_result.json` 列出是哪些檔案；修好後再放回 inbox |
+| 站別本身還收不了（例如還沒部署 champion） | 那批**留在 inbox**，輸出說明原因；站別準備好後下次 `run` 自動處理 |
+| 資料夾還在複製中（`settle_seconds` 內有變動） | 這次跳過，下次再處理 |
+| 訓練途中程序當掉（這台 CPU 會隨機 segfault） | 自動重跑同一個 cycle，**從中斷的 epoch 接著訓練**，最多 `max_attempts` 次 |
+| 重試用完仍當掉 | 回報 `GAVE_UP`；下次 `run` 會先把它接著跑完 |
+| inbox 沒有新東西，也沒有中斷的 cycle | 什麼都不做（適合排程） |
+| 上一次 `run` 還在訓練 | 這次立刻拒絕，不會兩個一起跑 |
+
+每次 `run` 的結果寫在 `data\.autotrain\runs\run_<時間>.json`，每次嘗試的完整輸出在
+`data\.autotrain\cycles\<cycle_id>\run_attempt_<n>.log`。離開碼：全部正常 `0`；
+有批次被拒、被擱置或 cycle 沒有得到結果 `1`；功能未啟用 `2`。
+
+**排程**：Windows 工作排程器設定定時執行 `picture-tool-autotrain run` 即可。
+環境裡沒有 `typer` 時，`python -m picture_tool.autotrain.runner` 是同一個動作。
+
+---
+
+以下是逐步執行的方式，適合想分開檢查每一步時使用。
+
 ```powershell
 # 0) 確認狀態（隨時可用，關閉時也可用）
 picture-tool-autotrain status

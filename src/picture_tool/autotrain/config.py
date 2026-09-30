@@ -123,6 +123,22 @@ class PromotionConfig:
 
 
 @dataclass(frozen=True)
+class RunnerConfig:
+    """The unattended ``run`` command.
+
+    ``inbox_dir`` empty means ``<training data>/.autotrain/inbox``; a relative
+    path is taken from the training project. A batch whose newest file is
+    younger than ``settle_seconds`` is left for the next run, because it is
+    most likely still being copied in. ``max_attempts`` bounds how many times
+    one cycle is restarted after the process dies under it.
+    """
+
+    inbox_dir: str = ""
+    settle_seconds: int = 60
+    max_attempts: int = 3
+
+
+@dataclass(frozen=True)
 class AutoTrainConfig:
     """Validated settings for one station's autonomous training path."""
 
@@ -134,6 +150,7 @@ class AutoTrainConfig:
     training: TrainingConfig
     promotion: PromotionConfig
     source_path: Path | None = None
+    runner: RunnerConfig = field(default_factory=RunnerConfig)
 
     # -- construction -----------------------------------------------------------
 
@@ -194,6 +211,7 @@ class AutoTrainConfig:
         golden_raw = _as_mapping(section.get("golden"), "golden")
         training_raw = _as_mapping(section.get("training"), "training")
         promotion_raw = _as_mapping(section.get("promotion"), "promotion")
+        runner_raw = _as_mapping(section.get("runner"), "runner")
 
         config = cls(
             enabled=enabled,
@@ -275,6 +293,17 @@ class AutoTrainConfig:
                 ),
             ),
             source_path=source_path,
+            runner=RunnerConfig(
+                inbox_dir=str(runner_raw.get("inbox_dir", "") or "").strip(),
+                settle_seconds=_as_int(
+                    runner_raw.get("settle_seconds", 60),
+                    "runner.settle_seconds",
+                    minimum=0,
+                ),
+                max_attempts=_as_int(
+                    runner_raw.get("max_attempts", 3), "runner.max_attempts", minimum=1
+                ),
+            ),
         )
         if config.enabled:
             config._validate_enabled()

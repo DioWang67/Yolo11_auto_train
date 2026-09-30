@@ -105,6 +105,30 @@ def cycle(
     raise typer.Exit(code=0 if result.status == "COMPLETED" else 3)
 
 
+@app.command("run")
+def run_inbox(
+    product: str = typer.Option("", help="Override the configured product."),
+    area: str = typer.Option("", help="Override the configured area."),
+    config: Optional[str] = typer.Option(None, help="Path to the settings file."),
+):
+    """Import every labelled batch in the inbox, then train and evaluate.
+
+    Also finishes a cycle the machine died under, resuming its training.
+    Safe to schedule: with nothing new and nothing interrupted it does
+    nothing, and it refuses to start while another run is in progress.
+    """
+    from picture_tool.autotrain.runner import run as run_unattended
+
+    def action():
+        service = _service(config, product, area)
+        outcome = run_unattended(service.config, service.paths)
+        _echo_json(outcome.to_dict())
+        return outcome
+
+    outcome = _run(action)
+    raise typer.Exit(code=0 if outcome.ok else 1)
+
+
 @app.command()
 def collect(
     product: str = typer.Option("", help="Override the configured product."),

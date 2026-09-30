@@ -85,3 +85,16 @@ autonomous_training:
     max_critical_class_recall_drop: 0.005
     max_false_negatives: 0
     require_golden_pass: true
+
+  # The unattended `picture-tool-autotrain run`: drop a labelled folder
+  # (images/, labels/, classes.txt) into the inbox and one command imports
+  # it, trains and evaluates a challenger, and writes the report. Batches are
+  # filed under inbox/processed or inbox/rejected with their import result.
+  # A batch changed within settle_seconds is left for the next run (it is
+  # probably still being copied). CPU training on this line dies at random
+  # mid-epoch, so the cycle runs in a child process and is restarted up to
+  # max_attempts times, resuming the interrupted training each time.
+  runner:
+    inbox_dir: ""        # empty: <training data>/.autotrain/inbox
+    settle_seconds: 60
+    max_attempts: 3

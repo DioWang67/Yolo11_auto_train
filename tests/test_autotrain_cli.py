@@ -98,6 +98,7 @@ def station_workspace(tmp_path, monkeypatch):
         ["dataset"],
         ["labeling", "export", "--classes", "Red"],
         ["labeling", "import-folder", "some/labelled/folder"],
+        ["run"],
     ],
 )
 def test_every_write_command_refuses_while_disabled(disabled_config, command, tmp_path):

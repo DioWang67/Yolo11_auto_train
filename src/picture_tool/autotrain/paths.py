@@ -86,6 +86,17 @@ class AutoTrainPaths:
         """Working directory and report location for one training cycle."""
         return self.cycles_root / cycle_id
 
+    def inbox_dir(self, configured: str = "") -> Path:
+        """Where labelled batches are dropped for the unattended ``run``.
+
+        Empty means inside this store; a relative path is taken from the
+        training project so the setting reads the same on every machine.
+        """
+        if not configured:
+            return self.root / "inbox"
+        path = Path(configured).expanduser()
+        return path if path.is_absolute() else self.workspace.training_project / path
+
     def candidate_dir(self, product: str, area: str, version: str) -> Path:
         """Artifact directory for one challenger model."""
         return self.candidates_root / product / area / version
