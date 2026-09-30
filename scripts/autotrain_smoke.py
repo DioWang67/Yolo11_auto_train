@@ -205,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     samples = collect_samples(job_raw)
     LOGGER.info("Using %d labelled samples from %s", len(samples), job_raw)
 
+    champion = None
     if args.base_model:
         # A station that has no champion yet is the whole point of a cold
         # start, so the starting weight has to be nameable.
@@ -226,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     model_dir = paths.production_model_dir(args.product, args.area)
     class_schema = resolve_class_schema(
         [
-            read_champion_class_schema(champion),
+            read_champion_class_schema(champion) if champion is not None else None,
             schema_from_station_config(model_dir),
             read_job_class_schema(job_raw),
         ],
@@ -239,7 +240,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     version = store.create(
         samples,
-        source=f"operator_handoff:{job_raw.parents[3].name}",
+        # parents[3] is the job id only in a handoff layout; --raw can point
+        # anywhere, including somewhere too shallow to have one.
+        source=(
+            f"raw:{job_raw}" if args.raw else f"operator_handoff:{job_raw.parents[3].name}"
+        ),
         label_source="human",
         class_schema=class_schema,
         description="Smoke run of the real training interface",
