@@ -279,6 +279,7 @@ class FolderImportResult:
     verified: tuple[str, ...] = ()
     already_verified: tuple[str, ...] = ()
     duplicates: tuple[str, ...] = ()
+    excluded_golden: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
 
     @property
@@ -290,6 +291,7 @@ class FolderImportResult:
             "verified": len(self.verified),
             "already_verified": len(self.already_verified),
             "duplicates_in_folder": len(self.duplicates),
+            "excluded_golden": list(self.excluded_golden),
             "errors": list(self.errors),
         }
 
@@ -317,12 +319,16 @@ def import_labelled_folder(
     * labels pass the operator flow's own validator;
     * one image stored twice with different labels is a conflict, not a
       choice to make silently --- public datasets do contain these;
-    * an image that is in the golden set is refused here, where it can
-      still be removed, rather than surfacing later as a contaminated
-      evaluation;
     * an image already in the pool may be verified by this import, but a
       different label for one a person already verified, or a label for one
       a person discarded, is a conflict.
+
+    An image that is in the golden set is left out and named in the result
+    rather than refusing the folder: removing it is the only remedy there
+    is, so doing that here loses nothing and spares a round trip, and it
+    keeps the evaluation clean instead of surfacing later as CONTAMINATED.
+    A folder made *only* of golden images is refused, since that is far more
+    likely the golden directory dropped in the wrong place.
     """
     folder = Path(root).expanduser()
     images_dir, labels_dir = folder / IMAGES_DIRNAME, folder / LABELS_DIRNAME
@@ -354,6 +360,7 @@ def import_labelled_folder(
     accepted: dict[str, tuple[Path, str, str]] = {}
     already: list[str] = []
     duplicates: list[str] = []
+    excluded: list[str] = []
     errors: list[str] = []
 
     for image in sorted(images_dir.rglob("*")):
@@ -378,10 +385,7 @@ def import_labelled_folder(
             errors.append(f"{relative}: " + "; ".join(problems))
             continue
         if sample_id in golden:
-            errors.append(
-                f"{relative}: this image is in the golden set; training on it "
-                "would contaminate the evaluation"
-            )
+            excluded.append(relative)
             continue
         earlier = accepted.get(sample_id)
         if earlier is not None:
@@ -408,10 +412,16 @@ def import_labelled_folder(
                 continue
         accepted[sample_id] = (image, text, relative)
 
+    if excluded and not (accepted or already or errors):
+        errors.append(
+            f"every image in {folder} is in the golden set; was the golden "
+            "directory put here by mistake?"
+        )
     if errors:
         return FolderImportResult(
             already_verified=tuple(already),
             duplicates=tuple(duplicates),
+            excluded_golden=tuple(excluded),
             errors=tuple(errors),
         )
 
@@ -447,6 +457,7 @@ def import_labelled_folder(
         verified=tuple(verified),
         already_verified=tuple(already),
         duplicates=tuple(duplicates),
+        excluded_golden=tuple(excluded),
         errors=tuple(
             f"{accepted[sample_id][2]}: could not be copied into the pool"
             for sample_id in added.skipped_missing_image

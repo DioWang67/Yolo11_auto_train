@@ -391,13 +391,30 @@ def test_the_same_image_twice_is_a_duplicate_or_a_conflict(tmp_path):
     assert pool.load() == ()
 
 
-def test_golden_images_are_refused_at_the_door(tmp_path):
+def test_golden_images_are_left_out_and_named(tmp_path):
+    """Removing them is the only remedy, so the import does it and says so."""
+    folder = _labelled_folder(
+        tmp_path / "batch",
+        {"a.jpg": "0 0.5 0.5 0.2 0.2\n", "b.jpg": "1 0.5 0.5 0.2 0.2\n"},
+    )
+    golden_id = sample_id_for_image(folder / "images" / "a.jpg")
+
+    pool, result = _import_folder(tmp_path, folder, golden_sample_ids=[golden_id])
+
+    assert result.errors == ()
+    assert result.excluded_golden == ("a.jpg",)
+    assert golden_id not in {sample.sample_id for sample in pool.load()}
+    assert len(result.verified) == 1
+
+
+def test_a_folder_of_only_golden_images_is_refused(tmp_path):
+    """That is far more likely the golden directory dropped in the wrong place."""
     folder = _labelled_folder(tmp_path / "batch", {"a.jpg": "0 0.5 0.5 0.2 0.2\n"})
     golden_id = sample_id_for_image(folder / "images" / "a.jpg")
 
     pool, result = _import_folder(tmp_path, folder, golden_sample_ids=[golden_id])
 
-    assert "golden set" in result.errors[0]
+    assert "golden directory put here by mistake" in result.errors[0]
     assert pool.load() == ()
 
 

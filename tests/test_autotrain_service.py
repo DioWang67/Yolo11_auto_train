@@ -304,6 +304,7 @@ def test_a_labelled_folder_is_checked_against_the_station_contract(service, tmp_
         "verified": 1,
         "already_verified": 0,
         "duplicates_in_folder": 0,
+        "excluded_golden": [],
         "errors": [],
         "golden_checked": False,
     }
