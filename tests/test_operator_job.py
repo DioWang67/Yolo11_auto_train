@@ -226,5 +226,11 @@ def test_five_hundred_heartbeat_refreshes_remain_atomic_and_bounded(
     assert status["heartbeat_at"] == owner["heartbeat_at"]
     assert not list(status_path.parent.glob("*.tmp"))
     assert not list(lock.path.glob("*.tmp"))
-    assert elapsed_seconds < 10.0
+    # The bound is for a refresh that blocks or retries, not for disk speed.
+    # Each refresh is two fsync'd atomic writes, so these 1000 writes take
+    # 7-12 s on a station disk and 8-21 s on windows-latest; the old 10 s
+    # bound measured the runner and failed main twice on 2026-10-16. A
+    # refresh that waited even one second would still overshoot 60 s
+    # (120 ms per refresh) by eight times over.
+    assert elapsed_seconds < 60.0
     release_target_training_lock(lock)
