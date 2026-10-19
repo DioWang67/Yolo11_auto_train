@@ -8,10 +8,12 @@ and a weights_only reload that reproduces the stamped probe score.
 """
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
 from importlib.util import find_spec
+from pathlib import Path
 
 import pytest
 
@@ -53,12 +55,22 @@ SCRIPT = textwrap.dedent(
 
 
 def test_padim_trains_packages_and_reloads_with_its_stamp(tmp_path):
+    import picture_tool
+
+    # CI puts src on PYTHONPATH as a relative path, which the child process
+    # would resolve against tmp_path. Hand it the absolute source root.
+    env = dict(os.environ)
+    source_root = str(Path(picture_tool.__file__).resolve().parents[1])
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_root, env.get("PYTHONPATH", "")) if part
+    )
     completed = subprocess.run(
         [sys.executable, "-c", SCRIPT, str(tmp_path)],
         capture_output=True,
         text=True,
         timeout=900,
         cwd=tmp_path,
+        env=env,
     )
     assert completed.returncode == 0, completed.stderr[-4000:]
     result = json.loads(completed.stdout.strip().splitlines()[-1])
