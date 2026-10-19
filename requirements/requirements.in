@@ -3,18 +3,18 @@
 
 # Deep Learning Framework
 # Note: numpy 1.26.x required for compatibility with torch 2.4.1
-ultralytics==8.3.156
-torch==2.4.1
-torchvision==0.19.1
-anomalib==1.2.0  # Working: 1.2.0
+ultralytics==8.4.178
+torch==2.14.1
+torchvision==0.29.1
+anomalib==2.7.0  # Working: 1.2.0
 
 # Computer Vision
-opencv-python==4.9.0.80
-opencv-python-headless==4.9.0.80
+opencv-python==5.0.0.93
+opencv-python-headless==5.0.0.93
 Pillow>=10.0.0
 
 # Data Processing
-numpy==1.26.4
+numpy==2.2.6
 pandas>=2.0.0  # Working: 2.3.1
 pyyaml>=6.0
 
@@ -37,8 +37,8 @@ tqdm>=4.65.0
 # ML Model Export (Required for ONNX validation)
 onnx>=1.14.0
 onnxsim>=0.4.0
-onnxruntime==1.23.2
-jsonargparse[signatures,typing-extensions]==4.34.0
+onnxruntime==1.24.3
+jsonargparse[signatures,typing-extensions]==4.52.0
 
 # GUI (PyQt5) - Required
 PyQt5==5.15.11
