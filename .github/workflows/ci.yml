@@ -17,6 +17,7 @@ concurrency:
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUTF8: "1"
+  YOLO_AUTOINSTALL: "False"
 
 jobs:
   quality:

@@ -3,6 +3,8 @@ setlocal EnableExtensions
 title YOLO Operator Training Center
 set "PROJECT_ROOT=%~dp0"
 set "YOLO_CONFIG_DIR=%PROJECT_ROOT%data\.ultralytics"
+rem Ultralytics must not pip-install into the locked env (stations are offline).
+set "YOLO_AUTOINSTALL=False"
 if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 set "CHECK_MODE=0"
 set "BACKGROUND_ARG="

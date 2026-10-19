@@ -2,6 +2,8 @@
 setlocal EnableExtensions
 title Picture Tool
 for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
+rem Ultralytics must not pip-install into the locked env (stations are offline).
+set "YOLO_AUTOINSTALL=False"
 set "CHECK_MODE=0"
 if /I "%~1"=="--check" set "CHECK_MODE=1"
 cd /d "%PROJECT_ROOT%" || (

@@ -140,13 +140,14 @@ class OnnxExporter:
             simplify = bool(export_cfg.get("simplify", False))
             int8 = bool(export_cfg.get("int8", False))
 
-            # Check onnxsim availability if simplify requested
+            # Ultralytics simplifies with onnxslim. Without it, simplify=True makes
+            # Ultralytics try to pip-install onnxslim mid-export, which fails offline.
             if export_format == "onnx" and simplify:
                 import importlib.util
 
-                if importlib.util.find_spec("onnxsim") is None:
+                if importlib.util.find_spec("onnxslim") is None:
                     logger.warning(
-                        "ONNX export: simplify=True requested but 'onnxsim' not found. "
+                        "ONNX export: simplify=True requested but 'onnxslim' not found. "
                         "Falling back to simplify=False."
                     )
                     simplify = False

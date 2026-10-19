@@ -14,6 +14,8 @@ REM 2 = autonomous training is disabled in the settings file.
 setlocal EnableExtensions
 set "PROJECT_ROOT=%~dp0"
 set "YOLO_CONFIG_DIR=%PROJECT_ROOT%data\.ultralytics"
+rem Ultralytics must not pip-install into the locked env (stations are offline).
+set "YOLO_AUTOINSTALL=False"
 if not exist "%YOLO_CONFIG_DIR%" mkdir "%YOLO_CONFIG_DIR%"
 cd /d "%PROJECT_ROOT%" || (
     echo ERROR: Training project directory was not found: %PROJECT_ROOT%

@@ -348,7 +348,9 @@ yolo_training:
     half: false
     dynamic: false
     simplify: false
-    opset: null
+    # Every deployed runtime ONNX is opset 19 / IR 9. null lets torch pick, which
+    # is opset 20 from torch 2.9 on; the station's cv2.dnn and ORT gates expect 19.
+    opset: 19
   export_runtime:
     enabled: false                         # optional replacement for export_onnx
     format: openvino                       # onnx, openvino, engine, torchscript

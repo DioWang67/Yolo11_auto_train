@@ -472,8 +472,8 @@ class TestOnnxExporterExport:
 
         assert result is None
 
-    def test_disables_simplify_when_onnxsim_missing(self, tmp_path, monkeypatch):
-        """Should fall back to simplify=False when onnxsim not available."""
+    def test_disables_simplify_when_onnxslim_missing(self, tmp_path, monkeypatch):
+        """Should fall back to simplify=False when onnxslim not available."""
         run_dir = tmp_path / "run"
         run_dir.mkdir()
 
@@ -485,9 +485,9 @@ class TestOnnxExporterExport:
 
         config = {"yolo_training": {"export_onnx": {"enabled": True, "simplify": True}}}
 
-        # Mock: onnx available, onnxsim not
+        # Mock: onnx available, onnxslim not
         def custom_find_spec(name):
-            if name == "onnxsim":
+            if name == "onnxslim":
                 return None
             return MagicMock()
 
