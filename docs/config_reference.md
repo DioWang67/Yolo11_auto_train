@@ -170,8 +170,8 @@ available:
 
 | Command | Description |
 |---------|-------------|
-| `picture-tool-pipeline --config CONFIG --tasks TASK1 TASK2` | Run the pipeline from the CLI. |
-| `python -m picture_tool.main_pipeline --config CONFIG ...` | Module form of the same CLI. |
+| `picture-tool-pipeline run --config CONFIG --tasks TASK1 --tasks TASK2` | Run the pipeline from the CLI. |
+| `python -m picture_tool.main_pipeline run --config CONFIG ...` | Module form of the same CLI. |
 | `picture-tool-gui` or `python -m picture_tool.gui.app` | Launch the Qt GUI. |
 
 ### CLI Overrides and Product Shortcut

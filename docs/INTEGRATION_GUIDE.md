@@ -27,7 +27,7 @@ runs/detect/<name>/
 ## Step 1：訓練完成後確認產物
 
 ```bash
-picture-tool-pipeline --config configs/Cable1.yaml --tasks yolo_train
+picture-tool-pipeline run --config configs/Cable1.yaml --tasks yolo_train
 ```
 
 完成後確認以下檔案存在：
@@ -86,7 +86,7 @@ deploy:
 然後執行：
 
 ```bash
-picture-tool-pipeline --config configs/Cable1.yaml --tasks deploy
+picture-tool-pipeline run --config configs/Cable1.yaml --tasks deploy
 ```
 
 ---

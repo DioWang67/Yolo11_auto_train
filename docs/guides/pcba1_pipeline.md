@@ -81,7 +81,7 @@ Meaning:
 From the repository root:
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe -m picture_tool.cli --config configs\pcba1_pipeline.yaml --tasks full
+D:\miniconda\envs\yolo_anomalib\python.exe -m picture_tool.cli run --config configs\pcba1_pipeline.yaml --task-groups full
 ```
 
 If using the GUI, select:

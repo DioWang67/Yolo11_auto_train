@@ -44,13 +44,13 @@ Picture Tool 是一個工業視覺訓練工具包，自動化從資料準備到�
 
 ```bash
 # 完整訓練流程
-picture-tool-pipeline --config configs/my_project.yaml --tasks full
+picture-tool-pipeline run --config configs/my_project.yaml --task-groups full
 
 # 僅重新訓練（強制，即使資料未變動）
-picture-tool-pipeline --config configs/my_project.yaml --tasks yolo_train --force
+picture-tool-pipeline run --config configs/my_project.yaml --tasks yolo_train --force
 
 # 列出所有任務
-picture-tool-pipeline --list-tasks
+picture-tool-pipeline list-tasks
 
 # 啟動 GUI
 picture-tool-gui --config configs/my_project.yaml

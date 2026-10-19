@@ -42,27 +42,27 @@
 ## 常用操作範例（交接速用）
 - 完整訓練→評估→報告（依預設任務）：
   ```bash
-  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full
+  picture-tool-pipeline run --config configs/default_pipeline.yaml --task-groups full
   ```
 - 只訓練 YOLO（跳過增強/分割）：
   ```bash
-  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
+  picture-tool-pipeline run --config configs/default_pipeline.yaml --tasks yolo_train
   ```
 - 匯出推論設定（detection_config.yaml），包含 weights/conf/iou，若啟用 position_validation 則嵌入 position_config：
   ```bash
-  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks yolo_train
+  picture-tool-pipeline run --config configs/default_pipeline.yaml --tasks yolo_train
   # 輸出: runs/detect/<name>/detection_config.yaml
   ```
 - 批次推論（指定輸入/輸出、權重）：
   ```bash
-  picture-tool-pipeline --config configs/default_pipeline.yaml \
+  picture-tool-pipeline run --config configs/default_pipeline.yaml \
     --tasks batch_inference --weights runs/detect/train/weights/best.pt \
     --infer-input data/raw/images --infer-output reports/infer
   ```
 - 顏色範本建立 + 批次顏色檢測：
   ```bash
-  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks color_inspection
-  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks color_verification
+  picture-tool-pipeline run --config configs/default_pipeline.yaml --tasks color_inspection
+  picture-tool-pipeline run --config configs/default_pipeline.yaml --tasks color_verification
   ```
   或直接用 CLI：
   ```bash
@@ -71,7 +71,7 @@
   ```
 - 位置驗證（需先訓練產出 weights、設定 product/area/position config）：
   ```bash
-  picture-tool-pipeline --config configs/default_pipeline.yaml --tasks position_validation
+  picture-tool-pipeline run --config configs/default_pipeline.yaml --tasks position_validation
   ```
   輸出：`runs/detect/<name>/position_validation/position_validation.json`（或自訂 output_dir）。
 
@@ -105,7 +105,7 @@ pip install -e .[dev,gui]
 ## 快速開始
 CLI：
 ```bash
-picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full
+picture-tool-pipeline run --config configs/default_pipeline.yaml --task-groups full
 ```
 GUI：
 ```bash
@@ -121,7 +121,7 @@ picture-tool-color-verify \
 ## 新增功能
 - 核心/CLI 拆分：任務執行集中在核心，CLI/GUI 只負責參數解析並自動處理依賴。
 - 實驗紀錄：train/eval 後在 `reports/experiments/*.yaml|json` 留存 config、環境、git commit、產物路徑與 metrics。
-- QC 彙總：`qc_summary` 任務（`picture-tool-pipeline --tasks qc_summary`）會把 color verification / position validation / batch inference 輸出整合成一份 JSON。
+- QC 彙總：`qc_summary` 任務（`picture-tool-pipeline run --tasks qc_summary`）會把 color verification / position validation / batch inference 輸出整合成一份 JSON。
   支援 `/predict` 接口，接收圖片上傳，回傳 JSON 格式的偵測結果。
 
 ### 3. 容器化部署 (Docker Deployment)
@@ -145,16 +145,16 @@ picture-tool-color-verify \
 - **同步數據**：
   pipeline 已整合 `data_sync` 任務，執行時會自動檢查並拉取最新數據（需先配置 remote）。
   ```bash
-  picture-tool-pipeline --tasks data_sync
+  picture-tool-pipeline run --tasks data_sync
   ```
 
 
 - 健康檢查：`picture-tool-doctor --create-demo` 檢查 ffmpeg/torch/onnxruntime 等匯入並產生 `data/demo_doctor` 小型資料集，可配合 `configs/demo_doctor.yaml` 直接跑。
-- 任務查詢：`picture-tool-pipeline --list-tasks` 或 `--describe-task <name>` 可查看可用任務、依賴與描述。
+- 任務查詢：`picture-tool-pipeline list-tasks` 或 `picture-tool-pipeline describe <name>` 可查看可用任務、依賴與描述。
 
 ## 角色導向
 - **我只想完整跑一輪訓練（含 split/訓練/評估/報告）**
-  `picture-tool-pipeline --config configs/default_pipeline.yaml --tasks full`
+  `picture-tool-pipeline run --config configs/default_pipeline.yaml --task-groups full`
   （若只訓練：`--tasks yolo_train`；GPU/epochs 可用 `--device 0 --epochs 50` 覆蓋）
   資料與 config 不變時 pipeline 自動 skip 訓練；強制重訓加 `--force`（會建立新版本目錄 `train2`、`train3`…）。
 - **我只想對現有推論圖做顏色 QC**  
@@ -189,7 +189,7 @@ picture-tool-color-verify \
 訓練完成後，可使用 `deploy` 任務自動將產物複製到 yolo11_inference：
 
 ```bash
-picture-tool-pipeline --config configs/Cable1.yaml --tasks deploy
+picture-tool-pipeline run --config configs/Cable1.yaml --tasks deploy
 ```
 
 外部／遠端訓練的 ONNX 不可單獨複製進產線。請連同來源 PT 與 export contract 執行成對驗證部署：

@@ -36,7 +36,7 @@ All training tasks are registered in `TASKS`:
 | `yolo_evaluation` | `run_yolo_evaluation` | — | `yolo_train` |
 | `position_validation` | `run_position_validation_task` | — | — |
 | `artifact_bundle` | `run_artifact_bundle` | — | — |
-| `deploy` | `run_deploy` | — | `yolo_train` |
+| `deploy` | `run_deploy` | — | `yolo_evaluation` |
 
 ---
 

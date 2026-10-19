@@ -51,7 +51,7 @@ yolo_training:
 
 #### CLI
 ```bash
-python -m picture_tool.main_pipeline configs/my_project.yaml
+python -m picture_tool.main_pipeline run --config configs/my_project.yaml
 ```
 
 #### GUI
@@ -80,12 +80,12 @@ runs/detect/
 
 ### Train a Model
 ```bash
-python -m picture_tool.main_pipeline configs/train.yaml --tasks yolo_train
+python -m picture_tool.main_pipeline run --config configs/train.yaml --tasks yolo_train
 ```
 
 To force retrain even when data/config is unchanged (creates `train2`, `train3`, …):
 ```bash
-python -m picture_tool.main_pipeline configs/train.yaml --tasks yolo_train --force
+python -m picture_tool.main_pipeline run --config configs/train.yaml --tasks yolo_train --force
 ```
 
 ### Run Inference
