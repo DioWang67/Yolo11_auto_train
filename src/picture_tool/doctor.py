@@ -7,33 +7,31 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-SUPPORTED_PYTHON = ((3, 10), (3, 11))
+# One supported stack, the one requirements/requirements.txt locks. The two
+# older profiles (torch 2.4.1 and the hand-built torch 2.5.1 env) went with
+# the 2026-10 upgrade: anomalib 1.x cannot import on either of them any more.
+SUPPORTED_PYTHON = ((3, 11),)
 EXPECTED_DISTRIBUTIONS = {
-    "torch": ("2.4.1", "2.5.1"),
-    "torchvision": ("0.19.1", "0.20.1"),
+    "torch": ("2.13.0",),
+    "torchvision": ("0.28.0",),
+    "anomalib": ("2.7.0",),
+    "lightning": ("2.6.6",),
     "onnxruntime": ("1.23.2",),
     "PyQt5": ("5.15.11",),
     "jsonargparse": ("4.34.0",),
-    "numpy": ("1.26.4", "2.2.6"),
-    "opencv-python": ("4.9.0.80", "4.10.0.84"),
-    "ultralytics": ("8.3.156", "8.3.199"),
+    "numpy": ("1.26.4",),
+    "opencv-python": ("4.11.0.86",),
+    "opencv-python-headless": ("4.11.0.86",),
+    "ultralytics": ("8.3.253",),
 }
 RUNTIME_PROFILES = (
     {
-        "python": ((3, 10), (3, 11)),
-        "torch": "2.4.1",
-        "torchvision": "0.19.1",
-        "numpy": "1.26.4",
-        "opencv-python": "4.9.0.80",
-        "ultralytics": "8.3.156",
-    },
-    {
         "python": ((3, 11),),
-        "torch": "2.5.1",
-        "torchvision": "0.20.1",
-        "numpy": "2.2.6",
-        "opencv-python": "4.10.0.84",
-        "ultralytics": "8.3.199",
+        "torch": "2.13.0",
+        "torchvision": "0.28.0",
+        "numpy": "1.26.4",
+        "opencv-python": "4.11.0.86",
+        "ultralytics": "8.3.253",
     },
 )
 
@@ -127,7 +125,7 @@ def run_doctor(
     results["python"] = (
         sys.version_info[:2] in SUPPORTED_PYTHON,
         (
-            "expected=3.10 or 3.11 "
+            "expected=3.11 "
             f"actual={sys.version.split()[0]} executable={sys.executable}"
         ),
     )

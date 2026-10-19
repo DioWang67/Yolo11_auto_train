@@ -21,13 +21,47 @@ def test_distribution_version_mismatch_is_rejected():
     assert "expected=('2.4.1',) actual=9.9.9" in msg
 
 
-def test_runtime_profile_rejects_mixed_torch_pair():
+def test_runtime_profile_accepts_the_locked_stack():
+    versions = {
+        "torch": "2.13.0",
+        "torchvision": "0.28.0",
+        "numpy": "1.26.4",
+        "opencv-python": "4.11.0.86",
+        "ultralytics": "8.3.253",
+    }
+    with (
+        patch.object(doctor.sys, "version_info", (3, 11, 0)),
+        patch("importlib.metadata.version", side_effect=versions.__getitem__),
+    ):
+        ok, msg = doctor._check_runtime_profile()
+    assert ok is True
+    assert msg == "profile=1"
+
+
+def test_runtime_profile_rejects_the_retired_torch_2_4_stack():
     versions = {
         "torch": "2.4.1",
-        "torchvision": "0.20.1",
+        "torchvision": "0.19.1",
         "numpy": "1.26.4",
         "opencv-python": "4.9.0.80",
         "ultralytics": "8.3.156",
+    }
+    with (
+        patch.object(doctor.sys, "version_info", (3, 10, 0)),
+        patch("importlib.metadata.version", side_effect=versions.__getitem__),
+    ):
+        ok, msg = doctor._check_runtime_profile()
+    assert ok is False
+    assert "unsupported version combination" in msg
+
+
+def test_runtime_profile_rejects_mixed_torch_pair():
+    versions = {
+        "torch": "2.13.0",
+        "torchvision": "0.27.0",
+        "numpy": "1.26.4",
+        "opencv-python": "4.11.0.86",
+        "ultralytics": "8.3.253",
     }
     with (
         patch.object(doctor.sys, "version_info", (3, 11, 0)),

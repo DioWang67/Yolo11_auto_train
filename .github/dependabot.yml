@@ -23,8 +23,9 @@ updates:
       python-project-metadata:
         patterns: ["*"]
     open-pull-requests-limit: 5
-    # Coupled to anomalib 1.2.0 on torch 2.4.1. Moving any of these is a
-    # station-validated upgrade, not a bot PR; their alerts stay visible.
+    # Coupled to anomalib 2.7.0 on torch 2.13.0 (upgraded together 2026-10).
+    # Moving any of these is a station-validated upgrade, not a bot PR; their
+    # alerts stay visible.
     ignore:
       - dependency-name: "torch"
       - dependency-name: "torchvision"
@@ -39,10 +40,6 @@ updates:
       - dependency-name: "opencv-python*"
       - dependency-name: "onnxruntime"
       - dependency-name: "jsonargparse"
-      # starlette 1.8+ requires Python 3.11; the Python 3.10 CI job pins it
-      # through requirements/constraints-ci-py310.txt.
-      - dependency-name: "starlette"
-        versions: [">=1.8"]
 
   - package-ecosystem: pip
     directory: /requirements
@@ -55,8 +52,9 @@ updates:
       python-lockfiles:
         patterns: ["*"]
     open-pull-requests-limit: 5
-    # Coupled to anomalib 1.2.0 on torch 2.4.1. Moving any of these is a
-    # station-validated upgrade, not a bot PR; their alerts stay visible.
+    # Coupled to anomalib 2.7.0 on torch 2.13.0 (upgraded together 2026-10).
+    # Moving any of these is a station-validated upgrade, not a bot PR; their
+    # alerts stay visible.
     ignore:
       - dependency-name: "torch"
       - dependency-name: "torchvision"
@@ -71,7 +69,3 @@ updates:
       - dependency-name: "opencv-python*"
       - dependency-name: "onnxruntime"
       - dependency-name: "jsonargparse"
-      # starlette 1.8+ requires Python 3.11; the Python 3.10 CI job pins it
-      # through requirements/constraints-ci-py310.txt.
-      - dependency-name: "starlette"
-        versions: [">=1.8"]
