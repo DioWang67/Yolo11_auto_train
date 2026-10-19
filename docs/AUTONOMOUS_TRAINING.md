@@ -70,7 +70,7 @@ run_autotrain.bat
 ```
 
 `run_autotrain.bat` 用和 `open_operator_training.bat` **同一套** Python 搜尋順序
-（`PICTURE_TOOL_PYTHON` → `.venv` → conda `anomalib_env` → `yolo_anomalib` → `python`），
+（`PICTURE_TOOL_PYTHON` → `.venv` → conda `yolo_train_py311` → `python`），
 所以訓練環境與操作員補訓完全相同；不需要安裝套件，也不需要 `typer`。
 `run_autotrain.bat --check` 只做環境檢查。已經 `pip install -e .` 且裝了 `typer` 的環境，
 `picture-tool-autotrain run` 是同一個動作。

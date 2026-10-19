@@ -19,8 +19,9 @@ cd /d "%PROJECT_ROOT%" || (
 set "PYTHON_EXE="
 if defined PICTURE_TOOL_PYTHON if exist "%PICTURE_TOOL_PYTHON%" set "PYTHON_EXE=%PICTURE_TOOL_PYTHON%"
 if not defined PYTHON_EXE if exist ".venv\Scripts\python.exe" set "PYTHON_EXE=.venv\Scripts\python.exe"
-if not defined PYTHON_EXE if exist "D:\miniconda\envs\anomalib_env\python.exe" set "PYTHON_EXE=D:\miniconda\envs\anomalib_env\python.exe"
-if not defined PYTHON_EXE if exist "D:\miniconda\envs\yolo_anomalib\python.exe" set "PYTHON_EXE=D:\miniconda\envs\yolo_anomalib\python.exe"
+rem The locked training env (requirements/requirements.txt, Python 3.11). The
+rem older anomalib_env / yolo_anomalib envs cannot run the anomalib 2.x stack.
+if not defined PYTHON_EXE if exist "D:\miniconda\envs\yolo_train_py311\python.exe" set "PYTHON_EXE=D:\miniconda\envs\yolo_train_py311\python.exe"
 if not defined PYTHON_EXE (
     where python >nul 2>nul
     if not errorlevel 1 set "PYTHON_EXE=python"

@@ -81,7 +81,7 @@ Meaning:
 From the repository root:
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe -m picture_tool.cli run --config configs\pcba1_pipeline.yaml --task-groups full
+D:\miniconda\envs\yolo_train_py311\python.exe -m picture_tool.cli run --config configs\pcba1_pipeline.yaml --task-groups full
 ```
 
 If using the GUI, select:
@@ -234,7 +234,7 @@ There should be no `sequence_check` or `color_check` line.
 Run focused tests after code/config changes:
 
 ```powershell
-D:\miniconda\envs\yolo_anomalib\python.exe -m pytest tests\test_detection_config_full.py tests\test_tasks_and_utils_features.py tests\test_path_resolver.py tests\test_annotation_tracker.py
+D:\miniconda\envs\yolo_train_py311\python.exe -m pytest tests\test_detection_config_full.py tests\test_tasks_and_utils_features.py tests\test_path_resolver.py tests\test_annotation_tracker.py
 ```
 
 ## Deployment Notes
