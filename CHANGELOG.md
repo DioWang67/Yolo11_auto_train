@@ -56,6 +56,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     （pillow 12.3、protobuf 6.33、filelock 3.x）。starlette 停在 1.7.0，因為
     1.8 起需要 Python 3.11；Dependabot 也略過該範圍。torch／anomalib 這組釘住
     的套件不動。
+  - 測試依賴加入 `httpx2`：starlette 1.3 起的 TestClient 改用 httpx2，搭舊
+    httpx 會發 deprecation 警告，在 `filterwarnings = error` 下成為收集錯誤。
+  - `pywin32` 以 `sys_platform == "win32"` 標記寫進 `requirements.in`（docker
+    經 mlflow 帶入），否則在 Windows 產生的 lockfile 會在 Linux CI 安裝失敗。
 
 ### Fixed
 - The color gate is measured over the whole detection box now, restricted to

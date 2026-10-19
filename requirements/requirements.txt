@@ -325,8 +325,10 @@ python-dotenv==1.2.4
     # via mlflow-skinny
 pytz==2025.2
     # via pandas
-pywin32==306
-    # via docker
+pywin32==306 ; sys_platform == "win32"
+    # via
+    #   -r requirements.in
+    #   docker
 pyyaml==6.0.3
     # via
     #   -r requirements.in

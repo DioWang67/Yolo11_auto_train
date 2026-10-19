@@ -48,6 +48,10 @@ typer>=0.9
 
 # Experiment Tracking (tracking.enabled in the pipeline configs)
 mlflow>=2.0
+# mlflow pulls in docker, which needs pywin32 on Windows only. Stated here so
+# pip-compile keeps the marker; without it a lockfile compiled on Windows
+# fails to install on Linux CI.
+pywin32>=304 ; sys_platform == "win32"
 
 # Keep this file in step with [project] dependencies in pyproject.toml.
 # The HTTP serve module is the optional `serve` extra there; it is not part
