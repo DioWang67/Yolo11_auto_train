@@ -1,3 +1,5 @@
+import json
+import pickle
 from pathlib import Path
 from types import SimpleNamespace
 import zipfile
@@ -8,6 +10,21 @@ import yaml
 from picture_tool import anomalib_cli
 from picture_tool.train import anomalib_trainer
 from picture_tool.tasks.training import skip_anomalib_train
+
+FAKE_STAMP = {"artifact_schema": 2, "probe": {"raw_pred_score": -0.02}}
+STAMP_CALLS: list[tuple[str, str, int]] = []
+
+
+@pytest.fixture(autouse=True)
+def _stub_compatibility_stamp(monkeypatch):
+    """These tests write placeholder checkpoints that real Anomalib cannot load."""
+    STAMP_CALLS.clear()
+
+    def fake_stamp(checkpoint, *, class_path, image_size):
+        STAMP_CALLS.append((Path(checkpoint).name, class_path, image_size))
+        return dict(FAKE_STAMP)
+
+    monkeypatch.setattr(anomalib_trainer.anomalib_compat, "compute_stamp", fake_stamp)
 
 
 def _write_png(path: Path) -> None:
@@ -416,3 +433,56 @@ def test_train_anomalib_folder_forces_efficientad_batch_size_one(tmp_path, monke
     assert captured_config["model"] == "efficientad"
     assert captured_config["train_batch_size"] == 1
     assert captured_config["eval_batch_size"] == 1
+
+
+def test_deploy_and_package_carry_the_compatibility_stamp(tmp_path):
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "weights" / "lightning"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "model.ckpt").write_text("checkpoint", encoding="utf-8")
+    (run_dir / "training_report.json").write_text(
+        '{"baseline_only": true, "usable_for_deployment": false,'
+        ' "config": {"model": "efficientad", "image_size": 192}}',
+        encoding="utf-8",
+    )
+
+    deployed = anomalib_trainer.deploy_anomalib_run(
+        run_dir, inference_root=tmp_path / "inference", product="PCBA1", area="B"
+    )
+    packaged = anomalib_trainer.package_anomalib_run(
+        run_dir, output_dir=tmp_path / "packages", product="PCBA1", area="B"
+    )
+
+    # The stamp is computed on the copied checkpoint, at the trained image size.
+    assert STAMP_CALLS == [
+        ("model.ckpt", "anomalib.models.EfficientAd", 192),
+        ("model.ckpt", "anomalib.models.EfficientAd", 192),
+    ]
+    for config_path in (deployed.config_path, packaged.config_path):
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert cfg["anomalib_config"]["compatibility"] == FAKE_STAMP
+    manifest = json.loads(packaged.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["artifact_schema"] == 2
+    assert manifest["compatibility"] == FAKE_STAMP
+
+
+def test_a_checkpoint_that_cannot_be_stamped_is_not_deployed(tmp_path, monkeypatch):
+    run_dir = tmp_path / "run"
+    checkpoint_dir = run_dir / "weights" / "lightning"
+    checkpoint_dir.mkdir(parents=True)
+    (checkpoint_dir / "model.ckpt").write_text("anomalib 1.x checkpoint", encoding="utf-8")
+    (run_dir / "training_report.json").write_text(
+        '{"baseline_only": true, "config": {"model": "padim"}}', encoding="utf-8"
+    )
+
+    def refuse(*_args, **_kwargs):
+        raise pickle.UnpicklingError("Weights only load failed")
+
+    monkeypatch.setattr(anomalib_trainer.anomalib_compat, "compute_stamp", refuse)
+
+    with pytest.raises(RuntimeError, match="Only checkpoints trained with Anomalib 2.x"):
+        anomalib_trainer.deploy_anomalib_run(
+            run_dir, inference_root=tmp_path / "inference", product="PCBA1", area="B"
+        )
+    config_path = tmp_path / "inference" / "models" / "PCBA1" / "B" / "anomalib" / "config.yaml"
+    assert not config_path.exists()

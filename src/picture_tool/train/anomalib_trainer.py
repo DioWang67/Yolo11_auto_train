@@ -13,6 +13,8 @@ from typing import Any, Iterator
 
 import yaml  # type: ignore[import]
 
+from picture_tool.train import anomalib_compat
+
 IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 
 
@@ -78,8 +80,9 @@ class AnomalibTrainingConfig:
             are resolved from ``root``.
         project: Output root directory for Anomalib artifacts.
         model: Supported Anomalib model name.
-        task: Anomalib task type, normally ``classification`` or ``segmentation``.
-        image_size: Square resize size used by the Anomalib datamodule.
+        task: Accepted for older configs and ignored: Anomalib 2.x infers the
+            task from whether masks are present.
+        image_size: Square resize size applied by the model's pre-processor.
         train_batch_size: Training dataloader batch size.
         eval_batch_size: Validation/test dataloader batch size.
         num_workers: Dataloader worker count.
@@ -278,10 +281,11 @@ def train_anomalib(
 
     try:
         from anomalib.engine import Engine  # type: ignore
-    except ImportError as exc:
+    except (ImportError, AttributeError) as exc:
+        # AttributeError: anomalib 1.x imports imgaug, which dies on numpy 2.
         raise ImportError(
-            "anomalib is required for anomalib_train. Install the yolo_anomalib "
-            "environment dependencies or add anomalib==1.2.0."
+            "anomalib 2.x is required for anomalib_train. Install "
+            "requirements/requirements.txt into the training environment."
         ) from exc
 
     datamodule = _build_datamodule(cfg)
@@ -367,7 +371,7 @@ def train_anomalib_folder(
     eval_batch_size = batch_size
     if normalized_model == "efficientad" and batch_size != 1:
         log.warning(
-            "EfficientAD requires train_batch_size=1 in anomalib 1.2.0; "
+            "EfficientAD requires train_batch_size=1; "
             "overriding requested batch_size=%s.",
             batch_size,
         )
@@ -583,6 +587,7 @@ def deploy_anomalib_run(
 
     weights_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(checkpoint, dest_checkpoint)
+    compatibility = _stamp_checkpoint(dest_checkpoint, model_option, report)
 
     source_report = resolved_run / "training_report.json"
     report_path: Path | None = None
@@ -598,6 +603,7 @@ def deploy_anomalib_run(
         baseline_only=baseline_only,
         usable_for_deployment=usable_for_deployment,
         warnings=warnings,
+        compatibility=compatibility,
     )
     config_path.write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=False),
@@ -681,6 +687,7 @@ def package_anomalib_run(
 
     weights_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(checkpoint, dest_checkpoint)
+    compatibility = _stamp_checkpoint(dest_checkpoint, model_option, report)
 
     source_report = resolved_run / "training_report.json"
     report_path: Path | None = None
@@ -696,6 +703,7 @@ def package_anomalib_run(
         baseline_only=baseline_only,
         usable_for_deployment=usable_for_deployment,
         warnings=warnings,
+        compatibility=compatibility,
     )
     config_path.write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=False),
@@ -713,6 +721,8 @@ def package_anomalib_run(
         "baseline_only": baseline_only,
         "usable_for_deployment": usable_for_deployment,
         "warnings": warnings,
+        "artifact_schema": compatibility["artifact_schema"],
+        "compatibility": compatibility,
         "files": [
             f"{product}/{area}/anomalib/config.yaml",
             f"{product}/{area}/anomalib/training_report.json",
@@ -844,6 +854,7 @@ def _build_inference_anomalib_config(
     baseline_only: bool,
     usable_for_deployment: bool,
     warnings: list[str],
+    compatibility: dict[str, Any],
 ) -> dict[str, Any]:
     ckpt_path = f"models/{product}/{area}/anomalib/weights/model.ckpt"
     return {
@@ -857,6 +868,8 @@ def _build_inference_anomalib_config(
             "usable_for_deployment": usable_for_deployment,
             "warnings": warnings,
             "model": {"class_path": model_option.class_path},
+            # Checked by the station before loading; see anomalib_compat.
+            "compatibility": compatibility,
             "data": {},
             "models": {
                 product: {
@@ -870,6 +883,31 @@ def _build_inference_anomalib_config(
             },
         },
     }
+
+
+def _stamp_checkpoint(
+    checkpoint: Path,
+    model_option: AnomalibModelOption,
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Stamp a copied checkpoint, refusing to package one that cannot be stamped.
+
+    A checkpoint that will not load with ``weights_only=True`` (any Anomalib
+    1.x checkpoint) or will not score would be refused by the station anyway;
+    failing here keeps it from being shipped at all.
+    """
+    image_size = int((report.get("config") or {}).get("image_size", 256))
+    try:
+        return anomalib_compat.compute_stamp(
+            checkpoint,
+            class_path=model_option.class_path,
+            image_size=image_size,
+        )
+    except Exception as exc:  # translate to the CLI's domain error, keep the cause
+        raise RuntimeError(
+            f"Cannot stamp Anomalib checkpoint {checkpoint} for deployment: {exc}. "
+            "Only checkpoints trained with Anomalib 2.x can be packaged."
+        ) from exc
 
 
 def _folder_training_warnings(baseline_only: bool) -> list[str]:
@@ -996,8 +1034,6 @@ def _build_datamodule(cfg: AnomalibTrainingConfig) -> Any:
         train_batch_size=cfg.train_batch_size,
         eval_batch_size=cfg.eval_batch_size,
         num_workers=cfg.num_workers,
-        task=cfg.task,
-        image_size=(cfg.image_size, cfg.image_size),
         test_split_mode=cfg.test_split_mode,
         test_split_ratio=cfg.test_split_ratio,
         val_split_mode=cfg.val_split_mode,
@@ -1020,6 +1056,8 @@ def _optional_path_for_anomalib(root: Path, path: Path | None) -> Path | None:
 
 
 def _build_model(cfg: AnomalibTrainingConfig) -> Any:
+    # Anomalib 2.x resizes inside the model's pre-processor, not the datamodule.
+    image_size = (cfg.image_size, cfg.image_size)
     if cfg.model == "padim":
         from anomalib.models import Padim  # type: ignore
 
@@ -1028,12 +1066,17 @@ def _build_model(cfg: AnomalibTrainingConfig) -> Any:
             layers=list(cfg.layers),
             pre_trained=cfg.pre_trained,
             n_features=cfg.n_features,
+            pre_processor=Padim.configure_pre_processor(image_size=image_size),
         )
 
     if cfg.model == "efficientad":
         from anomalib.models import EfficientAd  # type: ignore
 
-        return EfficientAd(model_size="small")
+        _seed_efficientad_weights()
+        return EfficientAd(
+            model_size="small",
+            pre_processor=EfficientAd.configure_pre_processor(image_size=image_size),
+        )
 
     from anomalib.models import Patchcore  # type: ignore
 
@@ -1043,7 +1086,28 @@ def _build_model(cfg: AnomalibTrainingConfig) -> Any:
         pre_trained=cfg.pre_trained,
         coreset_sampling_ratio=cfg.coreset_sampling_ratio,
         num_neighbors=cfg.num_neighbors,
+        pre_processor=Patchcore.configure_pre_processor(image_size=image_size),
     )
+
+
+EFFICIENTAD_WEIGHTS_DIRNAME = "efficientad_pretrained_weights"
+
+
+def _seed_efficientad_weights(source_root: Path = Path("pre_trained")) -> None:
+    """Copy the repository's offline EfficientAD teacher weights into Anomalib's cache.
+
+    Anomalib 1.x read ``./pre_trained`` relative to the working directory, which
+    is where this repository keeps the weights. Anomalib 2.x reads the per-user
+    cache directory instead and downloads into it when the folder is missing,
+    which fails on an offline station. Seeding the cache keeps training offline.
+    """
+    from anomalib.utils.path import get_pretrained_weights_dir  # type: ignore
+
+    source = source_root / EFFICIENTAD_WEIGHTS_DIRNAME
+    target = get_pretrained_weights_dir() / EFFICIENTAD_WEIGHTS_DIRNAME
+    if target.is_dir() or not source.is_dir():
+        return
+    shutil.copytree(source, target)
 
 
 def _trainer_kwargs(cfg: AnomalibTrainingConfig) -> dict[str, Any]:
