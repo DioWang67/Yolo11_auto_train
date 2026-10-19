@@ -48,7 +48,7 @@ COPY --chown=appuser:appuser configs/ configs/
 COPY --chown=appuser:appuser README.md pyproject.toml ./
 
 # Install the package
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e ".[serve]"
 
 # Switch to non-root user
 USER appuser

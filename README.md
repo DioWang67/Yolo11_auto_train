@@ -136,14 +136,14 @@ picture-tool-color-verify \
   ```
   服務啟動後，API 將在 `http://localhost:8000` 上線。
 
-### 4. 數據版本控制 (DVC)
-支援大規模數據集管理。
+### 4. 數據版本控制 (DVC，選用)
+DVC 不是本專案的依賴；要用時自行安裝（`pip install dvc`）。
 - **初始化**：
   ```bash
   dvc init
   ```
 - **同步數據**：
-  pipeline 已整合 `data_sync` 任務，執行時會自動檢查並拉取最新數據（需先配置 remote）。
+  pipeline 的 `data_sync` 任務在找到 `dvc` 指令與 `.dvc/` 時拉取最新數據（需先配置 remote），兩者缺一就記錄後略過。
   ```bash
   picture-tool-pipeline run --tasks data_sync
   ```

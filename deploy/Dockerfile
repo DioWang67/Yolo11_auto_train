@@ -27,7 +27,7 @@ COPY configs/ configs/
 COPY README.md .
 
 # Install the package
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".[serve]"
 
 # Expose ports for MLflow (5000) and API (8000)
 EXPOSE 5000

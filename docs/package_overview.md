@@ -42,7 +42,7 @@ src/picture_tool/
 ├── dataset_inventory.py     # 唯讀盤點 data/
 ├── doctor.py                # 環境檢查
 ├── anomalib_cli.py          # Anomalib 訓練、打包、部署 CLI
-├── serve.py                 # FastAPI 推論服務（只給 deploy/Dockerfile 使用）
+├── serve.py                 # FastAPI 推論服務（只給 deploy/Dockerfile 使用；依賴在 `serve` extra）
 └── exceptions.py            # PictureToolError 階層（大多未被使用，見 ARCHITECTURE §13）
 ```
 

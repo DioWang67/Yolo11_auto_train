@@ -114,7 +114,7 @@ picture-tool-pipeline describe yolo_train
 > 雖然 `pyproject.toml` 有宣告這個依賴。所以 `picture-tool-pipeline` 和 `picture-tool-autotrain`
 > 在那兩個環境無法執行；現場實際使用的入口是 GUI 和 `run_autotrain.bat`。
 
-`serve.py`（FastAPI 推論服務）不是 console script，只有 `deploy/Dockerfile*` 會用到它，見 §13。
+`serve.py`（FastAPI 推論服務）不是 console script，只有 `deploy/Dockerfile*` 會用到它，見 §13。它的依賴是選用的 `serve` extra（`pip install .[serve]`），不在一般安裝內。
 
 ---
 
@@ -180,7 +180,7 @@ picture-tool-pipeline describe yolo_train
 | `position_validation` | training | – | `position_validation.json`；可選擇另寫 `<run>/position_gate.json` |
 | `anomalib_train` | training | – | `runs/anomalib/…/*.ckpt` |
 | `anomalib_package` | training | – | `runs/anomalib_packages/*.zip` |
-| `data_sync` | data_sync | – | `dvc pull`（repo 沒有 `.dvc/`，所以實際上什麼都不做） |
+| `data_sync` | data_sync | – | `dvc pull`（dvc 不是本專案的依賴，repo 也沒有 `.dvc/`，所以實際上什麼都不做） |
 | `artifact_bundle` | bundle | – | `<product>_<dir>.zip`，未經任何 Gate |
 | `deploy` | deploy | `yolo_evaluation` | 寫入產線站點目錄，見 §7 |
 
