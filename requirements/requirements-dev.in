@@ -4,6 +4,12 @@
 # Production dependencies
 -r requirements.in
 
+# Serve extra (pyproject `serve`), exercised by tests/test_serve.py and
+# tests/test_coverage_serve_edges.py
+fastapi>=0.88
+uvicorn>=0.20
+python-multipart>=0.0.6
+
 # Testing
 pytest>=7.4.0
 pytest-cov>=4.1.0

@@ -43,16 +43,12 @@ jsonargparse[signatures,typing-extensions]==4.34.0
 # GUI (PyQt5) - Required
 PyQt5==5.15.11
 
-# ===== OPTIONAL DEPENDENCIES =====
-# Uncomment only if you need these features
+# CLI (picture-tool-autotrain)
+typer>=0.9
 
-# Web Framework (for inference server - optional)
-# fastapi>=0.100.0
-# uvicorn[standard]>=0.23.0
-# python-multipart>=0.0.6
+# Experiment Tracking (tracking.enabled in the pipeline configs)
+mlflow>=2.0
 
-# Version Control / Data Management (optional)
-# dvc[s3]>=3.0.0
-
-# Experiment Tracking (optional)
-# mlflow>=2.5.0
+# Keep this file in step with [project] dependencies in pyproject.toml.
+# The HTTP serve module is the optional `serve` extra there; it is not part
+# of the production install. requirements-dev.in adds it for its tests.

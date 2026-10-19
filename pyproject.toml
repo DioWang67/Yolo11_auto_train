@@ -39,15 +39,12 @@ dependencies = [
   "jsonargparse[signatures,typing-extensions]==4.34.0",
   "typer>=0.9",
   "mlflow>=2.0",
-  "fastapi>=0.88",
-  "uvicorn>=0.20",
-  "python-multipart>=0.0.6",
-  "dvc>=3.0",
 ]
 license-files = ["LICENSE"]
 
 [project.optional-dependencies]
 gui = ["PyQt5==5.15.11"]
+serve = ["fastapi>=0.88", "uvicorn>=0.20", "python-multipart>=0.0.6"]
 dev = [
   "pytest>=8.3",
   "pytest-cov>=5.0",

@@ -41,6 +41,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   runtime model; missing lineage now fails closed.
 - Position calibration uses reviewed label evidence and a disjoint holdout
   instead of calibrating from candidate predictions.
+- 依賴宣告對齊：`requirements.in` 與 `pyproject.toml` 原本對不上（fastapi、
+  uvicorn、dvc、mlflow 在前者被註解、在後者是必要依賴；anomalib 與 typer 只在
+  其中一邊），已提交的 lockfile 無法從 `.in` 重現，Dependabot 每次重編都會刪掉
+  94 個套件、讓 serve 測試在 Windows 失敗。
+  - 移除 dvc：沒有任何環境安裝它、沒有 `.dvc` 倉庫，`data_sync` 只呼叫外部
+    CLI 且本來就處理未安裝的情況。它單獨帶進 gitpython、dulwich、asyncssh、
+    hydra-core 與整個 s3 依賴樹。
+  - mlflow 保留並加入 `requirements.in`：管線設定的 `tracking.enabled` 為 true，
+    實際訓練環境有安裝並持續寫入 `mlruns/`。
+  - HTTP serve（fastapi、uvicorn、python-multipart）改為選用的 `serve` extra；
+    `requirements-dev.in` 與 Python 3.10 CI 安裝它，測試照跑。
+  - lockfile 以 `--upgrade-package` 只升有安全警報的套件，大版本維持不變
+    （pillow 12.3、protobuf 6.33、filelock 3.x）。starlette 停在 1.7.0，因為
+    1.8 起需要 Python 3.11；Dependabot 也略過該範圍。torch／anomalib 這組釘住
+    的套件不動。
 
 ### Fixed
 - The color gate is measured over the whole detection box now, restricted to

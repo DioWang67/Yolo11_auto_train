@@ -72,7 +72,8 @@ pip-compile --upgrade-package ultralytics requirements.in
 - **Deep Learning**: ultralytics, onnx, onnxruntime  
 - **Computer Vision**: opencv-python, Pillow, albumentations
 - **Data Science**: numpy, pandas, scipy, scikit-learn
-- **Web**: fastapi, uvicorn
+- **CLI**: typer
+- **Experiment Tracking**: mlflow (`tracking.enabled` in the pipeline configs)
 - **Utilities**: tqdm, pyyaml
 
 ### Development Only
@@ -83,7 +84,8 @@ pip-compile --upgrade-package ultralytics requirements.in
 
 ### Optional
 - **GUI**: PyQt5 (install with `.[gui]`)
-- **Experiment Tracking**: mlflow (uncomment in requirements.in if needed)
+- **HTTP serve** (`picture_tool.serve`): fastapi, uvicorn, python-multipart
+  (install with `.[serve]`; `requirements-dev.in` includes it for the tests)
 
 ## 🛡️ Best Practices
 
