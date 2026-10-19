@@ -319,7 +319,13 @@ sequenceDiagram
 |---|---|---|
 | `picture-tool-runtime-pair --deploy` | 在 pipeline 之外訓練的模型，例如遠端 GPU 機 | 只有 Gate 3、4；沒有評估、位置、驗收 Gate；版本號只掃 `*.onnx`，可能和 deploy 的編號衝突 |
 | `artifact_bundle` 任務 | 產生 zip，人工解壓到站點 | 沒有 Gate、沒有版本號、沒有 rollback |
-| `picture-tool-anomalib deploy` | Anomalib 模型 | 寫入 `models/P/A/anomalib/`，沒有 Gate |
+| `picture-tool-anomalib deploy` | Anomalib 模型 | 寫入 `models/P/A/anomalib/`，沒有 Gate；但會寫入相容性戳記（見下） |
+
+Anomalib 的 deploy／package 會在 `config.yaml` 的 `anomalib_config.compatibility` 與 `package_manifest.json`
+寫入相容性戳記（`train/anomalib_compat.py`，`artifact_schema: 2`）：產生 checkpoint 的 anomalib／torch／lightning／Python 版本、
+checkpoint 的 sha256，以及一張解析式探針影像（尺寸刻意不等於模型輸入，讓 resize 真的執行）在**後處理之前**的原始分數。
+推論站在載入前重算並比對，任何一項不符就拒絕這個 anomalib 模型、YOLO 照常運作。無法以 `weights_only=True` 載入的
+checkpoint（所有 Anomalib 1.x 的檔案）在打包時就會被拒絕。
 
 ### 7.4 可攜補訓包（方向和發布**相反**）
 
@@ -449,7 +455,7 @@ GUI 執行緒模型：pipeline 在 `WorkerThread`（QThread）中執行，LabelI
 - `color_inspection.py:50-209` 的舊輔助函式。
 - `color_verifier.StripOptions` 的大部分欄位：會被建立出來，但會被忽略。
 - `exceptions.py` 裡大部分的類別從未被拋出；實際拋出的例外多半繼承 `RuntimeError` 或 `ValueError`。
-- `deploy/`（Dockerfile、docker-compose）：打包的是 `serve.py` 和 MLflow，和站點部署無關。基底映像用 Python 3.9，與 `requires-python >=3.10` 衝突，應視為已失效。
+- `deploy/`（Dockerfile、docker-compose）：打包的是 `serve.py` 和 MLflow，和站點部署無關。基底映像用 Python 3.9，與 `requires-python >=3.11` 衝突，應視為已失效。
 - `resources/pipeline_v26_experimental.yaml`、`configs/predefined_classes.txt`：沒有任何程式讀取。
 
 ---

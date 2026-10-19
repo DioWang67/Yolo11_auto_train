@@ -69,7 +69,16 @@ pip-compile --upgrade-package ultralytics requirements.in
 ## 📊 Dependency Groups
 
 ### Core Production
-- **Deep Learning**: ultralytics, onnx, onnxruntime  
+- **Deep Learning**: ultralytics, onnx, onnxruntime, onnxslim
+- **Anomaly detection**: anomalib 2.7 (with lightning 2.6.6, kornia, timm, FrEIA)
+
+The ML stack is pinned as one unit and only moves together, after a
+station-validated upgrade: Python 3.11, torch 2.13.0 / torchvision 0.28.0,
+lightning 2.6.6, anomalib 2.7.0, ultralytics 8.3.253, numpy 1.26.4,
+opencv-python and opencv-python-headless 4.11.0.86, onnxruntime 1.23.2.
+`picture-tool-doctor` checks exactly this set, and `.github/dependabot.yml`
+keeps the bot from proposing pieces of it.
+
 - **Computer Vision**: opencv-python, Pillow, albumentations
 - **Data Science**: numpy, pandas, scipy, scikit-learn
 - **CLI**: typer

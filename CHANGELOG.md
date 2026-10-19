@@ -27,6 +27,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   sets used by Picture Tool.
 
 ### Changed
+- ML 套件整組升級（2026-10）：Python 3.11、torch 2.13.0／torchvision 0.28.0、lightning 2.6.6、
+  anomalib 1.2.0 → 2.7.0、ultralytics 8.3.253、OpenCV（含 headless）4.11.0.86；numpy 維持 1.26.4，
+  onnxruntime 維持 1.23.2。imgaug（無修補版的 CVE，只有 anomalib 1.x 需要）與 onnxsim 移除，改用
+  ultralytics 實際使用的 onnxslim。先以 spike 驗證：用新版本重新匯出 Cable1/A v1.0.6，原始輸出與現役
+  ONNX 完全相同。
+  - `anomalib_trainer` 移植到 2.x：影像尺寸改由模型的 PreProcessor 處理，`Folder` 不再接受
+    `task`／`image_size`（設定裡的 `task` 保留但不再使用）。2.x 改從使用者快取讀 EfficientAD 的
+    teacher 權重，訓練前會把 repo 的 `pre_trained/` 複製過去，維持離線訓練。
+  - deploy／package 寫入相容性戳記（`train/anomalib_compat.py`），推論站載入前比對；無法以
+    `weights_only=True` 載入的 checkpoint（所有 1.x 檔案）不准打包。新增一個在獨立直譯器裡真的
+    訓練、打包、重新載入 Padim 的測試——CI 其他地方都以假物件代替 torch／anomalib。
+  - `doctor.py` 只剩一組版本組合；兩組舊組合（torch 2.4.1、手建的 torch 2.5.1）在新版 anomalib
+    下都已經無法匯入。CI 的 ubuntu 改用 3.11 並照 lockfile 安裝，`constraints-ci-py310.txt` 移除。
+  - 啟動腳本改找 conda `yolo_train_py311`，不再退回 `anomalib_env`／`yolo_anomalib`。
+  - lockfile 補上 pyserial、openpyxl：部署 Gate 5 在這個環境裡執行推論端的程式。
 - `picture_tool.color` 的中心裁切統一為 `strategies.base.center_crop()`。
   原本評分路徑用逐軸 15%、規則路徑用 `min(h, w)`、黃色快速判定又是另一種，
   同一張圖的三個判定看的不是同一批像素。
