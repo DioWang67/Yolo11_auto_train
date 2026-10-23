@@ -16,7 +16,7 @@ pytorch-lightning==2.6.6
 # Computer Vision
 opencv-python==4.11.0.86
 opencv-python-headless==4.11.0.86
-Pillow>=10.0.0
+Pillow>=13.0.0
 
 # Data Processing
 numpy==1.26.4
