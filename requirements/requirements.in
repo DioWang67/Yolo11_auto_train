@@ -56,7 +56,7 @@ openpyxl>=3.1
 typer>=0.9
 
 # Experiment Tracking (tracking.enabled in the pipeline configs)
-mlflow>=2.0
+mlflow>=3.17.2
 # mlflow pulls in docker, which needs pywin32 on Windows only. Stated here so
 # pip-compile keeps the marker; without it a lockfile compiled on Windows
 # fails to install on Linux CI.
